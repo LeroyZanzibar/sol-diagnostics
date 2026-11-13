@@ -2,7 +2,7 @@
 // Exercise the actual image, not a host substitute. Only synthetic data is used.
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -11,7 +11,11 @@ import {setTimeout as delay} from 'node:timers/promises';
 const image = process.argv[2];
 assert.ok(image, 'Usage: node scripts/container-smoke.mjs IMAGE');
 const name = `sol-smoke-${randomUUID()}`;
-const data = mkdtempSync(join(tmpdir(), 'sol-container-'));
+// Keep the outer directory owned by the runner: /tmp has the sticky bit,
+// so changing its ownership would prevent a different runner UID removing it.
+const root = mkdtempSync(join(tmpdir(), 'sol-container-'));
+const data = join(root, 'data');
+mkdirSync(data);
 const password = randomUUID();
 const auth = `Basic ${Buffer.from(`tester:${password}`).toString('base64')}`;
 let base;
@@ -35,6 +39,8 @@ async function api(path, method = 'GET', body) {
   return JSON.parse(text);
 }
 async function ready() {
+  // Docker may reassign an ephemeral host port after restart.
+  base = `http://${docker('port', name, '3080/tcp')}`;
   for (let attempt = 0; attempt < 90; attempt++) {
     assert.equal(docker('inspect', '--format={{.State.Running}}', name), 'true', 'Container exited');
     try {
@@ -109,15 +115,18 @@ try {
     await protectedEndpoints();
   };
   await persisted();
+  console.log('PASS: initial auth, SQLite state and uploaded bytes.');
   docker('restart', '--time', '120', name);
   await ready();
   await persisted();
+  console.log('PASS: persisted state after restart.');
   // Recreate as well as restart: persistence must live on /data, not a layer.
   docker('stop', '--time', '120', name);
   assert.equal(docker('inspect', '--format={{.State.ExitCode}}', name), '0');
   docker('rm', name);
   await start();
   await persisted();
+  console.log('PASS: persisted state after container recreation.');
   for (let i = 0; i < 90; i++) {
     const status = docker('inspect', '--format={{.State.Health.Status}}', name);
     if (status === 'healthy') break;
@@ -127,6 +136,7 @@ try {
   }
   console.log('PASS: non-root/read-only startup, healthcheck, HTTP auth, CSRF rejection, SQLite and uploaded bytes survive restart and recreation.');
 } catch (error) {
+  console.error('Container smoke failure:', error);
   try { console.error(docker('logs', '--tail', '150', name)); } catch {}
   throw error;
 } finally {
@@ -136,6 +146,6 @@ try {
     '--cap-drop=ALL', '--security-opt=no-new-privileges',
     '--mount', `type=bind,source=${data},target=/data`, '--entrypoint', 'node', image,
     '-e', "const fs=require('node:fs');for(const n of fs.readdirSync('/data'))fs.rmSync('/data/'+n,{recursive:true,force:true});fs.chmodSync('/data',0o755);"); } finally {
-    rmSync(data, {recursive: true, force: true});
+    rmSync(root, {recursive: true, force: true});
   }
 }
