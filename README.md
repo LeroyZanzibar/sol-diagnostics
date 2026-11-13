@@ -1,6 +1,6 @@
 # Sol Diagnostics — Docker edition for UmbrelOS
 
-A self-contained edition of Sol Diagnostics based on hosted version 116 (source commit `0820d6762070df30649ee47dba79e5ab29286c46`). Release 1.0.0, prepared November 13, 2026.
+A self-contained edition of Sol Diagnostics based on hosted version 116 (source commit `0820d6762070df30649ee47dba79e5ab29286c46`). Target release **2026.11.13.2**; see [CHANGELOG.md](CHANGELOG.md).
 
 The complete application is included: site and array configuration (including transformers), performance CSV imports, cached/resumable analyses, issue review and recurring groups, visibility settings, summaries and spreadsheet exports, Timeline, maintenance CSV/Excel uploads, and all three themes.
 
@@ -44,7 +44,7 @@ https://umbrel.com/support/apps/running-custom-docker-containers
 Use a directory you control on persistent storage, outside any existing app's data directory. Copy the downloaded archive there. Open a terminal on your Umbrel with access to its Docker daemon (or use the Portainer workflow below).
 
 ```sh
-tar -xzf Sol-Diagnostics-Umbrel-1.0.0.tar.gz
+tar -xzf Sol-Diagnostics-Umbrel-2026.11.13.2.tar.gz
 cd sol-diagnostics-umbrel
 sh setup.sh
 docker compose up -d --build
@@ -65,11 +65,30 @@ For remote access from your laptop, use your existing Tailscale connection and t
 
 ### Portainer workflow
 
-The archive is **source**, not a prebuilt Docker image. First build the image in the Docker environment managed by Portainer. Extract the archive, then run `docker compose build` from the extracted directory against that same Docker daemon. This creates the image tagged `sol-diagnostics:1.0.0`.
+The archive is **source**, not a prebuilt Docker image. First build the image in the Docker environment managed by Portainer. Extract the archive, then run `docker compose build` from the extracted directory against that same Docker daemon. This creates the image tagged `sol-diagnostics:2026.11.13.2`.
 
 Create a stack from `docker-compose.yml`, remove the `build: .` line, and set the environment variables in Portainer (at minimum `SOL_PASSWORD` to a unique password of at least 16 characters). Keep the named `sol-data` volume; do not replace it with an ephemeral container directory. Deploy the stack and open the server on port 3080.
 
 Custom containers are managed in Portainer and do not automatically appear as Umbrel home-screen apps. Back up the volume before removing Portainer or its managed containers.
+
+## Bulk Site settings CSV
+
+In **Site settings → Bulk site settings**, download the **CSV template** for new sites or **existing sites** for an editable export that includes IDs. Choose a UTF-8 `.csv` file, inspect the resulting settings and row-level errors, then select **Apply … sites**. Upload/preview does not save anything. The server validates again on Apply and saves the entire file in one SQLite transaction: an invalid row, concurrent edit or database failure cannot partially import it. If settings changed after preview, preview again. After a lost connection during Apply, download existing sites before retrying to avoid creating duplicates.
+
+The header-only template contains these exact, case-sensitive headers (order may change):
+
+```csv
+id,name,address,city,state,zip,country,latitude,longitude,expectedShading,expectedSnow,expectedProductionNotes
+```
+
+- **Matching:** blank `id` always creates a site with a generated ID; `name` is required for creates. Nonblank `id` must exactly match an existing ID, without surrounding whitespace. Unknown IDs and repeated existing IDs in one file are rejected. Names are never used to match/update sites, and new rows with identical names receive different IDs. No sites are deleted.
+- **Blanks:** `name` must be present as a header. Other supported columns may be omitted. For updates, blank/whitespace-only or omitted cells preserve saved values, including expected-production assumptions and notes. For creates, blank country defaults to `US`, blank assumptions to `not_included`, and other optional cells to empty strings. To clear a saved optional value, use the individual Site settings form instead. Text is trimmed, country/postal letters are uppercased, and numeric-looking postal codes remain strings.
+- **Countries:** `US`, `CA`, `MX`, `AU`, `BR`, `CL`, `DE`, `ES`, `FR`, `GB`, `IN`, `IT`, `JP`, `NL`, `PL`, `PT`, `ZA`. Existing postal-code format checks apply for US, CA, DE, JP, PL and IT.
+- **Coordinates:** decimal degrees only; latitude from -90 to 90, longitude from -180 to 180. No thousands separators, formulas or scientific notation.
+- **Assumptions:** `expectedShading` and `expectedSnow` accept exactly `included`, `not_included`, or `unknown`.
+- **Bounds:** at most 500 nonempty site rows and 1 MiB per file. Maximum characters: id 128, name 200, address 500, city/state 100 each, zip 12, country 2, coordinates 32 each, assumptions 12 each, notes 4,000. Unknown/duplicate headers, malformed quoting, invalid UTF-8 and unsupported control characters are rejected. Error row numbers refer to the physical starting line of each CSV record, including multiline fields.
+- **CSV format:** comma-delimited, with LF or CRLF line endings and optional UTF-8 BOM. Quote cells containing commas, quotes or line breaks; double embedded quotes. Exports use a BOM and CRLF. Spreadsheet formula-like text is escaped with a leading apostrophe, which this importer reverses; existing leading apostrophes are escaped as well. Import/open `id` and `zip` columns as **Text** in Excel or other spreadsheets to preserve leading zeroes: CSV quoting alone does not prevent spreadsheet type inference.
+- **Scope:** only the listed Site settings fields are modified. Array models/verification, performance uploads, analyses and reviews remain intact. Successful import refreshes the site's saved settings in the UI; unsaved single-site form edits are discarded. Downloads, previews and writes require the same app authentication as other settings endpoints.
 
 ## Configuration
 

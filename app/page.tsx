@@ -29,6 +29,7 @@ import ArrayConfiguration from "./ArrayConfiguration";
 import IssueSummaries from "./IssueSummaries";
 import IssueTimeline from "./IssueTimeline";
 import SiteMap from "./SiteMap";
+import SiteSettingsCsv from "./SiteSettingsCsv";
 import { useMobileNavigation } from "./useMobileNavigation";
 
 type Site = { id: string; name: string; location: string; arrayModelVerified: boolean };
@@ -2137,6 +2138,15 @@ export default function Home() {
                 </button>
               </div>
             </header>
+            <SiteSettingsCsv disabled={saving} onImported={(sites) => {
+              const stored = Object.fromEntries(sites.map(site => [site.id, site]));
+              setConfigs(stored);
+              const selected = stored[settingsSiteId] || sites[0];
+              if (selected) { setSettingsSiteId(selected.id); setForm(selected); }
+              setCreatingSite(false);
+              setActiveSiteId(current => stored[current] ? current : sites[0]?.id || '');
+              performanceCacheRef.current.clear(); setPerformance(null); setPerformanceRevision(value => value + 1);
+            }} />
             <div className="settings-layout">
               <aside className="site-selector" aria-label="Select a site">
                 <div className="selector-title">
