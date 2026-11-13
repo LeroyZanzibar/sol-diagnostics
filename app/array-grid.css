@@ -1,0 +1,146 @@
+/* Sol Repower's canvas presentation, scoped to Diagnostics' existing model UI.
+   Model relationships, field calculations, handlers, and persistence are unchanged. */
+.array-view {
+  --array-panel:#0b211e;
+  --array-accent:#a3b550;
+  --array-muted:#8e9b91;
+  --array-hover:#12312b;
+  --array-radius:4px;
+}
+html[data-theme="default"] .array-view {
+  --array-panel:#fff;
+  --array-accent:#2563eb;
+  --array-muted:#64748b;
+  --array-hover:#eff4fb;
+  --array-radius:8px;
+}
+html[data-theme] .app-shell .array-view {
+  .topology-panel { padding:0; border-radius:var(--array-radius); box-shadow:none; }
+  .topology-canvas {
+    display:block; height:auto; min-height:0; min-width:0; background:var(--paper);
+  }
+  .power-pane {
+    display:flex; flex-direction:column; height:590px; padding:0;
+  }
+  .power-viewport {
+    order:0; flex:1; min-height:0; height:auto;
+    background-color:var(--paper);
+    background-image:radial-gradient(var(--line) .8px,transparent .8px);
+    background-size:18px 18px;
+  }
+  .topology-stage { min-width:700px; }
+  .power-tree { min-width:700px; padding:25px 25px 55px; }
+  .hierarchy-meter { width:265px; margin-left:20px; }
+  .hierarchy-meter > .equipment-node,
+  .hierarchy-meter > .add-node { width:265px; border-top-width:1px; }
+  .tier-label, .tree-column-headings {
+    color:var(--array-muted); font-size:9px; line-height:1.5; letter-spacing:.06em;
+  }
+  .meter-elbow {
+    width:0; height:20px; margin-left:30px; border:0; border-left:2px solid var(--line);
+  }
+  .tree-column-headings {
+    grid-template-columns:265px 30px 265px; margin:0 0 10px 60px;
+  }
+  .inverter-list { gap:24px; }
+  .inverter-list::before { left:30px; bottom:0; border-left:2px solid var(--line); }
+  .inverter-row {
+    grid-template-columns:30px 265px 30px 265px;
+    align-items:start; min-height:80px; margin-left:30px;
+  }
+  .inverter-feed, .module-feed {
+    height:0; margin-top:40px; border-top:2px solid var(--line); background:none;
+  }
+  .inverter-node { width:265px; }
+  .module-row { flex-direction:column; align-items:stretch; gap:10px; }
+  .equipment-node, .module-row .equipment-node {
+    flex-shrink:0; position:relative; width:265px; min-height:80px;
+    gap:12px; padding:13px; border:1px solid var(--line); border-radius:var(--array-radius);
+    background:var(--array-panel); color:var(--ink); box-shadow:0 3px 12px #0001;
+  }
+  .equipment-node > span:nth-child(2) { gap:0; }
+  .equipment-node strong {
+    display:block; margin:3px 0; font-size:13px; line-height:1.4; font-weight:600;
+    color:var(--ink); white-space:normal; overflow-wrap:anywhere;
+  }
+  .equipment-node small, .equipment-node em {
+    display:block; font-size:9px; line-height:1.5; font-weight:400;
+    color:var(--array-muted); letter-spacing:0; text-transform:none;
+    white-space:normal; overflow-wrap:anywhere;
+  }
+  .equipment-node .node-icon, .inspector-head .node-icon {
+    flex:0 0 18px; width:18px; height:18px; border:0; border-radius:0;
+    background:transparent; color:var(--array-accent);
+  }
+  .equipment-node:hover { transform:none; border-color:var(--array-accent); background:var(--array-hover); }
+  .equipment-node.selected { border-color:var(--array-accent); box-shadow:0 0 0 1px var(--array-accent); }
+  .equipment-node:focus-visible, .add-node:focus-visible, .zoom-controls button:focus-visible {
+    outline:2px solid var(--array-accent); outline-offset:3px;
+  }
+  .add-node {
+    min-height:36px; border-color:var(--line); border-radius:var(--array-radius);
+    color:var(--array-muted); background:var(--array-panel); font-size:11px;
+  }
+  .add-node:hover { border-color:var(--array-accent); background:var(--array-hover); color:var(--ink); }
+  .module-row .add-node { width:265px; }
+  .add-inverter-row { grid-template-columns:30px 265px; margin:24px 0 0 30px; }
+  .add-inverter-row > span { height:0; border-top:2px solid var(--line); background:none; }
+  .add-inverter-row .inverter-add { width:265px; }
+  .zoom-controls {
+    order:1; position:static; flex-shrink:0; z-index:auto; width:auto;
+    justify-content:center; flex-wrap:wrap; gap:3px; margin:0; padding:7px;
+    border:0; border-top:1px solid var(--line); border-radius:0;
+    background:var(--array-panel); box-shadow:none; backdrop-filter:none;
+  }
+  .zoom-controls button, .zoom-controls .fit-view {
+    min-width:32px; width:32px; height:32px; padding:0; border:1px solid transparent;
+    border-radius:var(--array-radius); color:var(--ink); font-size:16px;
+  }
+  .zoom-controls button:hover { background:var(--array-hover); border-color:var(--line); }
+  .zoom-controls output { min-width:40px; font-size:10px; color:var(--array-muted); }
+  .canvas-hint { padding:0 12px 0 0; margin:0; color:var(--array-muted); font-size:10px; }
+  .topology-canvas > .sensor-rail {
+    height:auto; max-height:none; padding:15px; border:0; border-top:1px solid var(--line)!important;
+    background:var(--array-panel)!important;
+  }
+  .sensor-rail .tier-label { margin-bottom:13px; color:var(--array-muted); }
+  .sensor-connector { display:none; }
+  .sensor-list { display:flex; flex-direction:row; flex-wrap:wrap; gap:10px; }
+  .sensor-list .equipment-node { width:230px; }
+  .sensor-list .sensor-add { width:150px; }
+  .array-node-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:12px 20px; border-bottom:1px solid var(--line); }
+  .array-node-toolbar > span { color:var(--array-muted); font-size:11px; }
+  .power-tree.with-transformers { min-width:1040px; }
+  .transformer-column-headings { display:grid; grid-template-columns:295px 295px 265px; margin:0 0 10px 60px; color:var(--array-muted); font-size:9px; line-height:1.5; letter-spacing:.06em; }
+  .transformer-list { border-left:2px solid var(--line); margin-left:30px; }
+  .transformer-branch { display:grid; grid-template-columns:30px 265px max-content; align-items:start; padding-bottom:28px; }
+  .transformer-inverters { position:relative; margin-left:30px; border-left:2px solid var(--line); }
+  .transformer-inverters::before { content:""; position:absolute; left:-32px; top:40px; width:30px; border-top:2px solid var(--line); }
+  .transformer-inverters .inverter-row, .transformer-inverters .add-inverter-row { margin-left:0; }
+  .transformer-inverters .inverter-list::before { display:none; }
+  .unassigned-inverters { width:max-content; margin-top:20px; padding:16px; border:1px dashed var(--line); border-radius:var(--array-radius); }
+  .unassigned-inverters > p { margin:0 0 16px; font-size:12px; color:var(--array-muted); }
+  .transformer-override { display:flex; gap:10px; align-items:flex-start; font-size:12px; line-height:1.5; cursor:pointer; color:var(--ink); }
+  .transformer-override input, .transformer-assignments input { width:16px; height:16px; flex:0 0 16px; margin:2px 0 0; accent-color:var(--array-accent); }
+  .transformer-assignments { min-width:0; }
+  .transformer-assignments > div { max-height:300px; overflow:auto; margin:12px 0; border:1px solid var(--line); border-radius:var(--array-radius); }
+  .transformer-assignments label { display:flex; align-items:flex-start; gap:9px; padding:10px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .transformer-assignments label:last-child { border-bottom:0; }
+  .transformer-assignments label:hover { background:var(--array-hover); }
+  .transformer-assignments strong { display:block; font-size:11px; overflow-wrap:anywhere; }
+  .transformer-assignments small { display:block; font-size:10px; line-height:1.5; color:var(--array-muted); }
+  .capacity-metrics:has(.transformer-metric) { grid-template-columns:repeat(4,minmax(0,1fr)); }
+}
+@media(max-width:760px) {
+  html[data-theme] .app-shell .array-view {
+    .power-pane { height:clamp(360px,65svh,540px); }
+    .zoom-controls button, .zoom-controls .fit-view { min-width:44px; width:44px; min-height:44px; }
+    .canvas-hint { flex-basis:100%; padding:0 4px 4px; text-align:center; font-size:11px; }
+    .zoom-controls output { font-size:13px; }
+    .sensor-list .equipment-node { flex:1 1 230px; max-width:100%; }
+    .sensor-list .sensor-add { min-height:44px; }
+    .add-node { min-height:44px; font-size:12px; }
+    .capacity-metrics:has(.transformer-metric) { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  }
+}
+@media(max-width:480px) { html[data-theme] .app-shell .array-view .capacity-metrics:has(.transformer-metric) { grid-template-columns:1fr; } }

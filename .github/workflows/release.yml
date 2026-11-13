@@ -1,0 +1,168 @@
+name: Validate and release containers
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  test:
+    name: Node 24 production build and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund --fetch-timeout=15000 --fetch-retries=1
+      - name: Check release version
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: test "v$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')" = "$GITHUB_REF_NAME"
+      # The integration suite launches dist: build MUST precede npm test.
+      - run: npm run build
+      - run: npm test
+      - run: node --check scripts/container-smoke.mjs
+
+  container:
+    name: Native ${{ matrix.arch }} image and persistence smoke
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Name and validate native image
+        id: image
+        env:
+          ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ARCH:$(uname -m)" in amd64:x86_64|arm64:aarch64) ;; *) exit 1 ;; esac
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "local=sol-diagnostics:ci-$ARCH" >> "$GITHUB_OUTPUT"
+          echo "candidate=$repository:ci-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$ARCH" >> "$GITHUB_OUTPUT"
+      - name: Build once and load the native image
+        env:
+          ARCH: ${{ matrix.arch }}
+          IMAGE: ${{ steps.image.outputs.local }}
+        run: |
+          docker buildx build --platform "linux/$ARCH" --load --provenance=false \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME#v}" \
+            --tag "$IMAGE" .
+          test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE")" = "$ARCH"
+      - name: Real hardened container startup, auth and persistence
+        env:
+          IMAGE: ${{ steps.image.outputs.local }}
+        run: node scripts/container-smoke.mjs "$IMAGE"
+      - name: Log in for tag publication only
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the exact smoke-tested image
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          IMAGE: ${{ steps.image.outputs.local }}
+          CANDIDATE: ${{ steps.image.outputs.candidate }}
+          REPOSITORY: ${{ steps.image.outputs.repository }}
+          ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker tag "$IMAGE" "$CANDIDATE"
+          docker push "$CANDIDATE"
+          digest=$(docker buildx imagetools inspect "$CANDIDATE" --format '{{json .Manifest}}' | jq -r '.digest')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p digests
+          printf '%s@%s\n' "$REPOSITORY" "$digest" > "digests/$ARCH.txt"
+      - name: Save architecture digest
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-index:
+    name: Publish and verify two-platform release index
+    needs: [test, container]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - name: Merge only verified digests and read back the result
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          [[ "$GITHUB_REF_NAME" =~ ^v[A-Za-z0-9_.-]+$ ]]
+          test "${#GITHUB_REF_NAME}" -le 128
+          mapfile -t images < <(cat digests/amd64.txt digests/arm64.txt)
+          test "${#images[@]}" -eq 2
+          for image in "${images[@]}"; do
+            [[ "$image" == "$repository@sha256:"* ]]
+            digest="${image##*@sha256:}"
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          done
+          tag="$repository:${GITHUB_REF_NAME#v}"
+          docker buildx imagetools create --tag "$tag" "${images[@]}"
+          docker buildx imagetools inspect "$tag" --raw > index.json
+          jq -e --arg amd "${images[0]##*@}" --arg arm "${images[1]##*@}" '
+            (.manifests | length == 2) and
+            ([.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort == ["amd64", "arm64"]) and
+            any(.manifests[]; .platform.architecture == "amd64" and .digest == $amd) and
+            any(.manifests[]; .platform.architecture == "arm64" and .digest == $arm)
+          ' index.json
+          docker buildx imagetools inspect "$tag" >> "$GITHUB_STEP_SUMMARY"
+          printf '\nPackage visibility and anonymous pull still require release-owner verification.\n' >> "$GITHUB_STEP_SUMMARY"

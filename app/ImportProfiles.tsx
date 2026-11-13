@@ -1,0 +1,8 @@
+"use client";
+import {useEffect,useState} from 'react';
+export default function ImportProfiles({siteId,configuration,onApply,notify}:{siteId:string;configuration:Record<string,unknown>;onApply:(value:any)=>void;notify:(message:string)=>void}){
+ const [profiles,setProfiles]=useState<{id:string;name:string;configuration:any}[]>([]),[name,setName]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ useEffect(()=>{const c=new AbortController();setProfiles([]);fetch(`/api/import-profiles?siteId=${encodeURIComponent(siteId)}`,{signal:c.signal}).then(r=>r.json()).then(d=>{if(!c.signal.aborted)setProfiles(d.profiles||[]);}).catch(()=>{});return()=>c.abort();},[siteId]);
+ async function save(){setBusy(true);setError('');try{const r=await fetch('/api/import-profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({siteId,name,configuration})});const d=await r.json();if(!r.ok)throw new Error(d.error);setProfiles(p=>[...p,{id:d.id,name:name.trim(),configuration}]);setName('');notify('Import profile saved.');}catch(e){setError(e instanceof Error?e.message:'Unable to save profile.');}finally{setBusy(false);}}
+ return <div className="profile-controls"><label>Saved import profile<select value="" onChange={e=>{const p=profiles.find(p=>p.id===e.target.value);if(p)onApply(p.configuration);}}><option value="">Choose a profile…</option>{profiles.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>Save these mappings<input maxLength={100} value={name} onChange={e=>setName(e.target.value)} placeholder="Profile name"/></label><button className="secondary-btn" disabled={busy||!name.trim()} onClick={save}>Save profile</button>{error&&<p role="alert">{error}</p>}</div>;
+}

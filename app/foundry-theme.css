@@ -1,0 +1,115 @@
+/* Foundry — Foundry-Logic brand guidelines. Theme presentation only.
+   Copper is an accent, never small text on a light surface or a button fill. */
+@font-face{font-family:Outfit;src:url('/fonts/outfit-latin-400-normal.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:Outfit;src:url('/fonts/outfit-latin-500-normal.woff2') format('woff2');font-weight:500;font-style:normal;font-display:swap}
+@font-face{font-family:Outfit;src:url('/fonts/outfit-latin-600-normal.woff2') format('woff2');font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:'DM Serif Display';src:url('/fonts/dm-serif-display-latin-400-normal.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
+
+html[data-theme="foundry"] {
+  --ink:#0e2841; --muted:#5a5651; --line:#e8dcc8; --paper:#faf7f2;
+  --white:#fff; --nav:#0e2841; --gold:#c47a3a; --green:#32644b; --red:#a53730;
+  --console-panel:#fff; --console-ivory:#0e2841; --console-olive:#32644b;
+  --brand-blue:#0e2841; --brand-steel:#5a5651;
+  --foundry-sand:#e8dcc8; --foundry-soft:#f4ede2; --foundry-charcoal:#2a2829;
+  --foundry-body:#1a1a1a;
+  body { font-family:Outfit,Arial,sans-serif; color:var(--foundry-body); }
+  .app-shell * { font-family:Outfit,Arial,sans-serif!important; font-synthesis:none; }
+  h1,.topbar h1,.settings-header h1,.site-map-header h1,
+  h2,.panel-head h2,.form-heading h2,.topology-head h2,.review-dialog h2 {
+    font-family:'DM Serif Display',Georgia,serif!important;
+    font-weight:400; letter-spacing:0; text-transform:none; line-height:1.2;
+  }
+  h1,.topbar h1,.settings-header h1,.site-map-header h1 { font-size:36px; }
+  h2,.panel-head h2,.form-heading h2,.topology-head h2,.review-dialog h2 { font-size:26px; }
+  .workspace p { font-size:15px; line-height:1.6; }
+  .workspace small { font-size:12px; }
+  .eyebrow,.field>span,.form-divider>span { font-weight:500; }
+  .sidebar { border-color:#ffffff24; }
+  .brand-copy strong { font-size:18px; font-weight:600; letter-spacing:0; }
+  .brand-copy small,.nav-item,.nav-item span,.nav-sub-item,.mini-weather small,.user small { color:var(--foundry-sand); }
+  .brand-mark { background:var(--foundry-sand); color:var(--nav); border:2px solid var(--gold); }
+  .nav-item:hover,.nav-item.active,.nav-sub-item:hover,.nav-sub-item.active,.mini-weather { background:#ffffff0a; border-color:#ffffff20; }
+  .nav-sub-item>span,.nav-sub-item.active>span,.avatar { background:#ffffff0a; border-color:#ffffff25; color:var(--foundry-sand); }
+  .nav-item.active span,.nav-chevron,.weather-sun { color:var(--foundry-sand); }
+  .user { border-color:#ffffff25; }
+  .sidebar-toggle { box-shadow:none; }
+  .primary-btn { background:var(--nav); border-color:var(--nav); color:#fff; font-weight:500; }
+  .primary-btn:hover { background:#213f59; border-color:#213f59; }
+  .primary-btn span { color:var(--foundry-sand); }
+  .secondary-btn { border-color:#a69b8b; font-weight:500; }
+  .secondary-btn:hover { background:var(--foundry-soft); border-color:var(--nav); }
+  .panel,.metric-card,.settings-form,.site-selector,.model-summary,.topology-panel,.inspector-panel,.import-panel,.history-panel,.review-workbench { border-radius:8px; box-shadow:none; }
+  .metric-card { border-top:2px solid var(--nav); }
+  .metric-card.featured { border-top:2px solid var(--gold); }
+  .metric-card>strong,.quality-summary strong,.drawer-hero strong { font-weight:500; font-variant-numeric:tabular-nums; }
+  .status-strip,.quality-summary>div,.analysis-method,.selector-title,.form-heading,.form-actions,.form-divider,
+  .coordinate-card,.calculated-capacity,.threshold-rule,.model-summary .summary-capacity,.capacity-section,
+  .import-heading,.mapping-head,.mapping-section-head,.equipment-map-title,.equipment-map-head,.preview-title,.history-head,.import-actions,
+  .timeline-child-label,.timeline-child-track,.timeline-legend,.drawer-hero,.detail-drawer dl { background:var(--paper); color:var(--muted); }
+  .chart-bar-track { background:repeating-linear-gradient(0deg,var(--paper) 0 22px,var(--line) 23px); }
+  .chart-bar-track i,.analysis-progress span,.site-impact i { background:var(--nav); }
+  .analysis-progress,.loss-percent>span,.site-impact>span { background:var(--line); }
+  .performance-empty>span,.import-steps li>span,.file-icon,.upload-icon,.history-file,
+  .site-initial,.site-selector button.active .site-initial,.map-pin,.duplicate-inverter>span:first-child { color:var(--nav); background:var(--foundry-soft); border-color:var(--line); }
+  th,.issue-table .sort-row th,.summary-matrix>thead th,.summary-children th { background:var(--foundry-soft); }
+  td,.issue-table td { color:var(--foundry-body); }
+  tbody tr:hover,tbody tr:focus,.summary-group>summary:hover { background:var(--paper); }
+  .filter-row th,.summary-filter-row th { background:var(--paper)!important; }
+  .table-actions .export-btn,.table-actions .export-btn b { border-color:#a69b8b; }
+  .workspace input,.workspace select,.workspace textarea { border-color:#a69b8b; color:var(--foundry-body); }
+  .workspace input::placeholder,.workspace textarea::placeholder { color:var(--muted); }
+  .workspace input:focus,.workspace select:focus,.workspace textarea:focus { outline:2px solid var(--nav); outline-offset:2px; border-color:var(--nav); }
+  .workspace input:disabled,.workspace select:disabled,.calculated-field input { background:var(--foundry-soft); color:var(--muted); }
+  .issue-table .sort-row th.drop-target,.summary-strip,.matching-preview,.site-selector>button:hover,.site-selector>button.active { background:var(--foundry-soft); border-color:var(--line); }
+  .summary-group>summary { --summary-value-color:var(--nav); }
+  .summary-children { background:var(--paper); }
+  .issue-link-badge { color:var(--nav); background:var(--paper); border-color:#a69b8b; }
+  .issue-link-badge:hover,.issue-link-badge[aria-pressed=true] { background:var(--nav); border-color:var(--nav); color:#fff; }
+  .summary-children tr.related-issue-selected td { background:var(--foundry-soft); border-color:var(--line); }
+  .related-issue-selected td:first-child { box-shadow:inset 3px 0 var(--gold); }
+  .severity.medium,.issue-category.communications,.issue-confidence.model-based,.status.no-data { background:var(--foundry-soft)!important; color:var(--nav); border-color:var(--line); }
+  .severity.medium i { background:var(--nav); }
+  .summary-icon.meter,.node-icon.revenue_meter { background:var(--nav); color:var(--foundry-sand); }
+  .summary-icon.inverter,.node-icon.inverter,.summary-icon.modules,.node-icon.module_group { background:var(--foundry-soft); color:var(--nav); }
+  .topology-canvas,.duplicate-inverter { background:var(--paper); }
+  .sensor-rail { background:var(--foundry-soft)!important; border-color:var(--line)!important; }
+  .equipment-node,.add-node,.zoom-controls { border-color:var(--line); }
+  .equipment-node:hover,.add-node:hover,.zoom-controls button:hover,.duplicate-inverter:hover { background:var(--foundry-soft); border-color:var(--nav); color:var(--nav); }
+  .equipment-node.selected { border-color:var(--nav); box-shadow:0 0 0 2px var(--line); }
+  .import-steps li.active { background:var(--foundry-soft); border-color:var(--nav); }
+  .format-options { background:var(--foundry-sand); }
+  .format-options button { color:var(--muted); }
+  .normalization-preview span,.wide-signals>span,.no-signal-columns,.empty-history>span { background:var(--foundry-soft); color:var(--muted); }
+  .detected-block p,.detected-block span,.toast small { color:var(--foundry-sand); }
+  .detected-block span,.toast { border-color:#ffffff30; }
+  .timeline-track>i { background:var(--line); }
+  .timeline-bar.performance,.timeline-legend i.performance { background:var(--nav); border-color:var(--nav); }
+  .timeline-bar.data-quality,.timeline-legend i.data-quality { background:var(--gold); border-color:#985921; }
+  .timeline-bar.communications,.timeline-legend i.communications { background:var(--muted); border-color:var(--foundry-charcoal); }
+  .timeline-bar:focus-visible { outline-color:var(--nav); }
+  .drawer-backdrop,.review-overlay { background:#0e284199; }
+  .drawer-close { background:var(--paper); }
+  .site-map-shell { background:var(--foundry-sand); box-shadow:none; }
+  .review-dialog { box-shadow:0 16px 48px #0e284122; }
+  .review-dialog label,.analysis-history label,.review-toolbar label,.profile-controls label,
+  .review-audit small,.history-stats span,.review-evidence-metrics span,.confidence-levels,
+  .recurring-group>header span,.maintenance-window small,.bulk-review-bar span,
+  .review-workbench .eyebrow,.review-workbench .selection-help,.review-group-timeline .review-timeline-caption { font-size:12px; }
+  .review-dialog p,.review-workbench p { font-size:14px; }
+  .review-dialog details,.review-workbench summary,.review-actions button,.issue-review-button { font-size:13px; }
+  .review-workbench h3 { font-size:20px; font-weight:500; }
+  .recurring-group>header strong { font-size:16px; font-weight:500; }
+  .review-evidence-metrics strong { font-variant-numeric:tabular-nums; }
+  .app-shell input[type="checkbox"],.review-dialog progress { accent-color:var(--nav); }
+  button:focus-visible,a:focus-visible,summary:focus-visible { outline:2px solid var(--nav); outline-offset:3px; }
+  .sidebar button:focus-visible,.mobile-header button:focus-visible { outline-color:var(--foundry-sand); }
+  .array-view { --array-panel:#fff; --array-accent:#0e2841; --array-muted:#5a5651; --array-hover:#f4ede2; --array-radius:6px; }
+  .app-shell .array-view .equipment-node { box-shadow:none; }
+  .app-shell .array-view .equipment-node small,.app-shell .array-view .equipment-node em { font-size:12px; }
+  .app-shell .array-view .tier-label,.app-shell .array-view .tree-column-headings { font-size:11px; }
+  @media(max-width:760px) {
+    h1,.topbar h1,.settings-header h1,.site-map-header h1 { font-size:30px; }
+    h2,.panel-head h2,.form-heading h2,.topology-head h2,.review-dialog h2 { font-size:23px; }
+    .mobile-header div>span { color:var(--foundry-sand); }
+  }
+}

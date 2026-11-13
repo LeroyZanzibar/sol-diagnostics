@@ -1,0 +1,21 @@
+.issue-visibility-view .user-settings-layout{grid-template-columns:minmax(0,860px)}
+.visibility-fieldset{border:0;padding:0;margin:0;min-width:0}
+.visibility-options-toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;padding:18px 24px;background:var(--paper);border-block:1px solid var(--line);font-size:12px;color:var(--muted)}
+.visibility-options{padding:0 24px}
+.visibility-option{display:flex;justify-content:space-between;align-items:center;gap:24px;padding:20px 0;border-bottom:1px solid var(--line)}
+.visibility-option:last-child{border-bottom:0}
+.visibility-option strong{font-size:14px;color:var(--ink);font-weight:600}
+.visibility-option p{font-size:12px;line-height:1.6;color:var(--muted);margin:5px 0 0;max-width:560px}
+.visibility-toggle{display:flex;align-items:center;gap:12px;flex-shrink:0;font-size:11px;color:var(--muted)}
+.visibility-switch{position:relative;width:48px;height:28px;border-radius:20px;border:1px solid var(--muted);background:var(--line);cursor:pointer;padding:3px;flex-shrink:0;transition:background .15s}
+.visibility-switch>span{display:block;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transform:translateX(0);transition:transform .15s}
+.visibility-switch[aria-checked="true"]{background:var(--nav);border-color:var(--nav)}
+.visibility-switch[aria-checked="true"]>span{transform:translateX(20px)}
+.visibility-switch:focus-visible{outline:2px solid var(--gold);outline-offset:4px}
+.visibility-fieldset:disabled .visibility-switch{opacity:.5;cursor:wait}
+.visibility-explanation,.visibility-load-notice{padding:16px 24px;font-size:12px;line-height:1.65;color:var(--muted);margin:0;background:var(--paper);border-top:1px solid var(--line)}
+.visibility-load-notice[role="alert"]{color:var(--ink)}
+.visibility-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.issue-visibility-notice{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:12px 0;padding:14px 18px;border:1px solid var(--line);border-radius:8px;background:var(--white);color:var(--muted);font-size:12px;line-height:1.6}
+.issue-visibility-notice p{margin:0;flex:1;min-width:180px}.issue-visibility-notice strong{color:var(--ink)}
+@media(max-width:600px){.visibility-options{padding:0 16px}.visibility-option{gap:14px;align-items:flex-start;padding:18px 0}.visibility-toggle{flex-direction:column-reverse;gap:6px}.visibility-options-toolbar,.visibility-explanation,.visibility-load-notice{padding:16px}.visibility-switch{height:32px;width:52px;padding:5px}.issue-visibility-view .form-heading{align-items:flex-start;flex-direction:column;gap:14px}.issue-visibility-view .form-actions{flex-wrap:wrap}}

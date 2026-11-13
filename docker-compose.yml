@@ -1,0 +1,27 @@
+name: sol-diagnostics
+services:
+  app:
+    image: sol-diagnostics:1.0.0
+    build: .
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 2m
+    ports:
+      - "${SOL_BIND_IP:-0.0.0.0}:${SOL_PORT:-3080}:3080"
+    environment:
+      SOL_USERNAME: "${SOL_USERNAME:-admin}"
+      SOL_PASSWORD: "${SOL_PASSWORD:?Run ./setup.sh to create .env first}"
+      SOL_PUBLIC_URL: "${SOL_PUBLIC_URL:-}"
+      NODE_OPTIONS: "--max-old-space-size=${SOL_HEAP_MB:-2048}"
+      TZ: UTC
+    volumes:
+      - sol-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+volumes:
+  sol-data:

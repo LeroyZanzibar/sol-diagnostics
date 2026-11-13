@@ -1,0 +1,1 @@
+ALTER TABLE `user_settings` ADD `issue_visibility` text DEFAULT '{}' NOT NULL;

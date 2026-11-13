@@ -1,0 +1,8 @@
+"use client";
+import {useEffect,useState} from 'react';
+export default function AnalysisHistory({siteId,runId,onChange,revision}:{siteId:string;runId:string;onChange:(id:string)=>void;revision:string}){
+ const [runs,setRuns]=useState<{id:string;completed_at:string;parser_version:number}[]>([]),[next,setNext]=useState<string|null>(null),[error,setError]=useState('');
+ useEffect(()=>{const c=new AbortController();setRuns([]);setNext(null);setError('');fetch(`/api/analysis-history?siteId=${encodeURIComponent(siteId)}`,{signal:c.signal}).then(r=>r.json()).then(d=>{if(c.signal.aborted)return;if(d.error)setError(d.error);else{setRuns(d.runs||[]);setNext(d.next);}}).catch(e=>{if(!c.signal.aborted)setError(e.message);});return()=>c.abort();},[siteId,revision]);
+ async function more(){try{const r=await fetch(`/api/analysis-history?siteId=${encodeURIComponent(siteId)}&before=${encodeURIComponent(next||'')}`),d=await r.json();if(!r.ok)throw new Error(d.error);setRuns(p=>[...p,...d.runs]);setNext(d.next);}catch(e){setError(e instanceof Error?e.message:'Unable to load analyses.');}}
+ return <div className="analysis-history"><label>Analysis<select value={runId} onChange={e=>onChange(e.target.value)}><option value="">Current performance file</option>{runs.map(r=><option key={r.id} value={r.id}>{new Date(r.completed_at).toLocaleString()} · calculation v{r.parser_version} · {r.id.slice(0,6)}</option>)}</select></label>{next&&<button className="secondary-btn" onClick={more}>Older analyses</button>}{runId&&<span>Saved calculation snapshot · reviews reflect their latest saved state</span>}{error&&<span role="alert">{error}</span>}</div>;
+}
