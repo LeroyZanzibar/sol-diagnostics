@@ -1,0 +1,14 @@
+.site-csv{margin:20px 0;padding:20px;min-width:0;color:var(--ink,inherit)}
+.site-csv h2{margin:0 0 10px;font-size:18px;color:inherit}
+.site-csv p{max-width:100ch;font-size:13px;line-height:1.6;color:inherit}
+.site-csv-actions{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
+.site-csv-actions a{text-decoration:none;display:inline-flex;align-items:center}
+.site-csv-file{max-width:480px;margin:16px 0}
+.site-csv-file input{max-width:100%;height:auto;padding:10px}
+.site-csv-errors{border:1px solid currentColor;border-radius:6px;padding:12px;max-height:260px;overflow:auto;font-size:13px}
+.site-csv-errors li{margin:6px 0;overflow-wrap:anywhere}
+.site-csv-table{max-width:100%;max-height:360px;overflow:auto;border:1px solid var(--line,#77867c);border-radius:6px}
+.site-csv-table table{border-collapse:collapse;width:100%;font-size:12px;text-align:left}
+.site-csv-table th,.site-csv-table td{padding:10px;border-bottom:1px solid var(--line,#77867c);min-width:100px;max-width:320px;overflow-wrap:anywhere;white-space:pre-wrap;vertical-align:top;color:inherit}
+.site-csv-table th{font-weight:700}
+@media(max-width:700px){.site-csv{padding:14px}.site-csv-actions{flex-direction:column;align-items:stretch}.site-csv-actions a,.site-csv-actions button{justify-content:center;min-height:44px}.site-csv-file{max-width:100%}}
