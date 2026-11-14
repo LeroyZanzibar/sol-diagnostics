@@ -181,6 +181,12 @@ jobs:
           anonymous_config=$(mktemp -d "$RUNNER_TEMP/sol-anonymous.XXXXXX")
           trap 'rm -rf -- "$anonymous_config"' EXIT
           for arch in amd64 arm64; do
-            docker --config "$anonymous_config" pull --platform "linux/$arch" "$repository@$digest"
+            # Classic Docker stores cannot retain both platforms under one index digest.
+            # Pull the already-verified architecture-specific digest instead.
+            image=$(<"digests/$arch.txt")
+            [[ "$image" == "$repository@sha256:"* ]]
+            child_digest="${image##*@sha256:}"
+            [[ "$child_digest" =~ ^[0-9a-f]{64}$ ]]
+            docker --config "$anonymous_config" pull --platform "linux/$arch" "$image"
           done
           printf '\nAnonymous pulls passed for linux/amd64 and linux/arm64 at `%s@%s`.\n' "$repository" "$digest" >> "$GITHUB_STEP_SUMMARY"
