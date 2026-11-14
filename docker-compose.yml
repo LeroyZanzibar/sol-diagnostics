@@ -1,7 +1,7 @@
 name: sol-diagnostics
 services:
   app:
-    image: sol-diagnostics:2026.11.13.2
+    image: sol-diagnostics:2026.11.14.1
     build: .
     init: true
     restart: unless-stopped

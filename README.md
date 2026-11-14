@@ -1,6 +1,6 @@
 # Sol Diagnostics — Docker edition for UmbrelOS
 
-A self-contained edition of Sol Diagnostics based on hosted version 116 (source commit `0820d6762070df30649ee47dba79e5ab29286c46`). Target release **2026.11.13.2**; see [CHANGELOG.md](CHANGELOG.md).
+A self-contained edition of Sol Diagnostics based on hosted version 116 (source commit `0820d6762070df30649ee47dba79e5ab29286c46`). Release version **2026.11.14.1**; see [CHANGELOG.md](CHANGELOG.md) and GitHub Releases for publication status.
 
 The complete application is included: site and array configuration (including transformers), performance CSV imports, cached/resumable analyses, issue review and recurring groups, visibility settings, summaries and spreadsheet exports, Timeline, maintenance CSV/Excel uploads, and all three themes.
 
@@ -44,7 +44,7 @@ https://umbrel.com/support/apps/running-custom-docker-containers
 Use a directory you control on persistent storage, outside any existing app's data directory. Copy the downloaded archive there. Open a terminal on your Umbrel with access to its Docker daemon (or use the Portainer workflow below).
 
 ```sh
-tar -xzf Sol-Diagnostics-Umbrel-2026.11.13.2.tar.gz
+tar -xzf Sol-Diagnostics-Umbrel-2026.11.14.1.tar.gz
 cd sol-diagnostics-umbrel
 sh setup.sh
 docker compose up -d --build
@@ -65,7 +65,7 @@ For remote access from your laptop, use your existing Tailscale connection and t
 
 ### Portainer workflow
 
-The archive is **source**, not a prebuilt Docker image. First build the image in the Docker environment managed by Portainer. Extract the archive, then run `docker compose build` from the extracted directory against that same Docker daemon. This creates the image tagged `sol-diagnostics:2026.11.13.2`.
+The archive is **source**, not a prebuilt Docker image. First build the image in the Docker environment managed by Portainer. Extract the archive, then run `docker compose build` from the extracted directory against that same Docker daemon. This creates the image tagged `sol-diagnostics:2026.11.14.1`.
 
 Create a stack from `docker-compose.yml`, remove the `build: .` line, and set the environment variables in Portainer (at minimum `SOL_PASSWORD` to a unique password of at least 16 characters). Keep the named `sol-data` volume; do not replace it with an ephemeral container directory. Deploy the stack and open the server on port 3080.
 

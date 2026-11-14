@@ -170,4 +170,17 @@ jobs:
             any(.manifests[]; .platform.architecture == "arm64" and .digest == $arm)
           ' index.json
           docker buildx imagetools inspect "$tag" >> "$GITHUB_STEP_SUMMARY"
-          printf '\nPackage visibility and anonymous pull still require release-owner verification.\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify anonymous pulls of both released platforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tag="$repository:${GITHUB_REF_NAME#v}"
+          digest=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r '.digest')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          anonymous_config=$(mktemp -d "$RUNNER_TEMP/sol-anonymous.XXXXXX")
+          trap 'rm -rf -- "$anonymous_config"' EXIT
+          for arch in amd64 arm64; do
+            docker --config "$anonymous_config" pull --platform "linux/$arch" "$repository@$digest"
+          done
+          printf '\nAnonymous pulls passed for linux/amd64 and linux/arm64 at `%s@%s`.\n' "$repository" "$digest" >> "$GITHUB_STEP_SUMMARY"

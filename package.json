@@ -1,6 +1,6 @@
 {
   "name": "sol-diagnostics-umbrel",
-  "version": "2026.11.13-2",
+  "version": "2026.11.14-1",
   "private": true,
   "engines": {
     "node": ">=24.0.0 <25"
