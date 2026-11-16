@@ -1904,7 +1904,6 @@ export default function Home() {
             reportRange={reportRange}
             timezone={reportTimezone}
             maintenanceRevision={maintenanceRevision}
-            episodes={recurringIssues}
             issues={reportIssues}
             reportingPeriod={<><ReportingPeriod range={reportRange} onChange={setReportRange} timezone={reportTimezone} />{reviewControls}</>}
             siteName={activeSite?.name || "Site"}

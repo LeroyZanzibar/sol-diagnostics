@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.11.15.2 — pending publication
+
+- Group Timeline rows by issue name and stable equipment ID across recurring episodes and standalone findings.
+- Preserve separate active date ranges, expandable individual occurrences, category/severity filters, overlap severity and loss details.
+- Keep different equipment separate even when their display names match; leave issue detection, recurring episode records, reviews and saved data unchanged.
+- Add six Timeline rendering regression tests covering grouping, equipment identity, filtering, sorting, expansion and active gaps.
+
 ## 2026.11.15.1 — published November 15, 2026
 
 Published as `v2026.11.15.1` from source commit `134e720af6d2e1fcb2a9bdff46d07213e2fa91fa`. The immutable multi-platform image digest is `sha256:deb5cbaf899608b7659eb94d79c7ad136eeec8a54ebab46cb2e183f3227725ca`. The production build, 298 tests, native AMD64/ARM64 image smoke tests, and anonymous pulls passed. See [the GitHub release](https://github.com/LeroyZanzibar/sol-diagnostics/releases/tag/v2026.11.15.1) for source downloads and evidence. This documentation records publication without moving the source tag.
