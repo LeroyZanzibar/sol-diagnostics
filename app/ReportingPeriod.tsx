@@ -21,7 +21,7 @@ export default function ReportingPeriod({ range, onChange, timezone }: { range: 
         {(range.from || range.through) && <button className="secondary-btn" onClick={() => onChange({ from: "", through: "" })}>All dates</button>}
       </div>
     </div>
-    <small className="reporting-period-help">Dates use {timezone}. Through includes the entire day. Applies to Issues, Summaries, Timeline, and their exports.</small>
+    <small className="reporting-period-help">Dates use {timezone}. Through includes the entire day. Applies to Findings, Summaries, Timeline, and their exports.</small>
     {!reportRangeValid(range) && <p className="reporting-period-error" role="alert">The reporting end date must be on or after the start date.</p>}
   </section>;
 }

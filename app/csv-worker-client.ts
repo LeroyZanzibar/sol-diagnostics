@@ -4,7 +4,7 @@ import type { TimestampConvention } from "./telemetry-time";
 
 export type CsvRequest =
   | { kind: "load"; file: File }
-  | { kind: "validate"; mapping: Mapping; signals: SignalMapping[]; equipment: EquipmentAsset[]; timezone: string; timestampConvention: TimestampConvention }
+  | { kind: "validate"; mapping: Mapping; signals: SignalMapping[]; equipment: EquipmentAsset[]; timezone: string; timestampConvention: TimestampConvention; knownIntervalMinutes?: number }
   | { kind: "prepare"; mapping: Mapping; signals: SignalMapping[] };
 
 export class CsvProcessor {
@@ -36,8 +36,8 @@ export class CsvProcessor {
   }
 
   load(file: File) { return this.request<{ headers: string[]; rows: string[][]; rowCount: number }>({ kind: "load", file }); }
-  validate(mapping: Mapping, signals: SignalMapping[], equipment: EquipmentAsset[], timezone: string, timestampConvention: TimestampConvention) {
-    return this.request<Validation>({ kind: "validate", mapping, signals, equipment, timezone, timestampConvention });
+  validate(mapping: Mapping, signals: SignalMapping[], equipment: EquipmentAsset[], timezone: string, timestampConvention: TimestampConvention, knownIntervalMinutes?: number) {
+    return this.request<Validation>({ kind: "validate", mapping, signals, equipment, timezone, timestampConvention, knownIntervalMinutes });
   }
   prepare(mapping: Mapping, signals: SignalMapping[]) {
     return this.request<File>({ kind: "prepare", mapping, signals });

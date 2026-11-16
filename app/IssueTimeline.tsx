@@ -198,7 +198,7 @@ export default function IssueTimeline({
           <p>{siteName} · one row per issue and equipment. Expand a row to see individual occurrences. Recurring bars show active intervals only.</p>
         </div>
         <div className="timeline-header-actions"><label>Site<select aria-label="Timeline site" value={siteId} onChange={event=>onSiteChange(event.target.value)}>{sites.map(site=><option value={site.id} key={site.id}>{site.name}</option>)}</select></label><button className="secondary-btn" onClick={onBack}>
-          Back to issues
+          Back to Findings
         </button></div>
       </header>
       {reportingPeriod}

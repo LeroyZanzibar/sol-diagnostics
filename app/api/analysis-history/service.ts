@@ -1,6 +1,7 @@
 import { readCheckpoint } from "../performance-summary/checkpoint-storage";
 import { getBucketBinding, getDatabaseBinding } from "../../../db/binding";
 import { issueEventKey, issueEvidenceSignature, defaultConfidence } from "../../issue-review";
+import { savedAnalysisProvenance, assessAnalysisFreshness } from "../performance-data/analysis";
 export async function savedAnalysis(siteId:string,runId:string,reviewOnly=false){
   const row=await getDatabaseBinding().prepare("SELECT analysis_object_key, status, parser_version, model_revision FROM analysis_runs WHERE id = ? AND site_id = ?").bind(runId,siteId).first<{analysis_object_key:string;status:string;parser_version:number;model_revision:string}>();
   if(!row||row.status!=="completed")throw new Error("Saved analysis not found.");
@@ -13,4 +14,46 @@ export async function savedAnalysis(siteId:string,runId:string,reviewOnly=false)
   if(payload.issueDatabase?.analysisRunId&&payload.issueDatabase.analysisRunId!==runId)throw new Error("This legacy analysis was overwritten before immutable history was available.");
   for(const issue of payload.analysis.issues){issue.eventKey ||= await issueEventKey(siteId,issue);issue.evidenceSignature ||= await issueEvidenceSignature(issue);issue.confidenceDetail ||= defaultConfidence(issue);}
   return payload;
+}
+
+type HistoryRow = { id:string; import_id:string; parser_version:number; model_revision:string; issue_count:number; completed_at:string; analysis_object_key:string; timestamp_start:string|null; timestamp_end:string|null };
+
+export async function listAnalysisHistory(siteId:string, before = "") {
+  const db=getDatabaseBinding();
+  let timestamp="9999", id="";
+  if (before.startsWith("[")) {
+    const cursor=JSON.parse(before);
+    if (!Array.isArray(cursor) || cursor.length!==2 || cursor.some(value=>typeof value!=="string" || !value)) throw new Error("Invalid analysis history cursor.");
+    [timestamp,id]=cursor;
+  } else if (before) timestamp=before; // Compatibility with earlier timestamp-only links.
+  const page=await db.prepare(`SELECT r.id,r.import_id,r.parser_version,r.model_revision,r.issue_count,r.completed_at,r.analysis_object_key,
+    t.timestamp_start,t.timestamp_end FROM analysis_runs r LEFT JOIN telemetry_imports t ON t.id=r.import_id AND t.site_id=r.site_id
+    WHERE r.site_id = ? AND r.status = 'completed' AND (r.completed_at < ? OR (r.completed_at = ? AND r.id < ?))
+    ORDER BY r.completed_at DESC,r.id DESC LIMIT 51`).bind(siteId,timestamp,timestamp,id).all<HistoryRow>();
+  const pointers=await db.prepare("SELECT import_id,summary FROM performance_summaries WHERE site_id = ?").bind(siteId).all<{import_id:string;summary:string}>();
+  const current=new Set<string>();
+  for (const row of pointers.results) {
+    let pointer: {objectKey?:string;analysisRunId?:string;parserVersion?:number;modelRevision?:string};
+    try { pointer=JSON.parse(row.summary); } catch { continue; }
+    if (!pointer?.objectKey) continue;
+    // Resolve legacy pointers without fetching giant analysis JSON objects.
+    const run=await db.prepare(`SELECT id FROM analysis_runs WHERE site_id = ? AND import_id = ? AND analysis_object_key = ?
+      AND status = 'completed' ORDER BY completed_at DESC,id DESC LIMIT 1`).bind(siteId,row.import_id,pointer.objectKey).first<{id:string}>();
+    if (run && (!pointer.analysisRunId || pointer.analysisRunId===run.id)) current.add(run.id);
+  }
+  const hashes=new Map<string,string>();
+  const runs=page.results.slice(0,50).map(({analysis_object_key,...row}:HistoryRow)=>{
+    const provenance=savedAnalysisProvenance(siteId,row.id);
+    // Version 1 puts the primary interval domain first; auxiliary snow
+    // dependencies may extend beyond the dates actually analyzed.
+    const analyzedRange=provenance?.scopes[0];
+    return {...row,
+      timestamp_start:analyzedRange?.start || row.timestamp_start || null,
+      timestamp_end:analyzedRange?.end || row.timestamp_end || null,
+      source_revision:provenance?.revision ?? null,
+      is_current:current.has(row.id),
+      data_freshness:assessAnalysisFreshness(siteId,row.id,provenance,hashes),
+    };
+  });
+  return {runs,next:page.results.length>50 ? JSON.stringify([runs[49].completed_at,runs[49].id]) : null};
 }

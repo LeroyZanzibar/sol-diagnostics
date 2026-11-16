@@ -35,7 +35,13 @@ test('production app: authenticated setup, chunked import, analysis, review, mai
   const csv=Buffer.from(lines.join('\n')+'\n'),uploadId=randomUUID(),split=csv.indexOf(10,Math.floor(csv.length/2))+1;
   for(const [index,chunk] of [csv.subarray(0,split),csv.subarray(split)].entries()){const response=await fetch(`${base}/api/telemetry-imports/chunk?uploadId=${uploadId}&part=${index+1}`,{method:'PUT',headers,body:chunk});assert.equal(response.status,201,await response.text());}
   const metadata={uploadId,totalChunks:2,siteId,fileName:'test.csv',fileSize:csv.length,timezone:'UTC',mapping:{timestamp:'Timestamp',expectedProduction:'Expected kWh'},equipmentMapping:{signals:[{column:'Meter kWh',equipmentId:'meter',measurement:'Energy'},{column:'Inv1 kWh',equipmentId:'inv1',measurement:'Energy'},{column:'Inv2 kWh',equipmentId:'inv2',measurement:'Energy'},{column:'Irradiance',equipmentId:'weather',measurement:'Irradiance'}]},detectedTypes:['Energy','Irradiance'],validation:{totalRows:192,validRows:192,errors:0,timezone:'UTC',timestampConvention:'start',intervalMinutes:60,start:'2026-05-01T00:00:00Z',end:'2026-05-08T23:00:00Z'}};
-  const imported=await api('/api/telemetry-imports/finalize','POST',metadata);assert.ok(imported.import.id);
+  const staged=await api('/api/telemetry-imports/finalize','POST',metadata);assert.ok(staged.preview.stageId);
+  assert.equal((await api(`/api/performance-data?siteId=${siteId}`)).dataset.revision,0,'Preview must not write canonical data');
+  const imported=await api('/api/performance-data','POST',{action:'commit',siteId,stageId:staged.preview.stageId,previewToken:staged.preview.previewToken,approveOverlap:false});assert.equal(imported.committed,true);
+  assert.equal(imported.dataset.revision,1);
+  const pending=await api(`/api/performance-summary?siteId=${siteId}`);assert.equal(pending.analysisRequired,true);assert.equal(pending.hasData,false);
+  assert.deepEqual((await api(`/api/analysis-history?siteId=${siteId}`)).runs,[],'Browsing must not start an analysis');
+  await api('/api/performance-summary','POST',{siteId,action:'reanalyze'});
   let analysis;for(let i=0;i<30;i++){analysis=await api(`/api/performance-summary?siteId=${siteId}`);if(!analysis.processing)break;}
   assert.equal(analysis.hasData,true,JSON.stringify(analysis));assert.ok(analysis.analysis.issues.length>0,'Should detect the offline inverter');
   const history=await api(`/api/analysis-history?siteId=${siteId}`);const runId=history.runs[0].id;

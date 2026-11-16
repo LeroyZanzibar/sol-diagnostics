@@ -1,6 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { siteSettings, telemetryImports } from "../../../db/schema";
+import { optionalPerformanceStoreManager } from "../../../db/performance-store";
 
 type SiteSettingsInput = {
   id?: string;
@@ -63,7 +64,8 @@ export async function GET() {
       db.selectDistinct({ siteId: telemetryImports.siteId }).from(telemetryImports),
     ]);
     const importedIds = new Set(importedSites.map(site => site.siteId));
-    return Response.json({ sites, sitesWithPerformanceData: sites.filter(site => importedIds.has(site.id)).map(site => site.id) });
+    const performance = optionalPerformanceStoreManager();
+    return Response.json({ sites, sitesWithPerformanceData: sites.filter(site => importedIds.has(site.id) || performance?.hasData(site.id)).map(site => site.id) });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Unable to load site settings" }, { status: 500 });
   }

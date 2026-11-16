@@ -71,7 +71,7 @@ export default function IssueReviewDialog({siteId,runId,issueId,name,onClose,onS
   <div className="review-dialog" role="dialog" aria-modal="true" aria-labelledby="review-title" ref={dialog}>
    <header><div><p className="eyebrow">ANALYST REVIEW</p><h2 id="review-title">{name}</h2></div><button ref={close} className="secondary-btn" disabled={busy} onClick={onClose}>Close</button></header>
    {!state&&!error&&<p role="status">Loading review…</p>}
-   {readOnly&&<p className="review-notice">This is a saved analysis. Review history is current; select Current data history to make a new review.</p>}
+   {readOnly&&<p className="review-notice">This is a saved analysis. Review history is current; select the published current analysis in Manage Analyses to make a new review.</p>}
    {changed&&<div className="review-notice"><strong>Reassessment needed</strong><ul>{(review?.assessment?.changes||['Evidence changed since the last review.']).map((message,i)=><li key={i}>{message}</li>)}</ul><p>Earlier decisions and notes are retained. Saving applies your assessment to this version.</p></div>}
    {review?.assessment?.retained&&<p className="review-notice">Small numerical changes only. Your previous decision remains effective; no new review is required.</p>}
    {review?.inheritedFrom&&<p className="review-notice">This occurrence inherits the recurring issue review. Saving here creates an individual exception. <button className="secondary-btn" onClick={()=>onParentReview?.(review.inheritedFrom!.id)}>Open recurring issue review</button></p>}

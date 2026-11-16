@@ -1,4 +1,5 @@
 import { depotCleanupInProgress } from "../../../db/depot-performance-cleanup";
+import { performanceAnalysisInput } from "../performance-data/analysis";
 import { and, desc, eq, ne } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { getBucketBinding, getDatabaseBinding } from "../../../db/binding";
@@ -24,7 +25,7 @@ export async function latestLegacyImport(siteId: string) {
 }
 export async function currentAnalysisInput(siteId: string, year = 2026) {
   if (await depotCleanupInProgress(getDatabaseBinding(),siteId)) return undefined;
-  return latestLegacyImport(siteId);
+  return performanceAnalysisInput(siteId) || latestLegacyImport(siteId);
 }
 export async function historyVersion(id:string,siteId:string) {
   return getDatabaseBinding().prepare("SELECT * FROM data_history_versions WHERE id = ? AND site_id = ?").bind(id,siteId).first<Version>();

@@ -124,7 +124,7 @@ for(const scenario of ['fresh','upgrade','legacy-active','legacy-completed'])tes
   const model=await f.api('/api/equipment','PUT',{siteId:DEPOT_SITE_ID,equipment,verified:true});assert.equal(model.verified,true);
   const fixture=telemetry();
   if(scenario==='legacy-active'){
-    const blocked=await upload(f,fixture,500);assert.match(blocked.error,/being removed.*after cleanup completes/);
+    const blocked=await upload(f,fixture,409);assert.match(blocked.error,/being removed.*after cleanup completes/);
     assert.deepEqual(protectedData(f),before);
     f.inspect(db=>{
       assert.deepEqual(allRows(db,'maintenance_tasks'),initialTasks);
@@ -134,10 +134,14 @@ for(const scenario of ['fresh','upgrade','legacy-active','legacy-completed'])tes
       db.prepare("UPDATE maintenance_tasks SET status='completed' WHERE id=?").run(DEPOT_CLEANUP_ID);
     });
   }
-  const imported=(await upload(f,fixture)).import;assert.equal(imported.siteId,DEPOT_SITE_ID);
+  const staged=(await upload(f,fixture)).preview;assert.equal(staged.siteId,DEPOT_SITE_ID);
+  assert.equal((await f.api(`/api/performance-data?siteId=${DEPOT_SITE_ID}`)).dataset.revision,0);
+  const committed=await f.api('/api/performance-data','POST',{siteId:DEPOT_SITE_ID,action:'commit',stageId:staged.stageId,previewToken:staged.previewToken,approveOverlap:false});
+  const imported=committed.dataset;assert.equal(imported.revision,1);
+  const audit=(await f.api(`/api/performance-data?siteId=${DEPOT_SITE_ID}`)).imports;assert.equal(audit.length,1);assert.equal(audit[0].stageId,staged.stageId);
   f.inspect(db=>{
-    assert.equal(db.prepare('SELECT id FROM telemetry_imports WHERE site_id=?').get(DEPOT_SITE_ID).id,imported.id);
-    const object=db.prepare('SELECT * FROM __sol_objects WHERE key=?').get(imported.objectKey);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM telemetry_imports WHERE site_id=?').get(DEPOT_SITE_ID).n,0,'Canonical imports must not enter destructive legacy replacement storage');
+    const object=db.prepare('SELECT * FROM __sol_objects WHERE key=?').get(staged.metadata.originalObjectKey);
     assert.deepEqual(readFileSync(join(f.directory,'objects',object.path)),fixture.csv);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM __sol_objects WHERE key LIKE 'upload-parts/%'").get().n,0);
   });
@@ -148,24 +152,27 @@ for(const scenario of ['fresh','upgrade','legacy-active','legacy-completed'])tes
     f.inspect(db=>{
       assert.equal(db.prepare('SELECT status FROM maintenance_tasks WHERE id=?').get(DEPOT_CLEANUP_ID).status,'deleting');
       assert.equal(db.prepare('SELECT COUNT(*) n FROM analysis_jobs WHERE site_id=?').get(DEPOT_SITE_ID).n,0);
-      assert.equal(db.prepare('SELECT COUNT(*) n FROM telemetry_imports WHERE site_id=?').get(DEPOT_SITE_ID).n,1);
+      assert.equal(db.prepare('SELECT COUNT(*) n FROM telemetry_imports WHERE site_id=?').get(DEPOT_SITE_ID).n,0);
       db.prepare("UPDATE maintenance_tasks SET status='completed' WHERE id=?").run(DEPOT_CLEANUP_ID);
     });
   }
+  assert.deepEqual((await f.api(`/api/performance-data?siteId=${DEPOT_SITE_ID}`)).dataset,imported);
+  const required=await f.api(summaryPath);assert.equal(required.analysisRequired,true);
+  await f.api('/api/performance-summary','POST',{siteId:DEPOT_SITE_ID,action:'reanalyze'},202);
   let result;
   for(let i=0;i<40;i++){
     const response=await fetch(f.base+summaryPath,{headers:f.headers,signal:AbortSignal.timeout(15000)});result=await response.json();
     assert.ok(response.status===200||response.status===202,JSON.stringify(result));
     assert.ok(!result.error,JSON.stringify(result));if(!result.processing)break;
   }
-  assert.equal(result.hasData,true,JSON.stringify(result));assert.equal(result.import.id,imported.id);
+  assert.equal(result.hasData,true,JSON.stringify(result));assert.equal(result.import.id,imported.revisionId);
   assert.equal(result.summary.totalEnergyKwh,fixture.energy);assert.equal(result.summary.dailyProduction.length,8);
   assert.ok(result.analysis.issues.length>0,'real production analysis must detect the synthetic inverter outage');
   assert.deepEqual(protectedData(f),before);
   const tasks=f.inspect(db=>allRows(db,'maintenance_tasks'));
   await f.stop();await f.start();
   const again=await f.api(summaryPath);assert.equal(again.hasData,true);assert.deepEqual(again.summary,result.summary);
-  assert.equal(again.import.id,imported.id);assert.deepEqual(again.analysis.issues,result.analysis.issues);
+  assert.equal(again.import.id,imported.revisionId);assert.deepEqual(again.analysis.issues,result.analysis.issues);
   assert.deepEqual(protectedData(f),before);assert.deepEqual(f.inspect(db=>allRows(db,'maintenance_tasks')),tasks);
   assert.doesNotMatch(f.logs(),/no such table: maintenance_tasks|Performance analysis failed|Analysis stage failed/);
   t.diagnostic(`${scenario}: authenticated Depot upload and ${fixture.energy} kWh analysis with ${result.analysis.issues.length} findings survived restart; unrelated rows and object bytes unchanged.`);

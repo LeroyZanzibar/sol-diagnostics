@@ -8,6 +8,8 @@ import { meterMappingError } from "../../meter-mapping";
 import { compareCapacityPeers, PEER_METHOD, type PeerFinding, type PeerInterval } from "./peer-comparison";
 import { packSummary, unpackSummary, compactIssueEvidence, issueSaveIndex } from "./analysis-storage";
 import { currentAnalysisInput, readManifest } from "../data-history/service";
+import { canonicalAnalysisCsv, captureAnalysisProvenance, resumeAnalysisProvenance, analysisRevisionIsCurrent, legacyAnalysisInputIsCurrent, assessAnalysisFreshness } from "../performance-data/analysis";
+import type { PerformanceAnalysisProvenance } from "../../../db/performance-store";
 import { historyCsv, decodeHistoryCells, type HistoryCell } from "../../data-history";
 import { issueEventKey, issueEvidenceSignature, defaultConfidence } from "../../issue-review";
 import { prepareTelemetry, reconcileTelemetry } from "./telemetry-events";
@@ -29,7 +31,7 @@ import {
   readPerformanceIssueReferences,
 } from "./persistence";
 
-import { analysisJobKey, getOrCreateJob, restartJob, readJob, claimJob, reportProgress, stopJob, publishJob, controlJob, jobProgress, AnalysisStopped, type AnalysisJob, type AnalysisStage } from "./jobs";
+import { analysisJobKey, restartJob, readJob, claimJob, reportProgress, stopJob, publishJob, controlJob, jobProgress, AnalysisStopped, type AnalysisJob, type AnalysisStage } from "./jobs";
 
 type StoredMapping = {
   roles?: Record<string, string>;
@@ -373,15 +375,21 @@ async function parseCsv(
       } else cell += char;
     }
   };
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    await consume(decoder.decode(value, { stream: true }));
-  }
-  await consume(decoder.decode(), true);
-  if (cell || row.length) {
-    row.push(cell.trim());
-    if (row.some((value) => value !== "")) { const pending = onRow(row); if (pending) await pending; }
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await consume(decoder.decode(value, { stream: true }));
+    }
+    await consume(decoder.decode(), true);
+    if (cell || row.length) {
+      row.push(cell.trim());
+      if (row.some((value) => value !== "")) { const pending = onRow(row); if (pending) await pending; }
+    }
+  } finally {
+    // Lease cancellation or a bad row must close a pinned database iterator too.
+    await reader.cancel().catch(()=>undefined);
+    reader.releaseLock();
   }
 }
 
@@ -1572,7 +1580,7 @@ async function buildSummary(
   const capacityModel=arrayCapacityModel(equipment);
   if(capacityModel.hasTransformers&&!capacityModel.complete)throw new Error(`Complete the transformer model before analysis: ${capacityModel.issues.join(" ")}`);
   const historyMetadata = safeJson<Record<string, unknown>>(record.validation, {});
-  const object = historyMetadata.datasetManifest ? { body: historyCsv(await readManifest(record.siteId,record.id), async key => {
+  const object = historyMetadata.performanceStore ? { body: canonicalAnalysisCsv(record, equipment) } : historyMetadata.datasetManifest ? { body: historyCsv(await readManifest(record.siteId,record.id), async key => {
     const part=await getBucketBinding().get(key);if(!part)throw new Error("A retained history partition is unavailable.");return decodeHistoryCells(await part.json<Parameters<typeof decodeHistoryCells>[0]>());
   }) } : await getBucketBinding().get(record.objectKey);
   if (!object) throw new Error("The retained CSV could not be found.");
@@ -1603,6 +1611,7 @@ async function buildSummary(
       if (key && !identityMap.has(key)) identityMap.set(key, asset.id);
     }),
   );
+  const resolveEquipment = (identity: string) => assetsById.has(identity) ? identity : identityMap.get(normalized(identity));
   const snowSensorIds = new Set(equipment.filter(asset => asset.type === "weather_sensor" && asset.name.trim().toLowerCase() === "snow sensor").map(asset => asset.id));
   const snowTimestamps = new Set<string>();
   let snowReadingCount = 0;
@@ -1705,7 +1714,8 @@ async function buildSummary(
   const progressStride = Math.max(250, Math.ceil(record.rowCount / 50 / 250) * 250);
   const timestamps = new Set<string>();
   const canonicalTimestamps=new Map<string,string>();
-  await progress?.(0, record.rowCount);
+  try { await progress?.(0, record.rowCount); }
+  catch (error) { await object.body.cancel().catch(()=>undefined); throw error; }
   await parseCsv(object.body, (row) => {
     if (!headers.length) {
       headers = row.map((value, index) =>
@@ -1725,8 +1735,9 @@ async function buildSummary(
     if (!timestamp) throw new Error(`Invalid timestamp on CSV row ${rowsRead + 1}${parsed.reason === "ambiguous" || parsed.reason === "nonexistent" ? ": daylight-saving times require an explicit UTC offset" : ": check the date and source timezone"}.`);
     canonicalTimestamps.set(timestamp,timestamp);
     // Snow/status events may arrive asynchronously; they do not establish a production interval.
-    const longId = roles.equipment ? identityMap.get(normalized(row[indexes[roles.equipment]] || "")) : undefined;
-    const longMeasurement = roles.measurement ? measurementFrom(row[indexes[roles.measurement]] || "") : "";
+    const longId = roles.equipment ? resolveEquipment(row[indexes[roles.equipment]] || "") : undefined;
+    const rawMeasurement = roles.measurement ? row[indexes[roles.measurement]] || "" : "";
+    const longMeasurement = historyMetadata.performanceStore ? rawMeasurement : measurementFrom(rawMeasurement);
     const intervalMeasurement = (measurement: string) => ["Energy", "Active power", "Expected Production"].includes(measurement) || /irradiance/i.test(measurement);
     const hasLongValue = Boolean(roles.value && row[indexes[roles.value]]?.trim());
     const categorical = (measurement: string) => ["Snow code", "Status", "Other", "Availability"].includes(measurement);
@@ -1735,7 +1746,7 @@ async function buildSummary(
     const hasIntervalValue = Boolean(roles.expectedProduction && row[indexes[roles.expectedProduction]]?.trim()) ||
       Boolean(longId && !snowSensorIds.has(longId) && intervalMeasurement(longMeasurement) && hasLongValue) ||
       signals.some(signal => !snowSensorIds.has(signal.equipmentId!) && intervalMeasurement(signal.measurement || measurementFrom(signal.column!)) && row[indexes[signal.column!]]?.trim());
-    if (!hasCategoricalValue || hasIntervalValue) timestamps.add(timestamp);
+    if ((!hasCategoricalValue || hasIntervalValue) && !(historyMetadata.performanceStore && longId && snowSensorIds.has(longId))) timestamps.add(timestamp);
     if (roles.expectedProduction) {
       const expected = toKwh(
         row[indexes[roles.expectedProduction]] || "",
@@ -1747,13 +1758,11 @@ async function buildSummary(
     }
     const unit = roles.unit ? row[indexes[roles.unit]] || "" : "";
     if (roles.equipment && roles.measurement && roles.value) {
-      const equipmentId = identityMap.get(
-        normalized(row[indexes[roles.equipment]] || ""),
-      );
+      const equipmentId = resolveEquipment(row[indexes[roles.equipment]] || "");
       if (equipmentId)
         addReading(
           equipmentId,
-          measurementFrom(row[indexes[roles.measurement]] || ""),
+          longMeasurement,
           row[indexes[roles.value]] || "",
           unit,
           row[indexes[roles.measurement]] || "",
@@ -2039,8 +2048,10 @@ type CachedPerformancePointer = {
   parserVersion: number;
   modelRevision: string;
   objectKey: string;
+  analysisRunId?: string;
 };
 type CachedPerformancePayload = {
+  provenance?: PerformanceAnalysisProvenance | null;
   methodology?: Record<string, unknown>;
   schemaVersion?: number;
   siteId?: string;
@@ -2066,6 +2077,13 @@ type CachedPerformancePayload = {
   };
 };
 type UserThresholdRow = { minimum_issue_loss_kwh: string };
+type AnalysisInputCheckpoint = {
+  record: typeof telemetryImports.$inferSelect;
+  equipment: (typeof equipmentAssets.$inferSelect)[];
+  site: typeof siteSettings.$inferSelect;
+  modelRevision: string;
+  provenance?: PerformanceAnalysisProvenance | null;
+};
 function applyLossThreshold(analysis: PerformanceAnalysis, value: string) {
   const parsed = value.trim() === "" ? null : Number(value);
   if (parsed === null || !Number.isFinite(parsed))
@@ -2149,7 +2167,7 @@ async function responseTag(sourceEtag: string, threshold: string) {
   return '"' + [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("") + '"';
 }
 
-export async function GET(request: Request) {
+export async function GET(request: Request): Promise<Response> {
   try {
     const searchParams = new URL(request.url).searchParams;
     const siteId = searchParams.get("siteId")?.trim();
@@ -2167,7 +2185,7 @@ export async function GET(request: Request) {
       return analysisJobResponse((await readJob(database, row.id))!);
     }
     const db = getDb();
-    const [site] = await db
+    let [site] = await db
       .select()
       .from(siteSettings)
       .where(eq(siteSettings.id, siteId))
@@ -2177,30 +2195,56 @@ export async function GET(request: Request) {
         { error: "This site is not available." },
         { status: 404 },
       );
-    const record = await currentAnalysisInput(siteId,Number(searchParams.get("year")||2026));
+    const bucket = getBucketBinding();
+    const database = getDatabaseBinding();
+    // A job continues with its own input/model checkpoint even if an import is
+    // committed between HTTP stages. Merely browsing never creates a new job.
+    const requestedAttempt = searchParams.get("attemptId");
+    let selectedJob = requestedAttempt
+      ? await database.prepare("SELECT * FROM analysis_jobs WHERE site_id = ? AND attempt_id = ?").bind(siteId, requestedAttempt).first<AnalysisJob>()
+      : await database.prepare(`SELECT * FROM analysis_jobs WHERE site_id = ?
+          ORDER BY CASE WHEN status IN ('processing','canceling') THEN 0 ELSE 1 END,
+            updated_at DESC, id DESC LIMIT 1`).bind(siteId).first<AnalysisJob>();
+    if (requestedAttempt && !selectedJob?.attempt_id) return Response.json({ error: "Analysis attempt not found." }, { status: 404 });
+    if (!selectedJob?.attempt_id) selectedJob = null;
+    if (selectedJob) selectedJob = await readJob(database, selectedJob.id);
+    // Publication is independent of the latest attempt. A stopped rerun must
+    // neither hide the published snapshot nor make its checkpoint a prerequisite
+    // for browsing it. Explicit attempt/progress requests retain their controls.
+    const stoppedJob = !requestedAttempt && selectedJob && ["canceled", "failed", "interrupted"].includes(selectedJob.status)
+      ? selectedJob : null;
+    const lastAttempt = stoppedJob ? jobProgress(stoppedJob) : undefined;
+    if (!requestedAttempt && selectedJob && !["processing", "canceling"].includes(selectedJob.status)) selectedJob = null;
+    const retainedInput = selectedJob ? await bucket.get(`analysis/${siteId}/jobs/${selectedJob.attempt_id}/input.json`) : null;
+    const inputCheckpoint = retainedInput ? await readCheckpoint<AnalysisInputCheckpoint>(retainedInput) : null;
+    if (inputCheckpoint && (inputCheckpoint.record.siteId !== siteId || inputCheckpoint.record.id !== selectedJob!.import_id)) throw new Error("Analysis input checkpoint mismatch.");
+    let record = inputCheckpoint?.record || await currentAnalysisInput(siteId,Number(searchParams.get("year")||2026));
+    if (selectedJob && record?.id !== selectedJob.import_id) {
+      record = (await db.select().from(telemetryImports).where(eq(telemetryImports.id,selectedJob.import_id)).limit(1))[0];
+      if (record?.id !== selectedJob.import_id || record?.siteId !== siteId) throw new Error("The pinned analysis input is unavailable.");
+    }
+    if (inputCheckpoint) site = inputCheckpoint.site;
     if (!record)
       return Response.json({
         hasData: false,
         reason: "No telemetry import is available.",
       });
-    const bucket = getBucketBinding();
-    const database = getDatabaseBinding();
     let analysisObjectKey = `analysis/${record.siteId}/current.json`;
     const displayObjectKey = `analysis/${record.siteId}/display.json`;
     const [equipment, rawCachedRows, thresholdRow, initialStableObject] = await Promise.all([
-      db.select().from(equipmentAssets).where(eq(equipmentAssets.siteId, siteId)),
+      inputCheckpoint ? Promise.resolve(inputCheckpoint.equipment) : db.select().from(equipmentAssets).where(eq(equipmentAssets.siteId, siteId)),
       db.select().from(performanceSummaries).where(eq(performanceSummaries.siteId, siteId)),
       database.prepare("SELECT minimum_issue_loss_kwh FROM user_settings WHERE id = ? LIMIT 1")
         .bind("primary-user").first<UserThresholdRow>(),
       bucket.head(analysisObjectKey),
     ]);
     const cachedRows: (typeof performanceSummaries.$inferSelect)[] = rawCachedRows;
-    const modelRevision = await arrayModelRevision(equipment,site);
+    const modelRevision = inputCheckpoint?.modelRevision || await arrayModelRevision(equipment,site);
     const cached = cachedRows.find(item => item.importId === record.id);
     const pointer = cached ? safeJson<CachedPerformancePointer | null>(cached.summary, null) : null;
     const threshold = thresholdRow?.minimum_issue_loss_kwh || "";
-    const pendingJob = await readJob(database, await analysisJobKey(record.id, PARSER_VERSION, modelRevision));
-    const refreshing = Boolean(pendingJob && pendingJob.status !== "completed" && !pointer?.objectKey?.includes(pendingJob.attempt_id));
+    const pendingJob = selectedJob || stoppedJob;
+    const refreshing = Boolean(selectedJob && selectedJob.status !== "completed" && !pointer?.objectKey?.includes(selectedJob.attempt_id));
     // New jobs publish an immutable result through an atomic database pointer.
     let stableObject = initialStableObject;
     if (pointer && supportedParser(pointer.parserVersion) && pointer.modelRevision === modelRevision && pointer.objectKey) {
@@ -2208,12 +2252,13 @@ export async function GET(request: Request) {
       if (analysisObjectKey !== `analysis/${record.siteId}/current.json`) stableObject = await bucket.head(analysisObjectKey);
     }
     let sourceEtag = stableObject?.etag || "";
-    const stableMetadataMatches = !refreshing &&
+    const requestedPointerMatches = !requestedAttempt || pointer?.objectKey?.includes(`/jobs/${requestedAttempt}/`);
+    const stableMetadataMatches = !refreshing && requestedPointerMatches &&
       stableObject?.customMetadata?.siteId === record.siteId &&
       stableObject.customMetadata.importId === record.id &&
       supportedParser(stableObject.customMetadata.parserVersion) &&
       stableObject.customMetadata.modelRevision === modelRevision;
-    const legacyPointerMatches = !refreshing && pointer &&
+    const legacyPointerMatches = !refreshing && requestedPointerMatches && pointer &&
       supportedParser(pointer.parserVersion) &&
       pointer.modelRevision === modelRevision &&
       Boolean(pointer.objectKey);
@@ -2221,10 +2266,12 @@ export async function GET(request: Request) {
       return Response.json({
         cacheStatus:
           stableMetadataMatches || legacyPointerMatches ? "stored" : "stale",
-      });
+        ...(lastAttempt ? { lastAttempt } : {}),
+      }, { headers: { "Cache-Control": "private, no-store" } });
 
-    const responseHeaders = new Headers({ "Cache-Control": "private, no-cache", Vary: "Cookie, Authorization" });
-    if (stableMetadataMatches && !issueId) {
+    const canonicalInput = Boolean(safeJson<Record<string,unknown>>(record.validation,{}).performanceStore);
+    const responseHeaders = new Headers({ "Cache-Control": canonicalInput || lastAttempt ? "private, no-store" : "private, no-cache", Vary: "Cookie, Authorization" });
+    if (stableMetadataMatches && !issueId && !canonicalInput && !lastAttempt) {
       responseHeaders.set("ETag", await responseTag(sourceEtag, threshold));
       if (request.headers.get("if-none-match") === responseHeaders.get("ETag"))
         return new Response(null, { status: 304, headers: responseHeaders });
@@ -2269,15 +2316,42 @@ export async function GET(request: Request) {
       }
     }
 
-    if (!payload?.issueDatabase || payload.importId !== record.id) {
-      payload = null;
-      const key = await analysisJobKey(record.id, PARSER_VERSION, modelRevision);
-      let job = await readJob(database, key);
-      if (!job) {
-        job = await getOrCreateJob(database, key, siteId, record.id);
-        return analysisJobResponse(job);
+    let publishedSnapshot = false;
+    if (!payload && !requestedAttempt && !refreshing) {
+      // The last published run and the current dataset are independent. Keep a
+      // published immutable snapshot visible until the user requests analysis.
+      for (const previous of cachedRows) {
+        const oldPointer = safeJson<CachedPerformancePointer | null>(previous.summary,null);
+        if (!oldPointer?.objectKey) continue;
+        const object = await bucket.get(oldPointer.objectKey);
+        if (!object) continue;
+        const candidate = await readCheckpoint<CachedPerformancePayload>(object);
+        if (candidate.siteId === siteId && candidate.importId === previous.importId && candidate.issueDatabase &&
+            (!oldPointer.analysisRunId || candidate.issueDatabase.analysisRunId === oldPointer.analysisRunId)) {
+          payload = candidate; sourceEtag = object.etag; publishedSnapshot = true; break;
+        }
       }
-      if (job.status !== "processing") return analysisJobResponse(job);
+    }
+    if (!payload && requestedAttempt && pendingJob?.status === "completed") {
+      const object = await bucket.get(`analysis/${siteId}/jobs/${pendingJob.attempt_id}/result.json`);
+      if (object) {
+        const candidate = await readCheckpoint<CachedPerformancePayload>(object);
+        if (candidate.siteId === siteId && candidate.issueDatabase?.analysisRunId === pendingJob.attempt_id) {
+          payload = candidate; sourceEtag = object.etag; publishedSnapshot = true;
+        }
+      }
+    }
+    if (!payload?.issueDatabase || (payload.importId !== record.id && !publishedSnapshot)) {
+      payload = null;
+      const job = pendingJob;
+      if (!job) {
+        return Response.json({ hasData: false, analysisRequired: true, reason: "Performance data is available. Run analysis to create a saved result." }, { headers: { "Cache-Control": "private, no-store" } });
+      }
+      // A normal browse resolved a current input above, but has no publication.
+      // Offer a fresh explicit start without changing the stopped checkpoint or
+      // advertising current-input actions on an explicit attempt/progress read.
+      if (job.status !== "processing") return analysisJobResponse(job, false, Boolean(stoppedJob));
+      const key = job.id;
       const token = await claimJob(database, job);
       if (!token) return analysisJobResponse((await readJob(database, key))!, true);
       const root = `analysis/${siteId}/jobs/${job.attempt_id}`;
@@ -2290,7 +2364,10 @@ export async function GET(request: Request) {
         return await readCheckpoint<T>(object);
       };
       try {
+        let provenance = job.stage === "read" ? null : resumeAnalysisProvenance(job.attempt_id,record,inputCheckpoint?.provenance);
         if (job.stage === "read") {
+          provenance = captureAnalysisProvenance(job.attempt_id, record, equipment);
+          await writeCheckpoint(bucket, `${root}/input.json`, { record, equipment, site, modelRevision, provenance });
           const summary = alignWithArrayModel(await buildSummary(record, equipment,
             (completed, total) => report("read", completed, total)), equipment);
           summary.causeContext = { latitude: site.latitude || "", longitude: site.longitude || "", timeZone: record.timezone,
@@ -2320,7 +2397,7 @@ export async function GET(request: Request) {
             next = steps.next();
           }
           const source: CachedPerformancePayload = { parserVersion: PARSER_VERSION,
-            modelRevision, summary: compactSummary(summary), analysis: next.value };
+            modelRevision, provenance, summary: compactSummary(summary), analysis: next.value };
           await report("reconcile", 1, 1);
           await writeCheckpoint(bucket, `${root}/analysis.json`, source);
           // Save requests fetch only their own 300 records, not the entire fleet's index.
@@ -2367,6 +2444,8 @@ export async function GET(request: Request) {
         } else if (job.stage === "finalize") {
           await report("finalize", 0, 1);
           const source = await readSnapshot<CachedPerformancePayload>("analysis");
+          provenance = resumeAnalysisProvenance(job.attempt_id,record,source.provenance);
+          if (source.modelRevision !== modelRevision) throw new Error("The saved analysis model checkpoint does not match this attempt.");
           const persisted = await readPerformanceIssueReferences(database, job.attempt_id);
           const byId = new Map(persisted.map(issue => [issue.id, issue]));
           if (byId.size !== source.analysis.issues.length || source.analysis.issues.some(issue => !byId.has(issue.id)))
@@ -2388,27 +2467,31 @@ export async function GET(request: Request) {
             const hash=async(value:unknown)=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(value))))].map(b=>b.toString(16).padStart(2,"0")).join("");
             return {...episode,members,eventKey:await hash([siteId,"recurring-v1",episode.id]),evidenceSignature:await hash(members.map(m=>[m.eventKey,m.evidenceSignature]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))};
           }));
-          payload = { ...source, schemaVersion: 1, siteId, importId: record.id,
+          payload = { ...source, provenance, schemaVersion: 1, siteId, importId: record.id,
             generatedAt: new Date().toISOString(), analysis: { ...source.analysis, issues, recurringIssues },
             capacityKw: gridCapacity(equipment), validation: safeJson<Record<string, unknown>>(record.validation, {}),
             timeZone: record.timezone, import: { id: record.id, fileName: record.fileName,
               createdAt: record.createdAt, timestampStart: record.timestampStart, timestampEnd: record.timestampEnd },
             issueDatabase: { analysisRunId: job.attempt_id, persistedIssueCount: issues.length },
             methodology:{analysisId:job.attempt_id,generatedAt:new Date().toISOString(),calculationVersion:PARSER_VERSION,modelRevision,
+              inputProvenance:provenance,dependencyScope:"analysis-range",
               equipmentModel:equipment,siteSettings:site,timezone:record.timezone,intervalMinutes:source.analysis.analysisIntervalMinutes,
               partitionHashes:safeJson<Record<string,unknown>>(record.validation,{}).partitionHashes||null,
               timestampConvention:safeJson<Record<string,unknown>>(record.validation,{}).timestampConvention||"start",
               sourceImports:safeJson<Record<string,unknown>>(record.validation,{}).sourceImports||[{id:record.id,fileName:record.fileName,createdAt:record.createdAt}],
-              datasetRevision:safeJson<Record<string,unknown>>(record.validation,{}).datasetManifest?record.id:null,thresholdAtAnalysis:threshold,thresholdMethod:"Individual issue or recurring inverter underperformance total, grouped by equipment/category/type/suspected cause across the full analysis period; strict greater-than threshold.",peerComparison:source.analysis.peerComparison,inverterExpectation:source.analysis.inverterExpectation,sharedReduction:source.analysis.sharedReduction,recurringPolicy:RECURRING_POLICY,transformerLimits:source.analysis.transformerLimits,
+              datasetRevision:provenance?.revision ?? (safeJson<Record<string,unknown>>(record.validation,{}).datasetManifest?record.id:null),thresholdAtAnalysis:threshold,thresholdMethod:"Individual issue or recurring inverter underperformance total, grouped by equipment/category/type/suspected cause across the full analysis period; strict greater-than threshold.",peerComparison:source.analysis.peerComparison,inverterExpectation:source.analysis.inverterExpectation,sharedReduction:source.analysis.sharedReduction,recurringPolicy:RECURRING_POLICY,transformerLimits:source.analysis.transformerLimits,
               exclusions:source.analysis.baselineMethod,lowIrradianceThresholdWm2:MIN_IRRADIANCE_WM2} };
           await report("finalize", 0, 1);
-          await writeCheckpoint(bucket,`${root}/review-index.json`,{siteId,issueDatabase:payload.issueDatabase,analysis:{recurringIssues,issues:issues.map(({evidence,intervalLosses,sharedSourceEvents,...issue})=>issue)}});
+          await writeCheckpoint(bucket,`${root}/review-index.json`,{siteId,provenance:payload.provenance,methodology:{inputProvenance:payload.provenance,dependencyScope:"analysis-range"},issueDatabase:payload.issueDatabase,analysis:{recurringIssues,issues:issues.map(({evidence,intervalLosses,sharedSourceEvents,...issue})=>issue)}});
           const saved = await writeCheckpoint(bucket, resultKey, payload, {
             httpMetadata: { contentType: "application/json" },
             customMetadata: { siteId, importId: record.id, parserVersion: String(PARSER_VERSION), modelRevision },
           });
-          await publishJob(database, job, token, JSON.stringify({ parserVersion: PARSER_VERSION,
-            modelRevision, objectKey: resultKey }), resultKey, issues.length);
+          // Legacy publication also loses to a dataset which has since migrated.
+          const latestInput = payload.provenance ? null : await currentAnalysisInput(siteId);
+          const publication = await publishJob(database, job, token, JSON.stringify({ parserVersion: PARSER_VERSION,
+            modelRevision, objectKey: resultKey, analysisRunId: job.attempt_id }), resultKey, issues.length,
+            payload.provenance ? () => analysisRevisionIsCurrent(payload!.provenance!) : () => legacyAnalysisInputIsCurrent(siteId,record.id,latestInput?.id));
           sourceEtag = saved?.etag || "";
           cacheStatus = "generated";
           // Intermediate checkpoints are disposable once the complete result is published.
@@ -2416,6 +2499,9 @@ export async function GET(request: Request) {
           for(let offset=16;offset<equipment.filter((e:typeof equipmentAssets.$inferSelect)=>e.type==="inverter").length;offset+=16)disposable.push(`${root}/equipment-${offset}.json`);
           for(let offset=0;offset<issues.length;offset+=300)disposable.push(`${root}/save-${offset}.json`);
           await bucket.delete(disposable).catch(()=>undefined);
+          if (!publication.published) return Response.json({ processing:false, hasData:false, runId:job.attempt_id, publicationSkipped:true,
+            reason:"The analysis was saved in history. Newer site data prevented it from replacing the published result.",
+            progress:jobProgress((await readJob(database,key))!) }, { headers:{"Cache-Control":"private, no-store"} });
           // Serve the display in its own request; finalization has already used its CPU budget.
           return Response.json({processing:true,hasData:false,progress:jobProgress((await readJob(database,key))!),retryAfterMs:250},
             {status:202,headers:{"Cache-Control":"private, no-store"}});
@@ -2426,7 +2512,11 @@ export async function GET(request: Request) {
           error: databaseErrorDetails(error),
         }));
         await stopJob(database, job, token, error);
-        return analysisJobResponse((await readJob(database, key))!);
+        const stopped = (await readJob(database, key))!;
+        // Resolve the published view immediately when this polling request fails;
+        // do not require a manual reload after the progress panel stops polling.
+        if (!requestedAttempt && ["canceled", "failed", "interrupted"].includes(stopped.status)) return GET(request);
+        return analysisJobResponse(stopped);
       }
       if (!payload) return analysisJobResponse((await readJob(database, key))!);
     }
@@ -2462,7 +2552,8 @@ export async function GET(request: Request) {
         customMetadata: { sourceEtag, displayVersion: "4" },
       }).catch(() => undefined);
     }
-    if (sourceEtag) responseHeaders.set("ETag", await responseTag(sourceEtag, threshold));
+    if (payload.provenance) responseHeaders.set("Cache-Control","private, no-store");
+    else if (sourceEtag && !lastAttempt) responseHeaders.set("ETag", await responseTag(sourceEtag, threshold));
     const summary = payload.summary;
     const analysis = applyLossThreshold(
       payload.analysis,
@@ -2470,6 +2561,9 @@ export async function GET(request: Request) {
     );
     return analysisJsonResponse({
       hasData: Boolean(summary.dailyProduction.length || analysis.issues.length),
+      // Transient attempt metadata is never written into the saved result or its
+      // compact derivative. Keep the published run as the review/edit identity.
+      ...(lastAttempt ? { processing: false, lastAttempt } : {}),
       reason: summary.dailyProduction.length
         ? ""
         : "The latest import does not contain a mapped interval Energy or Active power signal for configured equipment. DC power is not AC production.",
@@ -2477,6 +2571,8 @@ export async function GET(request: Request) {
       analysis: { ...analysis, issues: analysis.issues.map(publicIssue) },
       issueDatabase: payload.issueDatabase,
       methodology: payload.methodology,
+      provenance: payload.provenance || null,
+      ...(payload.provenance ? { dataFreshness: assessAnalysisFreshness(siteId, payload.issueDatabase!.analysisRunId, payload.provenance) } : {}),
       cacheStatus,
       capacityKw: payload.capacityKw ?? gridCapacity(equipment),
       validation:
@@ -2501,9 +2597,10 @@ export async function GET(request: Request) {
   }
 }
 
-function analysisJobResponse(job: AnalysisJob, waiting = false) {
+function analysisJobResponse(job: AnalysisJob, waiting = false, analysisRequired = false) {
   const processing = job.status === "processing" || job.status === "canceling";
   return Response.json({ processing, hasData: false, progress: jobProgress(job), waiting,
+    ...(analysisRequired ? { analysisRequired: true } : {}),
     retryAfterMs: waiting ? 1500 : 250,
     error: job.status === "canceled" ? "Analysis canceled. Your uploaded file is retained." : job.error,
   }, { status: processing ? 202 : 200, headers: { "Cache-Control": "private, no-store" } });
@@ -2520,11 +2617,21 @@ export async function POST(request: Request) {
       if (!record) return Response.json({error:"Upload performance data first."},{status:400});
       const equipment=await db.select().from(equipmentAssets).where(eq(equipmentAssets.siteId,siteId));
       const revision=await arrayModelRevision(equipment,site);
-      return analysisJobResponse(await restartJob(getDatabaseBinding(),await analysisJobKey(record.id,PARSER_VERSION,revision),siteId,record.id));
+      const bucket=getBucketBinding();
+      const job=await restartJob(getDatabaseBinding(),await analysisJobKey(record.id,PARSER_VERSION,revision),siteId,record.id,
+        async attempt=>{await writeCheckpoint(bucket,`analysis/${siteId}/jobs/${attempt}/input.json`,{record,equipment,site,modelRevision:revision,provenance:null});});
+      return analysisJobResponse(job);
     }
     if (!siteId || !attemptId || !["cancel", "retry"].includes(action))
       return Response.json({ error: "A site, analysis attempt, and valid action are required." }, { status: 400 });
-    const job = await controlJob(getDatabaseBinding(), siteId, attemptId, action as "cancel" | "retry");
+    const bucket=getBucketBinding();
+    const previousInput=action === "retry" ? await bucket.get(`analysis/${siteId}/jobs/${attemptId}/input.json`) : null;
+    const job = await controlJob(getDatabaseBinding(), siteId, attemptId, action as "cancel" | "retry",async nextAttempt=>{
+      if (previousInput) {
+        const checkpoint=await readCheckpoint<AnalysisInputCheckpoint>(previousInput);
+        await writeCheckpoint(bucket,`analysis/${siteId}/jobs/${nextAttempt}/input.json`,{...checkpoint,provenance:null});
+      }
+    });
     if (!job) return Response.json({ error: "Analysis attempt not found." }, { status: 404 });
     return analysisJobResponse(job);
   } catch (error) {

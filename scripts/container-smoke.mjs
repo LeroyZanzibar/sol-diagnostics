@@ -7,6 +7,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
+import {runPerformancePersistenceSmoke} from './performance-persistence-smoke.mjs';
 
 const image = process.argv[2];
 assert.ok(image, 'Usage: node scripts/container-smoke.mjs IMAGE');
@@ -95,6 +96,7 @@ try {
   const csv = 'Timestamp,Energy\n2026-01-01T00:00:00Z,0\n';
   const uploaded = await request(`/api/telemetry-imports/chunk?uploadId=${uploadId}&part=1`, {method: 'PUT', body: csv});
   assert.equal(uploaded.status, 201, await uploaded.text());
+  const performance = await runPerformancePersistenceSmoke({api, request, siteId: site.id});
   const objectCheck = `
     import assert from 'node:assert/strict';
     import {LocalDatabase,LocalBucket} from './selfhost/storage.mjs';
@@ -112,21 +114,22 @@ try {
     assert.equal(settings.firstName, 'Synthetic');
     assert.equal(settings.theme, 'jade');
     docker('exec', name, 'node', '--input-type=module', '-e', objectCheck, uploadId, csv);
+    await performance.verify();
     await protectedEndpoints();
   };
   await persisted();
-  console.log('PASS: initial auth, SQLite state and uploaded bytes.');
+  console.log('PASS: initial auth, SQLite state, uploaded bytes, canonical readings and approval receipts.');
   docker('restart', '--time', '120', name);
   await ready();
   await persisted();
-  console.log('PASS: persisted state after restart.');
+  console.log('PASS: persisted state, exact canonical readings and approval receipts after restart.');
   // Recreate as well as restart: persistence must live on /data, not a layer.
   docker('stop', '--time', '120', name);
   assert.equal(docker('inspect', '--format={{.State.ExitCode}}', name), '0');
   docker('rm', name);
   await start();
   await persisted();
-  console.log('PASS: persisted state after container recreation.');
+  console.log('PASS: persisted state, exact canonical readings and approval receipts after container recreation.');
   for (let i = 0; i < 90; i++) {
     const status = docker('inspect', '--format={{.State.Health.Status}}', name);
     if (status === 'healthy') break;
@@ -134,7 +137,7 @@ try {
     if (i === 89) throw Error('Image HEALTHCHECK did not become healthy');
     await delay(1000);
   }
-  console.log('PASS: non-root/read-only startup, healthcheck, HTTP auth, CSRF rejection, SQLite and uploaded bytes survive restart and recreation.');
+  console.log('PASS: non-root/read-only startup, healthcheck, HTTP auth, CSRF rejection, SQLite, uploaded bytes, canonical readings and approval receipts survive restart and recreation.');
 } catch (error) {
   console.error('Container smoke failure:', error);
   try { console.error(docker('logs', '--tail', '150', name)); } catch {}

@@ -1,10 +1,18 @@
-let database: D1Database | null = null;
+/** Local-only, non-yielding shared-configuration guard. Never await its callback. */
+export type SynchronousDatabaseReader = {
+  first<T = Record<string, unknown>>(sql: string, ...values: unknown[]): T | null;
+  all<T = Record<string, unknown>>(sql: string, ...values: unknown[]): T[];
+};
+type DatabaseBinding = D1Database & {
+  withSynchronousRead?<T>(operation: (read: SynchronousDatabaseReader) => T): T;
+};
+let database: DatabaseBinding | null = null;
 let bucket: R2Bucket | null = null;
 import {drainPerformanceFileCleanup} from './single-performance-file';
 const local=(globalThis as any)[Symbol.for('sol-diagnostics.runtime')];
 if(local){database=local.database;bucket=local.bucket;local.cleanup=()=>drainPerformanceFileCleanup(local.database,local.bucket);}
 
-export function setDatabaseBinding(binding: D1Database) {
+export function setDatabaseBinding(binding: DatabaseBinding) {
   database = binding;
 }
 

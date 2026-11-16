@@ -28,7 +28,7 @@ export default function ReviewWorkbench({siteId,runId,visible,originals,episodes
   </details>}
   <MaintenanceWindows siteId={siteId} data={maintenance} findings={fullVisible} onSelect={ids=>onSelect(ids,true)} readOnly={readOnly}/>
   <div className="bulk-review-bar"><div><strong>{selection.length} findings selected</strong><span>{reviewEnergy(loss.known)} in this reporting period{loss.unknown?` · ${loss.unknown} unknown`:''}</span></div><div className="review-actions"><button className="secondary-btn" disabled={!selection.length} onClick={clearSelection}>Clear selection</button><button className="primary-btn" disabled={readOnly||!selection.length} onClick={()=>setBulk(selection.map(i=>originalById.get(i.id)||i))}>Review selected…</button></div></div>
-  <p className="selection-help">Select findings using the table checkboxes, a group, or a maintenance window. Up to 500 per action. Changing filters clears the selection.{readOnly?' Select Current data history to edit reviews.':''}</p>
+  <p className="selection-help">Select findings using the table checkboxes, a group, or a maintenance window. Up to 500 per action. Changing filters clears the selection.{readOnly?' Select the published current analysis in Manage Analyses to edit reviews.':''}</p>
   {bulk&&<BulkReviewDialog siteId={siteId} runId={runId} findings={bulk} reviews={reviews} onUpdated={onUpdated} onClose={()=>{setBulk(null);clearSelection();}}/>}
  </section>;
 }
