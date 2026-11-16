@@ -1,6 +1,8 @@
 # Changelog
 
-## 2026.11.15.2 — pending publication
+## 2026.11.15.2 — published November 15, 2026
+
+Published as `v2026.11.15.2` from source commit `f0c436d4c63fcd7365644a65f727f778bd624b94`. The immutable multi-platform image digest is `sha256:231eff9439302d98ca8bb5df67050c1d98002e9e33561c93534eb915222bb461`. The production build, 304 tests, native AMD64/ARM64 image smoke tests, and anonymous pulls passed. Release asset checksums were verified against GitHub. See [the GitHub release](https://github.com/LeroyZanzibar/sol-diagnostics/releases/tag/v2026.11.15.2) for downloads and evidence. This documentation records publication without moving the source tag.
 
 - Group Timeline rows by issue name and stable equipment ID across recurring episodes and standalone findings.
 - Preserve separate active date ranges, expandable individual occurrences, category/severity filters, overlap severity and loss details.
