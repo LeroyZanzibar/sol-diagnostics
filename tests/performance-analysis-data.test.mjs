@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { versionedStore, performanceBindings as bindings, analysisCsvFixture } from './performance-analysis-fixture.mjs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { PerformanceStoreManager } from '../selfhost/performance-store.mjs';
 
 test('real SQLite store retains semantic fingerprints, canonical streaming and immutable provenance across concurrent commits',async t=>{
-  const directory=mkdtempSync(join(process.env.TMPDIR||'/opt/data/cache/scratch','analysis-store-'));
+  const directory=mkdtempSync(join(tmpdir(),'analysis-store-'));
   const manager=new PerformanceStoreManager(directory);t.after(()=>{manager.close();rmSync(directory,{recursive:true,force:true});});
   const store=manager.site('site'),h=helpers(store),metadata={source:'csv',fileName:'synthetic.csv',timezone:'UTC',intervalMinutes:60,modelRevision:'model'};
   const commit=async rows=>{const preview=await store.stage(metadata,rows);return store.commit(preview.stageId,{previewToken:preview.previewToken,approveOverlap:true,modelRevision:'model',actor:'test'});};
@@ -165,7 +166,7 @@ const comparableSummary = summary => {
 
 test('GHI actual CSV ingestion and SQLite canonical analysis retain all irradiance and real findings',async t=>{
   const f=await analysisCsvFixture();
-  const directory=mkdtempSync(join(process.env.TMPDIR||'/opt/data/cache/scratch','analysis-ghi-'));
+  const directory=mkdtempSync(join(tmpdir(),'analysis-ghi-'));
   const manager=new PerformanceStoreManager(directory);t.after(()=>{manager.close();rmSync(directory,{recursive:true,force:true});});
   const store=manager.site('site'),h=helpers(store),metadata={source:'csv',fileName:'synthetic-ghi.csv',timezone:f.record.timezone,intervalMinutes:60,modelRevision:'model'};
   const commit=async rows=>{const preview=await store.stage(metadata,rows);return store.commit(preview.stageId,{previewToken:preview.previewToken,approveOverlap:true,modelRevision:'model',actor:'test'});};
@@ -246,7 +247,7 @@ test('existing snow-only extrema and blanks never stretch the other semantic sco
 });
 
 test('SQLite snow blank-to-70 correction outside production hours invalidates the immutable saved local-day dependency',async t=>{
-  const directory=mkdtempSync(join(process.env.TMPDIR||'/opt/data/cache/scratch','analysis-snow-'));
+  const directory=mkdtempSync(join(tmpdir(),'analysis-snow-'));
   const manager=new PerformanceStoreManager(directory);t.after(()=>{manager.close();rmSync(directory,{recursive:true,force:true});});
   const store=manager.site('site'),h=helpers(store),metadata={source:'csv',fileName:'synthetic-snow.csv',timezone:'America/New_York',intervalMinutes:60,modelRevision:'model'};
   const commit=async rows=>{const preview=await store.stage(metadata,rows);return store.commit(preview.stageId,{previewToken:preview.previewToken,approveOverlap:true,modelRevision:'model',actor:'test'});};

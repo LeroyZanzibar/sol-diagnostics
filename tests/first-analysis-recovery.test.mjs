@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import { drizzle } from 'drizzle-orm/d1';
@@ -33,7 +34,7 @@ function fixtureExports(path, names, bindings) {
   return context.testExports;
 }
 const { canonicalFixture, finish } = fixtureExports('tests/analysis-jobs.test.mjs', ['canonicalFixture', 'finish'], {
-  DatabaseSync, readFileSync, readdirSync, mkdtempSync, rmSync, join, drizzle, eq, desc, sql, sqliteCore,
+  DatabaseSync, readFileSync, readdirSync, mkdtempSync, rmSync, join, tmpdir, drizzle, eq, desc, sql, sqliteCore,
   LocalDatabase, LocalBucket, PerformanceStoreManager, loadSource, modelCapacityBindings, versionedStore, performanceBindings, process,
 });
 const { home, button, html, nodes } = fixtureExports('tests/performance-data-ui.test.mjs', ['home', 'button', 'html', 'nodes'], {

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { drizzle } from "drizzle-orm/d1";
 import { eq, desc, sql } from "drizzle-orm";
 import * as sqliteCore from "drizzle-orm/sqlite-core";
@@ -157,7 +158,7 @@ async function canonicalFixture(t) {
   for(const hour of [10,11,12,13])for(const [id,measurement,value,unit] of [['meter','Energy',hour===11?0:40,'kWh'],['inv','Energy',hour===11?0:40,'kWh'],['meter','POA irradiance',600,'W/m2'],['@site','Expected Production',40,'kWh']])rows.push({timestamp:`2026-06-01T${hour}:00:00.000Z`,channel:{id:JSON.stringify([id,measurement]),equipmentId:id,measurement,unit},value});
   let store=versionedStore(rows),adapters={},commit;
   if(t) {
-    const root=mkdtempSync(join(process.env.TMPDIR||'/opt/data/cache/scratch','publication-'));
+    const root=mkdtempSync(join(tmpdir(),'publication-'));
     const db=new LocalDatabase(join(root,'shared.sqlite'),'drizzle'),bucket=new LocalBucket(db,join(root,'objects'));
     const manager=new PerformanceStoreManager(join(root,'performance'));
     t.after(()=>{manager.close();db.close();rmSync(root,{recursive:true,force:true});});
