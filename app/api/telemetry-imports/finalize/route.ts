@@ -1,47 +1,57 @@
-import { UploadConflictError } from "../../../../db/single-performance-file";
 import { getBucketBinding } from "../../../../db/binding";
-import { chunkKey, csvHeaders, MAX_CHUNKS, MAX_FILE_SIZE, retainImport, uploadIdIsValid, validateImport, type ImportMetadata } from "../shared";
+import { readBoundedJson, PerformanceValidationError } from "../../../performance-ingest";
+import { performanceJson, performanceError } from "../../performance-data/service";
+import { chunkKey, MAX_CHUNKS, MAX_FILE_SIZE, retainImport, uploadIdIsValid, validateImport, type ImportMetadata } from "../shared";
 
-type FinalizeRequest=ImportMetadata&{uploadId:string;totalChunks:number};
-
-function concatenate(parts:R2ObjectBody[]){
-  let index=0;let reader:ReadableStreamDefaultReader<Uint8Array>|null=null;
+type FinalizeRequest = ImportMetadata & { uploadId: string; totalChunks: number };
+type CsvPart = { body: ReadableStream<Uint8Array>; size: number };
+function concatenate(parts: CsvPart[]) {
+  let index = 0, reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   return new ReadableStream<Uint8Array>({
-    async pull(controller){
-      while(index<parts.length){reader??=parts[index].body.getReader();const result=await reader.read();if(!result.done){controller.enqueue(result.value);return}reader.releaseLock();reader=null;index+=1}
+    async pull(controller) {
+      while (index < parts.length) {
+        const active = reader ?? parts[index].body.getReader(); reader = active; const next = await active.read();
+        if (!next.done) { controller.enqueue(next.value); return; }
+        active.releaseLock(); reader = null; index++;
+      }
       controller.close();
     },
-    async cancel(reason){if(reader)await reader.cancel(reason)}
+    async cancel(reason) {
+      if (reader) { await reader.cancel(reason); reader.releaseLock(); index++; }
+      await Promise.all(parts.slice(index).map(part => part.body.cancel(reason).catch(() => undefined)));
+    },
   });
 }
-
-function fixedLengthStream(length:number){
-  const Stream=(globalThis as unknown as {FixedLengthStream:new(length:number)=>{readable:ReadableStream<Uint8Array>;writable:WritableStream<Uint8Array>}}).FixedLengthStream;
-  if(!Stream)throw new Error("The upload service could not prepare the completed CSV stream.");
-  return new Stream(length);
-}
-
-export async function POST(request:Request){
-  const bucket=getBucketBinding();let temporaryKeys:string[]=[];
-  try{
-    const payload=await request.json() as FinalizeRequest;
-    if(!uploadIdIsValid(payload.uploadId)||!Number.isInteger(payload.totalChunks)||payload.totalChunks<1||payload.totalChunks>MAX_CHUNKS)return Response.json({error:"Invalid chunked upload."},{status:400});
-    if(!Number.isFinite(payload.fileSize)||payload.fileSize<1||payload.fileSize>MAX_FILE_SIZE)return Response.json({error:"CSV files must be between 1 byte and 100 MB."},{status:400});
-    temporaryKeys=Array.from({length:payload.totalChunks},(_,index)=>chunkKey(payload.uploadId,index+1));
-    const first=await bucket.get(temporaryKeys[0]);
-    if(!first)return Response.json({error:"The first CSV chunk is missing. Please retry the import."},{status:400});
-    const uploadedHeaders=csvHeaders(await first.text());
-    const validationError=await validateImport(payload,uploadedHeaders);
-    if(validationError)return Response.json({error:validationError},{status:400});
-    const parts:R2ObjectBody[]=[];let totalSize=0;
-    for(const key of temporaryKeys){const part=await bucket.get(key);if(!part)return Response.json({error:"One or more CSV chunks are missing. Please retry the import."},{status:400});parts.push(part);totalSize+=part.size}
-    if(totalSize!==payload.fileSize)return Response.json({error:"The uploaded CSV size did not match the source file. Please retry the import."},{status:400});
-    const fixed=fixedLengthStream(totalSize);const piping=concatenate(parts).pipeTo(fixed.writable);
-    const record=await retainImport(payload,fixed.readable,uploadedHeaders);
-    await piping;
-    const completedKeys=temporaryKeys;temporaryKeys=[];
-    await bucket.delete(completedKeys).catch(()=>undefined);
-    return Response.json({import:record},{status:201});
-  }catch(error){return Response.json({error:error instanceof Error?error.message:"Unable to finalize the CSV import."},{status:error instanceof UploadConflictError?409:500})}
-  finally{if(temporaryKeys.length)await bucket.delete(temporaryKeys).catch(()=>undefined)}
+export async function POST(request: Request) {
+  let temporaryKeys: string[] = [];
+  let upload: ReadableStream<Uint8Array> | undefined;
+  const parts: CsvPart[] = [];
+  try {
+    const payload = await readBoundedJson(request, 1024 * 1024) as unknown as FinalizeRequest;
+    if (!uploadIdIsValid(payload.uploadId) || !Number.isInteger(payload.totalChunks) || payload.totalChunks < 1 || payload.totalChunks > MAX_CHUNKS) throw new PerformanceValidationError("Invalid chunked upload.");
+    if (!Number.isSafeInteger(payload.fileSize) || payload.fileSize < 1 || payload.fileSize > MAX_FILE_SIZE) throw new PerformanceValidationError("CSV files must be between 1 byte and 100 MB.");
+    const bucket = getBucketBinding();
+    temporaryKeys = Array.from({ length: payload.totalChunks }, (_, index) => chunkKey(payload.uploadId, index + 1));
+    // A header/UTF-8 character may span chunks. Validate it with the full
+    // streaming parser after retention, never from a truncated first part.
+    const uploadedHeaders: string[] = [];
+    const validationError = await validateImport(payload, uploadedHeaders);
+    if (validationError) throw new PerformanceValidationError(validationError);
+    let totalSize = 0;
+    for (const key of temporaryKeys) {
+      const part = await bucket.get(key);
+      if (!part) throw new PerformanceValidationError("One or more CSV chunks are missing. Retry the import.");
+      parts.push(part); totalSize += part.size;
+      if (totalSize > MAX_FILE_SIZE) throw new PerformanceValidationError("CSV exceeds the 100 MB limit.");
+    }
+    if (totalSize !== payload.fileSize) throw new PerformanceValidationError("The uploaded CSV size did not match the source file. Retry the import.");
+    upload = concatenate(parts);
+    const preview = await retainImport(payload, upload, uploadedHeaders);
+    return performanceJson({ preview }, 201);
+  } catch (error) { return performanceError(error); }
+  finally {
+    if (upload && !upload.locked) await upload.cancel().catch(() => undefined);
+    await Promise.all(parts.filter(part => !part.body.locked).map(part => part.body.cancel().catch(() => undefined)));
+    if (temporaryKeys.length) await getBucketBinding().delete(temporaryKeys).catch(() => undefined);
+  }
 }

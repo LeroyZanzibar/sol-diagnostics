@@ -4,6 +4,37 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,readdirSync} from 'node:fs';
 import {loadSource} from './source-module.mjs';
 import * as XLSX from 'xlsx';
+import { versionedStore, performanceBindings } from './performance-analysis-fixture.mjs';
+
+test('history pages tied completion timestamps deterministically and reports published/current-data separately without result reads',async()=>{
+  const db=database(), timestamp='2026-06-01T12:00:00.000Z';
+  const store=versionedStore([{timestamp,channel:{id:'energy',equipmentId:'meter',measurement:'Energy',unit:'kWh'},value:10}]);
+  const data=loadSource('app/api/performance-data/analysis.ts',[],performanceBindings(store));
+  const insert=db.sqlite.prepare("INSERT INTO analysis_runs (id,site_id,import_id,parser_version,model_revision,status,issue_count,analysis_object_key,completed_at) VALUES (?,?,'input',28,'model','completed',1,?,?)");
+  for(let i=0;i<63;i++){
+    const id=`run-${String(i).padStart(3,'0')}`;insert.run(id,'site',`analysis/${id}/result.json`,timestamp);
+    if(i!==0)data.captureAnalysisProvenance(id,data.performanceAnalysisInput('site'),equipment);
+  }
+  const retained=data.savedAnalysisProvenance('site','run-030');
+  assert.equal(retained.scopes[1].start,'2026-06-01T00:00:00.000Z');assert.equal(retained.scopes[1].end,'2026-06-01T23:59:59.999Z','Wider snow dependencies must not widen the displayed analysis range');
+  insert.run('foreign','other','foreign-result',timestamp);
+  db.sqlite.prepare('INSERT INTO performance_summaries VALUES (?,?,?,?)').run('input','site',JSON.stringify({objectKey:'analysis/run-030/result.json'}),timestamp);
+  store.replace([{timestamp,channel:{id:'energy',equipmentId:'meter',measurement:'Energy',unit:'kWh'},value:11}]);
+  const before=JSON.stringify(db.sqlite.prepare('SELECT * FROM analysis_runs ORDER BY id').all());
+  const service=loadSource('app/api/analysis-history/service.ts',[],{...data,...review,getDatabaseBinding:()=>db,getBucketBinding:()=>{throw new Error('History list must not load giant results');}});
+  const route=loadSource('app/api/analysis-history/route.ts',[],{...service,getDatabaseBinding:()=>db});
+  const first=await route.GET(new Request('https://test/api/analysis-history?siteId=site'));
+  assert.match(first.headers.get('cache-control'),/no-store/);
+  const a=await first.json(),b=await(await route.GET(new Request(`https://test/api/analysis-history?siteId=site&before=${encodeURIComponent(a.next)}`))).json();
+  const rows=[...a.runs,...b.runs];assert.equal(rows.length,63);assert.equal(new Set(rows.map(r=>r.id)).size,63);assert.equal(b.next,null);
+  assert.deepEqual(rows.map(r=>r.id),Array.from({length:63},(_,i)=>`run-${String(62-i).padStart(3,'0')}`));
+  const current=rows.filter(r=>r.is_current);assert.equal(current.length,1);assert.equal(current[0].id,'run-030');assert.equal(current[0].data_freshness.status,'older');
+  assert.equal(current[0].source_revision,1);assert.equal(current[0].timestamp_start,timestamp);assert.equal(current[0].timestamp_end,timestamp);
+  assert.equal(rows.at(-1).data_freshness.status,'unknown');assert.equal(rows.at(-1).source_revision,null);
+  assert.equal(store.calls.filter(c=>c[0]==='fingerprint'&&c[1]===2).length,2,'same changed scope is hashed once per page, not once per saved result');
+  assert.equal(JSON.stringify(db.sqlite.prepare('SELECT * FROM analysis_runs ORDER BY id').all()),before);
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM analysis_jobs').get().n,0);
+});
 const time=loadSource('app/telemetry-time.ts'),csv=loadSource('app/csv-stream.ts');
 const history=loadSource('app/data-history.ts',[],{...time,...csv});
 const review=loadSource('app/issue-review.ts');

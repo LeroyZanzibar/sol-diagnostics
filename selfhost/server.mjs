@@ -2,6 +2,7 @@ import {mkdirSync, readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {createHash,timingSafeEqual} from 'node:crypto';
 import {LocalDatabase,LocalBucket,LocalFixedLengthStream} from './storage.mjs';
+import {PerformanceStoreManager} from './performance-store.mjs';
 
 const password=process.env.SOL_PASSWORD_FILE?readFileSync(process.env.SOL_PASSWORD_FILE,'utf8').trim():process.env.SOL_PASSWORD;
 const username=process.env.SOL_USERNAME||'admin';
@@ -11,7 +12,9 @@ const credentialHash=createHash('sha256').update(`${username}:${password}`).dige
 const data=resolve(process.env.SOL_DATA_DIR||'./data');mkdirSync(data,{recursive:true,mode:0o700});
 const database=new LocalDatabase(resolve(data,'sol-diagnostics.sqlite'),resolve('drizzle'));
 const bucket=new LocalBucket(database,resolve(data,'objects'));await bucket.collectOrphans();
-const runtime={database,bucket,cleanup:undefined};
+// Keep canonical site databases outside the object bucket's orphan cleanup.
+const performance=new PerformanceStoreManager(resolve(data,'performance'));
+const runtime={database,bucket,performance,cleanup:undefined};
 globalThis[Symbol.for('sol-diagnostics.runtime')]=runtime;
 globalThis.FixedLengthStream=LocalFixedLengthStream;
 const {startProdServer}=await import('vinext/server/prod-server');
@@ -51,6 +54,6 @@ let cleaning;
 async function cleanup(){if(!runtime.cleanup||cleaning)return;cleaning=Promise.resolve(runtime.cleanup()).catch(error=>console.error('Deferred file cleanup:',error.message)).finally(()=>{cleaning=null;});await cleaning;}
 const timer=setInterval(()=>void cleanup(),60000);timer.unref();
 let closing=false;
-function shutdown(){if(closing)return;closing=true;clearInterval(timer);server.close(async()=>{await cleaning;database.close();process.exit(0);});setTimeout(()=>process.exit(1),110000).unref();}
+function shutdown(){if(closing)return;closing=true;clearInterval(timer);server.close(async()=>{await cleaning;performance.close();database.close();process.exit(0);});setTimeout(()=>process.exit(1),110000).unref();}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
 console.log(`Sol Diagnostics: local storage ready (${data}); password protection enabled.`);

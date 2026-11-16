@@ -77,7 +77,7 @@ export async function stopJob(db: JobDatabase, job: AnalysisJob, token: string, 
     .bind(error instanceof AnalysisStopped ? 'Analysis was interrupted. Retry using the retained upload.' :
       analysisFailureMessage(error), Date.now(), job.id, job.attempt_id, token).run();
 }
-export async function controlJob(db: JobDatabase, siteId: string, attemptId: string, action: "cancel" | "retry") {
+export async function controlJob(db: JobDatabase, siteId: string, attemptId: string, action: "cancel" | "retry", prepareRetry?: (attemptId: string) => Promise<void>) {
   const row = await db.prepare("SELECT * FROM analysis_jobs WHERE site_id = ? AND attempt_id = ?")
     .bind(siteId, attemptId).first<AnalysisJob>();
   if (!row) return null;
@@ -95,10 +95,12 @@ export async function controlJob(db: JobDatabase, siteId: string, attemptId: str
         AND stage IN ('equipment', 'reconcile', 'save', 'finalize')`)
       .bind(Date.now(), row.id, attemptId).run();
   } else {
+    const nextAttempt = crypto.randomUUID();
+    await prepareRetry?.(nextAttempt);
     await db.prepare(`UPDATE analysis_jobs SET attempt_id = ?, status = 'processing', stage = 'read',
       completed = 0, total = 0, percent = 0, error = '', lease_token = '', lease_until = 0, updated_at = ?
       WHERE id = ? AND attempt_id = ? AND status IN ('canceled', 'failed', 'interrupted')`)
-      .bind(crypto.randomUUID(), Date.now(), row.id, attemptId).run();
+      .bind(nextAttempt, Date.now(), row.id, attemptId).run();
   }
   return readJob(db, row.id);
 }
@@ -106,35 +108,51 @@ export async function controlJob(db: JobDatabase, siteId: string, attemptId: str
 // The pointer is published atomically with completion. A cancellation that wins
 // this race prevents every statement, leaving the private R2 object unreferenced.
 export async function publishJob(db: JobDatabase, job: AnalysisJob, token: string,
-  pointer: string, objectKey: string, issueCount: number) {
+  pointer: string, objectKey: string, issueCount: number, canPublish: () => boolean = () => true) {
   const guard = `EXISTS (SELECT 1 FROM analysis_jobs WHERE id = ? AND attempt_id = ?
     AND lease_token = ? AND status = 'processing' AND lease_until >= ?)`;
   const committedAt = Date.now();
   const params = () => [job.id, job.attempt_id, token, committedAt];
-  await db.batch([
+  const pointerStatements = [
     db.prepare(`DELETE FROM performance_summaries WHERE site_id = ? AND ${guard}`).bind(job.site_id, ...params()),
     db.prepare(`INSERT INTO performance_summaries (import_id, site_id, summary, processed_at)
       SELECT ?, ?, ?, ? WHERE ${guard}`)
       .bind(job.import_id, job.site_id, pointer, new Date().toISOString(), ...params()),
+  ];
+  const completionStatements = [
     db.prepare(`UPDATE analysis_runs SET status = 'completed', issue_count = ?, analysis_object_key = ?, completed_at = ?
       WHERE id = ? AND ${guard}`).bind(issueCount, objectKey, new Date().toISOString(), job.attempt_id, ...params()),
     db.prepare(`UPDATE analysis_jobs SET status = 'completed', stage = 'complete', percent = 100,
       completed = ?, total = ?, lease_token = '', lease_until = 0, updated_at = ?
       WHERE id = ? AND attempt_id = ? AND lease_token = ? AND status = 'processing' AND lease_until >= ?`)
       .bind(issueCount, issueCount, Date.now(), ...params()),
-  ]);
+  ];
+  // Separate databases: single-instance server guard, not cross-database atomicity.
+  // No await is allowed between this check and the shared adapter's BEGIN.
+  const published = canPublish();
+  await db.batch([...(published ? pointerStatements : []), ...completionStatements]);
   const current = await readJob(db, job.id);
   if (current?.attempt_id !== job.attempt_id || current.status !== "completed")
     throw new AnalysisStopped("Analysis was canceled before publication.");
+  return { published };
 }
 
 // Explicit reanalysis keeps the previous published result until atomic publication.
-export async function restartJob(db: JobDatabase, id: string, siteId: string, importId: string) {
-  const job=await getOrCreateJob(db,id,siteId,importId);
-  if (job.status==='processing'||job.status==='canceling') return job;
-  await db.prepare(`UPDATE analysis_jobs SET attempt_id = ?, status = 'processing', stage = 'read',
-    completed = 0, total = 0, percent = 0, error = '', lease_token = '', lease_until = 0, updated_at = ?
-    WHERE id = ? AND attempt_id = ? AND status NOT IN ('processing', 'canceling')`)
-    .bind(crypto.randomUUID(),Date.now(),id,job.attempt_id).run();
+export async function restartJob(db: JobDatabase, id: string, siteId: string, importId: string, prepareInput?: (attemptId: string) => Promise<void>) {
+  const job=await readJob(db,id);
+  if (job && (job.status==='processing'||job.status==='canceling')) return job;
+  const attemptId=crypto.randomUUID();
+  // Do not expose a runnable job until its selected input is durably pinned.
+  // A concurrent start may win the guarded insert/update; its checkpoint wins too.
+  await prepareInput?.(attemptId);
+  if (!job) {
+    await db.prepare(`INSERT INTO analysis_jobs (id,site_id,import_id,attempt_id,updated_at)
+      VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING`).bind(id,siteId,importId,attemptId,Date.now()).run();
+  } else {
+    await db.prepare(`UPDATE analysis_jobs SET attempt_id = ?, status = 'processing', stage = 'read',
+      completed = 0, total = 0, percent = 0, error = '', lease_token = '', lease_until = 0, updated_at = ?
+      WHERE id = ? AND attempt_id = ? AND status NOT IN ('processing', 'canceling')`)
+      .bind(attemptId,Date.now(),id,job.attempt_id).run();
+  }
   return (await readJob(db,id))!;
 }

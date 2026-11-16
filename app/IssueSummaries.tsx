@@ -133,7 +133,7 @@ export default function IssueSummaries({
   function indicator(key: SortKey) { return sort.key === key ? (sort.direction === "asc" ? "↑" : "↓") : "↕"; }
   function updateFilter(key: SortKey, value: string) { setFilters((current) => ({ ...current, [key]: value })); }
   function exportSummaries() {
-    if(reportContext&&!reportContext.reviewRetrievedAt)return;
+    if(reportContext&&(!reportContext.reviewRetrievedAt||reportContext.freshnessReady===false))return;
     const rows: (string | number)[][] = [[
       "Row type",
       "Period",
@@ -238,19 +238,19 @@ export default function IssueSummaries({
           <button
             className="secondary-btn"
             onClick={exportSummaries}
-            disabled={reportContext?!reportContext.reviewRetrievedAt:!groups.length}
+            disabled={reportContext?(!reportContext.reviewRetrievedAt||reportContext.freshnessReady===false):!groups.length}
             title="Export the currently filtered and sorted summaries with child issue rows"
           >
             Export XLSX <b aria-hidden="true">↓</b>
           </button>
           <button className="secondary-btn" onClick={onBack}>
-            ← Back to issues
+            ← Back to Findings
           </button>
         </div>
       </header>
       {reportingPeriod}
       <div className="summary-strip">
-        {reportContext&&!reportContext.reviewRetrievedAt?<span>Review-adjusted totals unavailable until saved reviews load.</span>:<>
+        {reportContext&&(!reportContext.reviewRetrievedAt||reportContext.freshnessReady===false)?<span>{reportContext.freshnessReady===false?"Filtered totals unavailable until data freshness is assessed.":"Review-adjusted totals unavailable until saved reviews load."}</span>:<>
         <strong>{groups.length.toLocaleString()}</strong> of {allGroups.length.toLocaleString()} summarized issue groups
         <span>{new Set(groups.flatMap(group => group.issues.map(issue => issue.id))).size} unique issues</span>
         <span>

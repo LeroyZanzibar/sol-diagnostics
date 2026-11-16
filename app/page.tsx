@@ -5,7 +5,8 @@ import RecurringTableGroup from "./RecurringTableGroup";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatDateTime } from "./issue-date-format";
 import { clipIssueToReport, localMoment, siteWallTime, type IntervalLoss, type PeriodLoss, type ReportRange } from "./issue-periods";
-import AnalysisHistory from "./AnalysisHistory";
+import ManageAnalyses from "./ManageAnalyses";
+import {useDataFreshness,matchesDataFreshness,freshnessLabel,freshnessOptions,type DataFreshnessFilter} from "./data-freshness";
 import IssueReviewDialog from "./IssueReviewDialog";
 import ReviewWorkbench from "./ReviewWorkbench";
 import {replaceInverterSelection} from "./inverter-review";
@@ -103,6 +104,10 @@ type PerformanceIssue = {
 type PerformanceData = {
   issueDatabase?:{analysisRunId:string};methodology?:Record<string,any>;historical?:boolean;
   hasData: boolean;
+  analysisRequired?: boolean;
+  publicationSkipped?: boolean;
+  lastAttempt?: AnalysisProgressState;
+  runId?: string;
   reason?: string;
   error?: string;
   cacheStatus?: "stored" | "generated";
@@ -369,6 +374,7 @@ export default function Home() {
     | "settings"
     | "uploads"
     | "maintenance-uploads"
+    | "manage-analyses"
     | "array"
     | "user"
     | "issue-visibility"
@@ -425,6 +431,7 @@ export default function Home() {
   const [performanceRevision, setPerformanceRevision] = useState(0);
   const [analysisSelection,setAnalysisSelection]=useState({siteId:"",runId:""});
   const selectedRunId=analysisSelection.siteId===activeSiteId?analysisSelection.runId:"";
+  const [freshnessFilter,setFreshnessFilter]=useState<DataFreshnessFilter>('all');
   const [reviews,setReviews]=useState<Record<string,IssueReview>>({});
   const [reviewsRetrievedAt,setReviewsRetrievedAt]=useState("");
   const [reviewError,setReviewError]=useState("");
@@ -435,9 +442,15 @@ export default function Home() {
   const [reviewTarget,setReviewTarget]=useState<PerformanceIssue|null>(null);
   const [reviewScope,setReviewScope]=useState("");
   const analysisRunId=performance?.issueDatabase?.analysisRunId||String(performance?.methodology?.analysisId||selectedRunId||"");
+  const freshness=useDataFreshness(activeSiteId,analysisRunId,`${performanceRevision}:${view}`);
+  const freshnessReady=freshnessFilter==='all'||freshness.ready;
+  const freshnessMatches=matchesDataFreshness(freshnessFilter,freshness.assessment.status,freshness.ready);
+  function changeFreshness(value:DataFreshnessFilter){setFreshnessFilter(value);setSelectedFindings([]);setIssuePage(0);}
+  function selectAnalysis(runId:string){if(runId===selectedRunId)return;setAnalysisSelection({siteId:activeSiteId,runId});setPerformance(null);setSelectedFindings([]);setIssuePage(0);}
   const currentReviewScope=useRef("");
   currentReviewScope.current=`${activeSiteId}:${analysisRunId}`;
   const reviewsReady=userSettingsReady&&!!reviewsRetrievedAt&&!reviewError&&reviewScope===`${activeSiteId}:${analysisRunId}`;
+  const reportingReady=reviewsReady&&freshnessReady;
   useEffect(()=>{
     const controller=new AbortController();setReviews({});setReviewsRetrievedAt("");setReviewError("");
     if(!analysisRunId)return;
@@ -522,20 +535,21 @@ export default function Home() {
   const recurringIssues=performance?.analysis.recurringIssues||[];
   function openReview(id:string){const issue=issues.find(i=>i.id===id);if(issue){setReviewTarget(issue);return;}const episode=recurringIssues.find(e=>e.id===id);if(episode){const first=issues.find(i=>episode.members.some(m=>m.id===i.id));if(first)setReviewTarget({...first,...episode});}}
   const reportTimezone = performance?.timezone || performance?.timeZone || performance?.summary?.timezone || performance?.analysis?.timezone || issues[0]?.timezone || "Site local time";
-  const periodIssues = useMemo(() => issues.flatMap(issue => {
+  const freshnessIssues=useMemo(()=>freshnessMatches?issues:[],[issues,freshnessMatches]);
+  const periodIssues = useMemo(() => freshnessIssues.flatMap(issue => {
     const clipped = clipIssueToReport(issue, reportRange);
     return clipped ? [clipped] : [];
-  }), [issues, reportRange]);
+  }), [freshnessIssues, reportRange]);
   const visibility=user.issueVisibility;
   const enabledPeriodIssues=useMemo(()=>periodIssues.filter(issue=>isIssueVisible(issue,visibility)),[periodIssues,visibility]);
-  const enabledAnalysisIssues=useMemo(()=>issues.filter(issue=>isIssueVisible(issue,visibility)),[issues,visibility]);
+  const enabledAnalysisIssues=useMemo(()=>freshnessIssues.filter(issue=>isIssueVisible(issue,visibility)),[freshnessIssues,visibility]);
   const hiddenTypeCount=issueVisibilityOptions.filter(option=>!visibility[option.key]).length;
   const matchesAnalystFilter=(issue:PerformanceIssue)=>matchesReviewFilter(issue,issue.eventKey?reviews[issue.eventKey]:undefined,reviewFilter);
-  const reportIssues=reviewsReady?enabledPeriodIssues.filter(matchesAnalystFilter):[];
-  const hiddenIssues=reviewsReady?periodIssues.filter(issue=>!isIssueVisible(issue,visibility)&&matchesAnalystFilter(issue)):[];
+  const reportIssues=reportingReady?enabledPeriodIssues.filter(matchesAnalystFilter):[];
+  const hiddenIssues=reportingReady?periodIssues.filter(issue=>!isIssueVisible(issue,visibility)&&matchesAnalystFilter(issue)):[];
   const visibilityHidden={count:hiddenIssues.length,knownLossKwh:hiddenIssues.reduce((sum,issue)=>sum+(issue.lossUnknown?0:issue.estimatedLossKwh||0),0),unknownLossCount:hiddenIssues.filter(issue=>issue.lossUnknown||issue.estimatedLossKwh==null).length};
   const reviewTotals=reviewLossSummary(enabledPeriodIssues,reviews);
-  const reportContext:ReportContext={issueVisibility:visibility,visibilityHidden,recurringIssues:recurringIssues.filter(issue=>isIssueVisible(issue,visibility)),maintenanceWindows:maintenance.windows,maintenanceRetrievedAt:maintenance.retrievedAt,maintenanceError:maintenance.error,methodology:performance?.methodology,analysisId:analysisRunId,reviewFilter,reviews,reviewRetrievedAt:reviewsReady?reviewsRetrievedAt:"",reviewTotals:reviewsReady?reviewTotals:undefined,excludedIssues:reviewsReady?enabledPeriodIssues.filter(i=>reviewStatus(i)==="Dismissed"):[],filters:{...filters,reportRange,sort,columnOrder:issueColumns.map(c=>c.id),lossThreshold:performance?.analysis.issueLossThresholdKwh,issueVisibility:visibility},issues:reportIssues};
+  const reportContext:ReportContext={freshnessFilter,dataFreshness:freshness.assessment,freshnessReady,issueVisibility:visibility,visibilityHidden,recurringIssues:recurringIssues.filter(issue=>freshnessMatches&&isIssueVisible(issue,visibility)),maintenanceWindows:maintenance.windows,maintenanceRetrievedAt:maintenance.retrievedAt,maintenanceError:maintenance.error,methodology:performance?.methodology,analysisId:analysisRunId,reviewFilter,reviews,reviewRetrievedAt:reviewsReady?reviewsRetrievedAt:"",reviewTotals:reportingReady?reviewTotals:undefined,excludedIssues:reportingReady?enabledPeriodIssues.filter(i=>reviewStatus(i)==="Dismissed"):[],filters:{...filters,reportRange,sort,columnOrder:issueColumns.map(c=>c.id),lossThreshold:performance?.analysis.issueLossThresholdKwh,issueVisibility:visibility},issues:reportIssues};
   const visibleIssues = useMemo(
     () =>
       reportIssues
@@ -739,7 +753,7 @@ export default function Home() {
         totalBytes -= cache.get(oldest)!.bytes;
         cache.delete(oldest);
       }
-      if (data.hasData && !data.error) {
+      if ((data.hasData && !data.error) || data.publicationSkipped) {
         setAnalysisState(null);
       }
       if (pendingAnalysisSiteRef.current === activeSiteId) pendingAnalysisSiteRef.current = "";
@@ -760,11 +774,11 @@ export default function Home() {
     };
   }, [activeSiteId, performanceRevision,selectedRunId]);
 
-  useEffect(()=>{setSelectedFindings([]);},[activeSiteId,analysisRunId,filters,reportRange,reviewFilter,visibility]);
-  useEffect(()=>{setIssuePage(0);},[activeSiteId,analysisRunId,filters,sort,reportRange,reviewFilter,visibility]);
+  useEffect(()=>{setSelectedFindings([]);setIssuePage(0);},[activeSiteId,analysisRunId,filters,sort,reportRange,reviewFilter,visibility,freshnessFilter]);
+  const analysisInProgress = Boolean(analysisState && ["processing", "canceling"].includes(analysisState.status));
   async function reanalyze() {
     const siteId = activeSiteId;
-    if (analysisAction) return;
+    if (analysisAction || analysisInProgress || selectedRunId || !siteId) return;
     setAnalysisAction("retry");
     try {
       const response = await fetch("/api/performance-summary", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({siteId,action:"reanalyze"}) });
@@ -778,14 +792,15 @@ export default function Home() {
     finally { setAnalysisAction(""); }
   }
   async function controlAnalysis(action: "cancel" | "retry") {
-    if (!analysisState || analysisAction) return;
+    const attempt = analysisState || performance?.lastAttempt;
+    if (!attempt || analysisAction || selectedRunId) return;
     const siteId = activeSiteId;
     setAnalysisAction(action);
     setAnalysisControlError("");
     try {
       const response = await fetch("/api/performance-summary", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ siteId, attemptId: analysisState.attemptId, action }),
+        body: JSON.stringify({ siteId, attemptId: attempt.attemptId, action }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to update analysis");
@@ -825,7 +840,7 @@ export default function Home() {
   }
   function goTo(next: typeof view) {
     if(next==='user'||next==='issue-visibility')setUserMenuOpen(true);
-    if(next==='uploads'||next==='maintenance-uploads')setUploadsMenuOpen(true);
+    if(next==='uploads'||next==='maintenance-uploads'||next==='manage-analyses')setUploadsMenuOpen(true);
     setMobileMenuOpen(false);
     setView(next);
     window.scrollTo({ top: 0 });
@@ -1224,7 +1239,7 @@ export default function Home() {
     }
   }
   function exportIssuesXlsx() {
-    if (!performance?.hasData||!reviewsReady) return;
+    if (!performance?.hasData||!reviewsReady||!freshnessReady) return;
     const rows = [
       issueColumns.flatMap((column) => csvColumn(column.id)),
       ...visibleIssues.map((issue) =>
@@ -1245,7 +1260,7 @@ export default function Home() {
       ),
     }));
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Performance Issues");
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Findings");
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["Reporting from", reportRange.from || "All dates"], ["Reporting through (inclusive)", reportRange.through || "All dates"], ["Timezone", reportTimezone], ["Allocation", "Overlapping events; interval losses within the selected dates. Unknown allocations are excluded from quantified totals."]]), "Reporting period");
     appendReportMethodology(workbook,{...reportContext,issues:visibleIssues});
     const siteName =
@@ -1255,7 +1270,7 @@ export default function Home() {
         .replace(/^-|-$/g, "") || "site";
     XLSX.writeFile(
       workbook,
-      `${siteName}-performance-issues-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      `${siteName}-findings-${new Date().toISOString().slice(0, 10)}.xlsx`,
       { compression: true },
     );
   }
@@ -1349,12 +1364,14 @@ export default function Home() {
   }
 
   const reviewControls=<div className="review-reporting-controls">
+    <div className="active-analysis" role="status"><div><strong>Active analysis: {selectedRunId?'Selected historical snapshot':'Published current analysis'}</strong><p>{analysisRunId||'No saved analysis'}{performance?.import?.timestampStart&&` · ${performance.import.timestampStart} – ${performance.import.timestampEnd||'Unknown'}`}. {selectedRunId?'Viewing a saved snapshot does not change the published current analysis.':''}</p></div><button className="secondary-btn" onClick={()=>goTo('manage-analyses')}>Manage Analyses</button></div>
+    <div className="freshness-controls"><label>Data freshness<select aria-label="Data freshness" value={freshnessFilter} onChange={event=>changeFreshness(event.target.value as DataFreshnessFilter)}>{freshnessOptions.map(option=><option key={option.value} value={option.value}>{option.label}</option>)}</select></label><div role="status"><strong className={`freshness-badge ${freshness.assessment.status}`}>{freshness.loading?'Assessing data freshness…':freshnessLabel(freshness.assessment.status)}</strong><p>Analysis-range assessment: all findings in this run share this status. {freshness.assessment.reasons.join(' ')}{freshness.assessment.comparedRevision!==null&&` Compared with data revision ${freshness.assessment.comparedRevision}.`}{freshness.assessment.assessedAt&&` Assessed ${freshness.assessment.assessedAt}.`}</p>{!freshnessReady&&<p>Waiting for a valid freshness assessment before showing this filtered view or exporting.</p>}</div></div>
     <div className="review-toolbar"><label>Analyst review<select value={reviewFilter} onChange={e=>setReviewFilter(e.target.value)}>{["Exclude dismissed","All findings","Confirmed","Unreviewed","Needs review","Dismissed"].map(v=><option key={v} value={v}>{v==="Exclude dismissed"?"Reported findings (excludes dismissed)":v==="All findings"?"All findings (audit view)":v==="Dismissed"?"Dismissed (audit view)":v}</option>)}</select></label>
-      <div className="review-counts">{["Confirmed","Unreviewed","Needs review","Dismissed"].map(status=>{const matched=enabledPeriodIssues.filter(i=>reviewStatus(i)===status);return <span key={status}><strong>{status}: {reviewsReady?matched.length:"—"}</strong>{reviewsReady?formatKwh(matched.reduce((n,i)=>n+(i.estimatedLossKwh||0),0)):"Loading…"}</span>;})}</div>
+      <div className="review-counts">{["Confirmed","Unreviewed","Needs review","Dismissed"].map(status=>{const matched=enabledPeriodIssues.filter(i=>reviewStatus(i)===status);return <span key={status}><strong>{status}: {reportingReady?matched.length:"—"}</strong>{reportingReady?formatKwh(matched.reduce((n,i)=>n+(i.estimatedLossKwh||0),0)):"Loading…"}</span>;})}</div>
       <button className="secondary-btn" onClick={()=>goTo('issue-visibility')}>Issue visibility{hiddenTypeCount?` · ${hiddenTypeCount} hidden ${hiddenTypeCount===1?'type':'types'}`:''}</button>
     </div>
-    {reviewsReady?<p className="review-loss-treatment">Reporting period, enabled issue types, before table filters: <strong>{formatKwh(reviewTotals.adjusted)} after review</strong> · {formatKwh(reviewTotals.dismissed)} dismissed · {formatKwh(reviewTotals.detected)} originally detected. Included provisional loss: {formatKwh(reviewTotals.provisional)} (unreviewed or needs review). Resolved issues retain their historical loss.{(reviewFilter==="All findings"||reviewFilter==="Dismissed")&&<strong> Audit view: displayed losses include dismissed findings.</strong>}</p>:<p className="review-loss-treatment" role="status">{!userSettingsReady?'Saved issue visibility preferences must load before findings and exports are available.':reviewError?`Reviews unavailable: ${reviewError}. Review-adjusted totals and exports are unavailable until reviews load.`:"Loading analyst decisions before showing reported losses…"}</p>}
-    {reviewsReady&&hiddenTypeCount>0&&<div className="issue-visibility-notice" role="status"><p><strong>{visibilityHidden.count.toLocaleString()} findings hidden · {formatKwh(visibilityHidden.knownLossKwh)} known loss</strong>{visibilityHidden.unknownLossCount>0&&` · ${visibilityHidden.unknownLossCount} with unknown loss`}. Within the reporting period and analyst review filter, before table filters. Hidden findings remain in the analysis.</p></div>}
+    {reportingReady?<p className="review-loss-treatment">Reporting period, enabled issue types and data freshness filter, before table filters: <strong>{formatKwh(reviewTotals.adjusted)} after review</strong> · {formatKwh(reviewTotals.dismissed)} dismissed · {formatKwh(reviewTotals.detected)} originally detected. Included provisional loss: {formatKwh(reviewTotals.provisional)} (unreviewed or needs review). Resolved issues retain their historical loss.{(reviewFilter==="All findings"||reviewFilter==="Dismissed")&&<strong> Audit view: displayed losses include dismissed findings.</strong>}</p>:<p className="review-loss-treatment" role="status">{!freshnessReady?'Assessing data freshness before showing filtered totals…':!userSettingsReady?'Saved issue visibility preferences must load before findings and exports are available.':reviewError?`Reviews unavailable: ${reviewError}. Review-adjusted totals and exports are unavailable until reviews load.`:"Loading analyst decisions before showing reported losses…"}</p>}
+    {reportingReady&&hiddenTypeCount>0&&<div className="issue-visibility-notice" role="status"><p><strong>{visibilityHidden.count.toLocaleString()} findings hidden · {formatKwh(visibilityHidden.knownLossKwh)} known loss</strong>{visibilityHidden.unknownLossCount>0&&` · ${visibilityHidden.unknownLossCount} with unknown loss`}. Within the reporting period, data freshness and analyst review filters, before table filters. Hidden findings remain in the analysis.</p></div>}
   </div>;
   function selectFindings(ids:string[],checked:boolean){
     const allowed=new Set(visibleIssues.map(i=>i.id));
@@ -1381,7 +1398,7 @@ export default function Home() {
   return (
     <main data-theme={activeTheme} className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       <header className="mobile-header" inert={isMobile && mobileMenuOpen}>
-        <div><strong>Sol Diagnostics</strong><span>{({ map: "Map", issues: "Performance issues", summaries: "Summaries", timeline: "Timeline", uploads: "Performance data", "maintenance-uploads":"Maintenance data", settings: "Site settings", array: "Array model", user: "User settings", "issue-visibility":"Issue visibility" })[view]}</span></div>
+        <div><strong>Sol Diagnostics</strong><span>{({ map: "Map", issues: "Findings", summaries: "Summaries", timeline: "Timeline", uploads: "Performance data", "maintenance-uploads":"Maintenance data", "manage-analyses":"Manage Analyses", settings: "Site settings", array: "Array model", user: "User settings", "issue-visibility":"Issue visibility" })[view]}</span></div>
         <button ref={menuButtonRef} className="mobile-menu-button" aria-label="Open navigation menu" aria-controls="site-navigation" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><span aria-hidden="true">☰</span> Menu</button>
       </header>
       {isMobile && mobileMenuOpen && <div className="mobile-nav-backdrop" aria-hidden="true" onClick={() => setMobileMenuOpen(false)} />}
@@ -1426,7 +1443,7 @@ export default function Home() {
                 } else setIssuesMenuOpen((value) => !value);
               }}
             >
-              <span>02</span> Issues
+              <span>02</span> Analysis
               <i className="nav-chevron">{issuesMenuOpen ? "⌄" : "›"}</i>
             </button>
             {issuesMenuOpen && (
@@ -1435,7 +1452,7 @@ export default function Home() {
                   className={`nav-sub-item ${view === "issues" ? "active" : ""}`}
                   onClick={() => goTo("issues")}
                 >
-                  <span>I</span> Performance issues
+                  <span>I</span> Findings
                 </button>
                 <button
                   className={`nav-sub-item ${view === "summaries" ? "active" : ""}`}
@@ -1452,9 +1469,9 @@ export default function Home() {
               </div>
             )}
           </div>
-          <div className={`nav-group ${view==='uploads'||view==='maintenance-uploads'?'active':''}`}>
-            <button className="nav-item nav-parent" aria-expanded={uploadsMenuOpen} onClick={()=>{if(sidebarCollapsed){setSidebarCollapsed(false);setUploadsMenuOpen(true);}else setUploadsMenuOpen(value=>!value);}}><span>03</span> Data uploads<i className="nav-chevron">{uploadsMenuOpen?'⌄':'›'}</i></button>
-            {uploadsMenuOpen&&<div className="nav-children"><button className={`nav-sub-item ${view==='uploads'?'active':''}`} onClick={()=>goTo('uploads')}><span>P</span>Performance data</button><button className={`nav-sub-item ${view==='maintenance-uploads'?'active':''}`} onClick={()=>goTo('maintenance-uploads')}><span>M</span>Maintenance data</button></div>}
+          <div className={`nav-group ${view==='uploads'||view==='maintenance-uploads'||view==='manage-analyses'?'active':''}`}>
+            <button className="nav-item nav-parent" aria-expanded={uploadsMenuOpen} onClick={()=>{if(sidebarCollapsed){setSidebarCollapsed(false);setUploadsMenuOpen(true);}else setUploadsMenuOpen(value=>!value);}}><span>03</span> Data management<i className="nav-chevron">{uploadsMenuOpen?'⌄':'›'}</i></button>
+            {uploadsMenuOpen&&<div className="nav-children"><button className={`nav-sub-item ${view==='uploads'?'active':''}`} onClick={()=>goTo('uploads')}><span>P</span>Performance data</button><button className={`nav-sub-item ${view==='maintenance-uploads'?'active':''}`} onClick={()=>goTo('maintenance-uploads')}><span>M</span>Maintenance data</button><button className={`nav-sub-item ${view==='manage-analyses'?'active':''}`} onClick={()=>goTo('manage-analyses')}><span>A</span>Manage Analyses</button></div>}
           </div>
           <div
             className={`nav-group ${view === "array" || view === "settings" ? "active" : ""}`}
@@ -1559,19 +1576,26 @@ export default function Home() {
                     ))}
                   </select>
                 </label>
-                {performance?.hasData && <button className="secondary-btn" disabled={Boolean(analysisAction)||!!selectedRunId} onClick={() => void reanalyze()}>Reanalyze current history</button>}
+                {(performance?.hasData || performance?.analysisRequired || performance?.publicationSkipped) && <button className="secondary-btn" disabled={Boolean(analysisAction)||analysisInProgress||!!selectedRunId} onClick={() => void reanalyze()}>{performance.hasData ? "Reanalyze current data" : "Run analysis"}</button>}
                 <button className="primary-btn" onClick={() => goTo("uploads")}>
                   Import performance data <span>↗</span>
                 </button>
               </div>
             </header>
-            {(performance?.analysis.thresholdExcludedLossKwh || 0) > 0 && <div className="status-strip analysis-period-note" role="status"><strong>Full analysis period (all issue types):</strong> {formatKwh(performance!.analysis.unfilteredTotalLossKwh ?? performance!.analysis.totalLossKwh)}; {formatKwh(performance!.analysis.thresholdExcludedLossKwh!)} excluded by your issue threshold.</div>}
-            <AnalysisHistory siteId={activeSiteId} runId={selectedRunId} onChange={runId=>setAnalysisSelection({siteId:activeSiteId,runId})} revision={analysisRunId}/>
+            {(performance?.analysis.thresholdExcludedLossKwh || 0) > 0 && <div className="status-strip analysis-period-note" role="status"><strong>Full saved analysis (all issue types and freshness statuses; context only):</strong> {formatKwh(performance!.analysis.unfilteredTotalLossKwh ?? performance!.analysis.totalLossKwh)}; {formatKwh(performance!.analysis.thresholdExcludedLossKwh!)} excluded by your issue threshold.</div>}
+
             <ReportingPeriod range={reportRange} onChange={setReportRange} timezone={reportTimezone} />
+            {performance?.hasData && !selectedRunId && performance.lastAttempt && ["canceled", "failed", "interrupted"].includes(performance.lastAttempt.status) && <div className="analysis-selection-note" role="status">
+              <strong>Latest analysis {performance.lastAttempt.status}</strong>
+              <p>The previous published analysis is still shown. Its findings and review history have not been replaced.</p>
+              {performance.lastAttempt.error && <p>{performance.lastAttempt.error}</p>}
+              <button className="secondary-btn" disabled={Boolean(analysisAction)} onClick={() => void controlAnalysis("retry")}>Retry analysis</button>
+              {analysisControlError && <p role="alert">{analysisControlError}</p>}
+            </div>}
             {visibility.inverterUnderperformance && performance?.hasData && performance.analysis.inverterExpectation && <div className="status-strip analysis-period-note" role="status"><strong>Inverter baseline:</strong> {performance.analysis.inverterExpectation.message}</div>}
             {visibility.inverterUnderperformance && performance?.hasData && performance.analysis.peerComparison?.referenceQualification && <div className="status-strip analysis-period-note" role="status"><strong>Optional peer evidence:</strong> {performance.analysis.peerComparison.referenceQualification.message}</div>}
             {reviewControls}
-            <ReviewWorkbench showRecurring={visibility.inverterUnderperformance} key={`${activeSiteId}:${analysisRunId}`} siteId={activeSiteId} runId={analysisRunId} visible={visibleIssues} originals={issues} episodes={recurringIssues} reviews={reviews} selected={selectedFindings} onSelect={selectFindings} onReplace={selectInverterGroup} filterScope={JSON.stringify([filters,reportRange,reviewFilter,visibility])} onClear={()=>setSelectedFindings([])} onUpdated={savedBulkReviews} onReview={openReview} readOnly={!!selectedRunId||!reviewsReady} maintenance={maintenance}/>
+            <ReviewWorkbench showRecurring={visibility.inverterUnderperformance} key={`${activeSiteId}:${analysisRunId}`} siteId={activeSiteId} runId={analysisRunId} visible={visibleIssues} originals={issues} episodes={freshnessMatches?recurringIssues:[]} reviews={reviews} selected={selectedFindings} onSelect={selectFindings} onReplace={selectInverterGroup} filterScope={JSON.stringify([filters,reportRange,reviewFilter,visibility,freshnessFilter])} onClear={()=>setSelectedFindings([])} onUpdated={savedBulkReviews} onReview={openReview} readOnly={!!selectedRunId||!reviewsReady} maintenance={maintenance}/>
             {(reportRange.from || reportRange.through) && reportIssues.some(issue => issue.reportClipped && issue.estimatedLossKwh === null) && <p role="status">Some overlapping issues lack reliable interval loss evidence. Their loss within this reporting period is shown as Unknown; reanalyze the latest upload to refresh the evidence.</p>}
             <div
               className={`status-strip ${performance?.hasData ? "" : "empty"}`}
@@ -1602,7 +1626,7 @@ export default function Home() {
                   <span>{reviewFilter==="All findings"||reviewFilter==="Dismissed"?"DETECTED FINDINGS (AUDIT)":"REPORTED FINDINGS"}</span>
                 </div>
                 <strong>
-                  {performance?.hasData ? visibleIssueMetrics.count : "—"}
+                  {performance?.hasData&&reportingReady ? visibleIssueMetrics.count : "—"}
                 </strong>
                 <p>
                   {performance?.hasData
@@ -1615,7 +1639,7 @@ export default function Home() {
                   <span>{reviewFilter==="All findings"||reviewFilter==="Dismissed"?"DETECTED ENERGY LOSS (AUDIT)":"REPORTED ENERGY LOSS"}</span>
                 </div>
                 <strong>
-                  {performance?.hasData && reviewsReady
+                  {performance?.hasData && reportingReady
                     ? formatEnergy(visibleIssueMetrics.lossKwh)
                     : "—"}
                 </strong>
@@ -1630,7 +1654,7 @@ export default function Home() {
                   <span>AFFECTED DAYS</span>
                 </div>
                 <strong>
-                  {performance?.hasData
+                  {performance?.hasData&&reportingReady
                     ? visibleIssueMetrics.affectedDays
                     : "—"}
                 </strong>
@@ -1649,7 +1673,7 @@ export default function Home() {
               <div className="panel-head issue-panel-head">
                 <div>
                   <p className="eyebrow">PRIORITIZED FINDINGS</p>
-                  <h2 id="issues-heading">Performance issues</h2>
+                  <h2 id="issues-heading">Findings</h2>
                   <p className="table-help">
                     Use any combination of filters. Drag the <b>⋮⋮</b> handle to
                     reposition a column. On touchscreens, use the column order controls. Swipe tables to see all fields.
@@ -1668,8 +1692,8 @@ export default function Home() {
                   <button
                     className="secondary-btn export-btn"
                     onClick={exportIssuesXlsx}
-                    disabled={!performance?.hasData||!reviewsReady}
-                    title="Export the currently visible performance issues in the displayed column order"
+                    disabled={!performance?.hasData||!reviewsReady||!freshnessReady}
+                    title="Export the currently visible findings in the displayed column order"
                   >
                     Export XLSX <b aria-hidden="true">↓</b>
                   </button>
@@ -1703,12 +1727,13 @@ export default function Home() {
                   </div>
                   <small>{analysisState.percent}% complete{analysisState.total > 0 && ["read", "equipment", "save"].includes(analysisState.stage)
                     ? ` · ${analysisState.completed.toLocaleString()} of ${analysisState.total.toLocaleString()} ${analysisState.stage === "read" ? "rows" : analysisState.stage === "equipment" ? "equipment items" : "issue records"}` : ""}</small>
+                  {!selectedRunId && performance?.analysisRequired && ["canceled", "failed", "interrupted"].includes(analysisState.status) && <p>Run analysis starts a new analysis of the current data and model. Retry analysis uses the original saved data and model.</p>}
                   <div className="analysis-actions">
                     {["processing", "canceling"].includes(analysisState.status) && <button className="secondary-btn"
                       disabled={Boolean(analysisAction) || analysisState.status === "canceling"}
                       onClick={() => void controlAnalysis("cancel")}>{analysisAction === "cancel" || analysisState.status === "canceling" ? "Canceling…" : "Cancel analysis"}</button>}
                     {["canceled", "failed", "interrupted"].includes(analysisState.status) && <button className="secondary-btn"
-                      disabled={Boolean(analysisAction)} onClick={() => void controlAnalysis("retry")}>Retry analysis</button>}
+                      disabled={Boolean(analysisAction)||!!selectedRunId} onClick={() => void controlAnalysis("retry")}>Retry analysis</button>}
                     {performance?.error && analysisState.status === "processing" && <button className="secondary-btn"
                       onClick={() => setPerformanceRevision(value => value + 1)}>Resume analysis</button>}
                   </div>
@@ -1732,13 +1757,14 @@ export default function Home() {
               ) : !performance.hasData ? (
                 <div className="performance-empty">
                   <span>↥</span>
-                  <strong>{performance.error ? "Analysis could not complete" : "Import performance data to begin"}</strong>
+                  <strong>{performance.error ? "Analysis could not complete" : performance.publicationSkipped ? "Analysis saved in history" : performance.analysisRequired ? "Performance data is ready to analyze" : "Import performance data to begin"}</strong>
                   <p>
                     {performance.error ||
                       performance.reason ||
                       "Map energy or power signals to array-model equipment so the site can identify anomalies and quantify losses."}
                   </p>
                   {performance.error && <button className="secondary-btn empty-action" onClick={() => setPerformanceRevision(value => value + 1)}>Retry loading analysis</button>}
+                  {performance.publicationSkipped && performance.runId && <button className="secondary-btn empty-action" onClick={() => selectAnalysis(performance.runId!)}>View saved analysis</button>}
                   <button
                     className="secondary-btn empty-action"
                     onClick={() => goTo("uploads")}
@@ -1785,24 +1811,26 @@ export default function Home() {
                     </button>
                   )}
                 </div>
+              ) : !freshnessReady ? (
+                <div className="performance-empty compact" role="status"><strong>Assessing data freshness…</strong><p>This filtered view and its exports will be available after the selected analysis is assessed.</p></div>
               ) : !visibleIssues.length ? (
                 <div className="performance-empty compact">
                   <span>○</span>
                   <strong>{reviewsReady?"No matching issues":"Loading analyst reviews"}</strong>
                   <p>
-                    {reviewsReady?"Adjust issue visibility, the reporting period, analyst review filter, or column filters to see other findings. Dismissed findings remain available in the audit view.":"Reported losses will appear after saved preferences and analyst decisions are loaded."}
+                    {reviewsReady?"Adjust data freshness, issue visibility, the reporting period, analyst review filter, or column filters to see other findings. Dismissed findings remain available in the audit view.":"Reported losses will appear after saved preferences and analyst decisions are loaded."}
                   </p>
                   {reviewsReady&&reviewFilter!=="All findings"&&<button className="secondary-btn empty-action" onClick={()=>setReviewFilter("All findings")}>View all findings (audit)</button>}
                   {hiddenTypeCount>0&&<button className="secondary-btn empty-action" onClick={()=>goTo('issue-visibility')}>Manage issue visibility</button>}
                   <button
                     className="secondary-btn empty-action"
-                    onClick={() => { clearFilters(); setReportRange({ from: "", through: "" }); }}
+                    onClick={() => { clearFilters(); changeFreshness('all'); setReportRange({ from: "", through: "" }); }}
                   >
                     Clear report and filters
                   </button>
                 </div>
               ) : (
-                <div className="table-wrap issue-table-wrap" role="region" aria-label="Performance issues, scroll horizontally for more columns" tabIndex={0}>
+                <div className="table-wrap issue-table-wrap" role="region" aria-label="Findings, scroll horizontally for more columns" tabIndex={0}>
                   <table className="issue-table">
                     <thead>
                       <tr className="sort-row">
@@ -1897,7 +1925,7 @@ export default function Home() {
           </>
         ) : view === "timeline" ? (
           <IssueTimeline
-            key={activeSiteId}
+            key={`${activeSiteId}:${analysisRunId}:${freshnessFilter}`}
             siteId={activeSiteId}
             sites={managedSites}
             onSiteChange={setActiveSiteId}
@@ -1911,6 +1939,7 @@ export default function Home() {
           />
         ) : view === "summaries" ? (
           <IssueSummaries
+            key={`${activeSiteId}:${analysisRunId}:${freshnessFilter}`}
             reportContext={reportContext}
             issues={reportIssues}
             reportRange={reportRange}
@@ -1934,6 +1963,8 @@ export default function Home() {
               setPerformanceRevision((value) => value + 1);
             }}
           />
+        ) : view === "manage-analyses" ? (
+          <ManageAnalyses sites={managedSites} siteId={activeSiteId} runId={selectedRunId} revision={`${analysisRunId}:${performanceRevision}`} onSiteChange={siteId=>{setActiveSiteId(siteId);setPerformance(null);}} onChange={selectAnalysis} onFindings={()=>goTo('issues')}/>
         ) : view === "maintenance-uploads" ? (
           <MaintenanceUploads sites={managedSites} notify={notify} onImported={()=>setMaintenanceRevision(value=>value+1)} onTimeline={siteId=>{setActiveSiteId(siteId);goTo('timeline');}}/>
         ) : view === "uploads" ? (
@@ -1973,7 +2004,7 @@ export default function Home() {
                   className="secondary-btn"
                   onClick={() => goTo("issues")}
                 >
-                  ← Back to issues
+                  ← Back to Findings
                 </button>
               </div>
             </header>
@@ -2133,7 +2164,7 @@ export default function Home() {
                   className="secondary-btn"
                   onClick={() => goTo("issues")}
                 >
-                  ← Back to issues
+                  ← Back to Findings
                 </button>
               </div>
             </header>

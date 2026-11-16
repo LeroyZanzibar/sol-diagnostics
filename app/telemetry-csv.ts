@@ -50,8 +50,8 @@ type TimestampProfile = {
   medianGap: number;
 };
 const timestampProfiles = new WeakMap<string[][], TimestampProfile>();
-function timestampProfile(headers: string[], rows: string[][], mapping: Mapping, timezone = "UTC", signals: SignalMapping[] = []): TimestampProfile {
-  const cadenceKey = JSON.stringify([mapping, signals.map(signal => [signal.column, signal.equipmentId, signal.measurement])]);
+function timestampProfile(headers: string[], rows: string[][], mapping: Mapping, timezone = "UTC", signals: SignalMapping[] = [], knownIntervalMinutes?: number): TimestampProfile {
+  const cadenceKey = JSON.stringify([mapping, signals.map(signal => [signal.column, signal.equipmentId, signal.measurement]), knownIntervalMinutes]);
   const previous = timestampProfiles.get(rows);
   if (previous?.column === mapping.timestamp && previous.timezone === timezone && previous.cadenceKey === cadenceKey) return previous;
   const timestampIndex = headers.indexOf(mapping.timestamp);
@@ -91,7 +91,7 @@ function timestampProfile(headers: string[], rows: string[][], mapping: Mapping,
   const gaps = cadenceSorted.slice(1).map((value, index) => value - cadenceSorted[index]);
   const frequencies = new Map<number, number>();
   gaps.forEach(gap => { frequencies.set(gap, (frequencies.get(gap) || 0) + 1); });
-  const cadenceMs = [...frequencies.entries()].sort((a,b) => b[1]-a[1] || a[0]-b[0])[0]?.[0] || 0;
+  const cadenceMs = Number.isFinite(knownIntervalMinutes) && knownIntervalMinutes! > 0 ? knownIntervalMinutes! * 60000 : [...frequencies.entries()].sort((a,b) => b[1]-a[1] || a[0]-b[0])[0]?.[0] || 0;
   const inconsistent = gaps.filter(gap => gap < cadenceMs - 1 || Math.abs(gap - Math.round(gap / cadenceMs) * cadenceMs) > 1).length;
   const consistent = gaps.length - inconsistent;
   const consistency = gaps.length ? consistent / gaps.length : 0;
@@ -102,10 +102,10 @@ function timestampProfile(headers: string[], rows: string[][], mapping: Mapping,
   timestampProfiles.set(rows, profile);
   return profile;
 }
-function intervalProfile(headers: string[], rows: string[][], mapping: Mapping, timezone = "UTC", signals: SignalMapping[] = []) {
-  return timestampProfile(headers, rows, mapping, timezone, signals).interval;
+function intervalProfile(headers: string[], rows: string[][], mapping: Mapping, timezone = "UTC", signals: SignalMapping[] = [], knownIntervalMinutes?: number) {
+  return timestampProfile(headers, rows, mapping, timezone, signals, knownIntervalMinutes).interval;
 }
-export function capacityValidation(headers:string[],rows:string[][],mapping:Mapping,signalMappings:SignalMapping[],equipment:EquipmentAsset[],timezone = "UTC") {
+export function capacityValidation(headers:string[],rows:string[][],mapping:Mapping,signalMappings:SignalMapping[],equipment:EquipmentAsset[],timezone = "UTC",knownIntervalMinutes?:number) {
   const capacityModel=arrayCapacityModel(equipment);
   const exportCapacityKw=gridExportCapacityKw(equipment);
   const meter=equipment.find(item=>item.type==="revenue_meter");
@@ -138,7 +138,7 @@ export function capacityValidation(headers:string[],rows:string[][],mapping:Mapp
       });
     }
   }
-  const interval=intervalProfile(headers,rows,mapping,timezone,signalMappings);
+  const interval=intervalProfile(headers,rows,mapping,timezone,signalMappings,knownIntervalMinutes);
   const useIntervalEnergy=!activePowerReadings.length&&intervalEnergyReadingsKwh.length>0&&interval.reliable;
   const readings=useIntervalEnergy?intervalEnergyReadingsKwh.map(value=>value/(interval.minutes/60)):activePowerReadings;
   const capacityCheckSource:Validation["capacityCheckSource"]=activePowerReadings.length?"active_power":useIntervalEnergy?"interval_energy":"";
@@ -202,12 +202,12 @@ export function detectTypes(headers: string[], rows: string[][], mapping: Mappin
   return detected;
 }
 
-export function calculateValidation(headers: string[], rows: string[][], mapping: Mapping, signalMappings:SignalMapping[], timezone = "UTC", timestampConvention: TimestampConvention = "start"): BaseValidation {
+export function calculateValidation(headers: string[], rows: string[][], mapping: Mapping, signalMappings:SignalMapping[], timezone = "UTC", timestampConvention: TimestampConvention = "start", knownIntervalMinutes?: number): BaseValidation {
   const timestampIndex = headers.indexOf(mapping.timestamp);
   const equipmentIndex = headers.indexOf(mapping.equipment);
   const valueIndex = headers.indexOf(mapping.value);
   const signalColumns = signalMappings.filter(item=>item.equipmentId).map(item=>item.column);
-  const profile = timestampProfile(headers, rows, mapping, timezone,signalMappings);
+  const profile = timestampProfile(headers, rows, mapping, timezone,signalMappings,knownIntervalMinutes);
   const signalIndexes = signalColumns.map(header => headers.indexOf(header));
   const dates = profile.sorted, keys = new Set<string>();
   let invalidTimestamps = 0, missingValues = 0, duplicateTimestamps = 0, validRows = 0;

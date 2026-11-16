@@ -37,3 +37,33 @@ test('chunked uploads enforce their declared byte length',async()=>{
   const stream=new LocalFixedLengthStream(3);const write=new Blob(['abc']).stream().pipeTo(stream.writable);assert.equal(await new Response(stream.readable).text(),'abc');await write;
   const bad=new LocalFixedLengthStream(4);const result=new Response(bad.readable).text();const writing=new Blob(['abc']).stream().pipeTo(bad.writable);const settled=await Promise.allSettled([result,writing]);assert.ok(settled.every(r=>r.status==='rejected'));
 });
+
+test('synchronous shared snapshot blocks same-connection and independent model writers until callback returns',async t=>{
+ const {db,root}=fixture(t);await db.prepare("INSERT INTO site_settings(id,name) VALUES ('a','Before')").run();
+ const other=new LocalDatabase(join(root,'db.sqlite'),resolve('drizzle'));t.after(()=>other.close());other.sqlite.exec('PRAGMA busy_timeout=1');
+ let ran=false,queued,reader;
+ const result=db.withSynchronousRead(read=>{
+  reader=read;assert.equal(read.first('SELECT name FROM site_settings WHERE id=?','a').name,'Before');
+  assert.equal(read.all('SELECT id FROM site_settings').length,1);
+  queued=Promise.resolve().then(async()=>{ran=true;await db.batch([db.prepare("UPDATE site_settings SET name='Queued' WHERE id='a'")]);});
+  assert.throws(()=>db.sqlite.prepare("UPDATE site_settings SET name='Reentrant' WHERE id='a'").run(),/readonly/i);
+  assert.throws(()=>read.all("UPDATE site_settings SET name='Not a read' RETURNING id"),/readonly/i);
+  assert.throws(()=>other.sqlite.prepare("UPDATE site_settings SET name='Other connection' WHERE id='a'").run(),/locked/i);
+  assert.equal(ran,false);assert.equal(read.first('SELECT name FROM site_settings WHERE id=?','a').name,'Before');
+  return 17;
+ });
+ assert.equal(result,17);assert.equal(ran,false);assert.throws(()=>reader.first('SELECT 1'),/active|closed/i);
+ await queued;assert.equal((await db.prepare("SELECT name FROM site_settings WHERE id='a'").first()).name,'Queued');
+ await other.prepare("UPDATE site_settings SET name='After guard' WHERE id='a'").run();
+ assert.equal((await db.prepare("SELECT name FROM site_settings WHERE id='a'").first()).name,'After guard');
+});
+test('synchronous shared snapshot refuses async callbacks, releases failed guards and revokes escaped readers',async t=>{
+ const {db}=fixture(t);let entered=false,reader;
+ assert.throws(()=>db.withSynchronousRead(async()=>{entered=true;}),/synchronous/i);assert.equal(entered,false);
+ assert.throws(()=>db.withSynchronousRead(read=>{reader=read;throw Error('injected');}),/injected/);
+ assert.throws(()=>reader.all('SELECT 1'),/active|closed/i);
+ assert.throws(()=>db.withSynchronousRead(()=>Promise.resolve(1)),/synchronous/i);
+ assert.throws(()=>db.withSynchronousRead(()=>db.withSynchronousRead(()=>1)),/active|nested|transaction/i);
+ await db.prepare("INSERT INTO site_settings(id,name) VALUES ('after','After failures')").run();
+ assert.equal(db.withSynchronousRead(read=>read.first("SELECT name FROM site_settings WHERE id='after'").name),'After failures');
+});

@@ -1,8 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { drizzle } from "drizzle-orm/d1";
+import { eq, desc, sql } from "drizzle-orm";
+import * as sqliteCore from "drizzle-orm/sqlite-core";
+import { LocalDatabase, LocalBucket } from "../selfhost/storage.mjs";
+import { PerformanceStoreManager } from "../selfhost/performance-store.mjs";
 import { loadSource , modelCapacityBindings} from "./source-module.mjs";
+import { versionedStore, performanceBindings } from './performance-analysis-fixture.mjs';
 
 const checkpointStorage = loadSource("app/api/performance-summary/checkpoint-storage.ts");
 const storedData = async object => JSON.parse(JSON.stringify(await checkpointStorage.readCheckpoint({...object,body:new Response(object.text).body,json:async()=>JSON.parse(object.text)})));
@@ -94,12 +101,27 @@ test("publication and cancellation are atomic; partial results never replace sav
   }
 });
 
+test('revision publication guard runs synchronously at transaction entry and retains a completed stale run', async()=>{
+  const db=database(),{job,token}=await start(db);
+  db.sqlite.prepare("INSERT INTO performance_summaries VALUES (?, ?, ?, ?)").run('newer','site','newer-pointer','today');
+  db.sqlite.prepare("INSERT INTO analysis_runs (id,site_id,import_id,parser_version,model_revision,status,analysis_object_key) VALUES (?, 'site','import',28,'model','processing','')").run(job.attempt_id);
+  let revision=1,checks=0,atBatch=false;
+  const batch=db.batch.bind(db);
+  db.batch=items=>{atBatch=true;assert.equal(checks,1);assert.equal(revision,2);return batch(items);};
+  revision=2;
+  const result=await jobs.publishJob(db,job,token,'old-pointer','immutable-result',7,()=>{assert.equal(atBatch,false);checks++;queueMicrotask(()=>{assert.equal(atBatch,true,'no await may separate revision guard from transaction start');});return revision===1;});
+  assert.equal(result.published,false);
+  assert.equal(db.sqlite.prepare('SELECT summary FROM performance_summaries').get().summary,'newer-pointer');
+  assert.equal(db.sqlite.prepare('SELECT status FROM analysis_runs WHERE id=?').get(job.attempt_id).status,'completed');
+  assert.equal((await jobs.readJob(db,job.id)).status,'completed');
+});
+
 // Integration: use the real CSV parser, detector, persistence, leases and result
 // publication across multiple HTTP requests, with SQLite/R2 test adapters.
-export async function analysisApi(csvText, equipment, record, manifest = null) {
-  const db = database(); const objects = new Map([[record.objectKey, { text: csvText }]]);
+export async function analysisApi(csvText, equipment, record, manifest = null, store = null, adapters = {}) {
+  const db = adapters.db || database(); const objects = new Map([[record.objectKey, { text: csvText }]]);
   const io = { gets: [], puts: [], deletes: [] };
-  const bucket = {
+  const bucket = adapters.bucket || {
     async head(key) { const o = objects.get(key); return o ? { ...o, etag: key } : null; },
     async get(key) { io.gets.push(key); const o = objects.get(key); return o ? { ...o, etag: key, body: new Response(o.text).body,
       text: async () => o.text, json: async () => JSON.parse(o.text) } : null; },
@@ -113,14 +135,317 @@ export async function analysisApi(csvText, equipment, record, manifest = null) {
   } }; } };
   const persistence = loadSource("app/api/performance-summary/persistence.ts", [], errors);
   const history = loadSource("app/data-history.ts", [], {...time,...loadSource("app/csv-stream.ts")});
+  const performanceData = loadSource('app/api/performance-data/analysis.ts',[],performanceBindings(store));
   const api = loadSource("app/api/performance-summary/route.ts", ["buildSummary", "buildAnalysis", "alignWithArrayModel"], {...modelCapacityBindings(),...({
-    ...loadSource("app/api/performance-summary/checkpoint-storage.ts"), ...history, readManifest:async()=>manifest, ...errors, ...jobs, ...persistence, ...loadSource("app/issue-review.ts"), ...loadSource("app/api/performance-summary/analysis-storage.ts"), currentAnalysisInput:async()=>record, getDatabaseBinding: () => db, getBucketBinding: () => bucket, getDb: () => orm,
+    ...performanceData, ...loadSource("app/api/performance-summary/checkpoint-storage.ts"), ...history, readManifest:async()=>manifest, ...errors, ...jobs, ...persistence, ...loadSource("app/issue-review.ts"), ...loadSource("app/api/performance-summary/analysis-storage.ts"), currentAnalysisInput:async()=>store ? performanceData.performanceAnalysisInput(record.siteId) : record, getDatabaseBinding: () => db, getBucketBinding: () => bucket, getDb: () => orm,
     ...causes, monthlyLosses: loadSource("app/issue-periods.ts", [], time).monthlyLosses,
-    siteSettings: "sites", equipmentAssets: "equipment", telemetryImports: "imports", performanceSummaries: "pointers", eq() {}, desc() {},
+    siteSettings: "sites", equipmentAssets: "equipment", telemetryImports: "imports", performanceSummaries: "pointers", eq() {}, desc() {}, ...adapters.bindings,
   })});
-  const request = () => api.GET(new Request(`https://test/api/performance-summary?siteId=${record.siteId}`));
-  return { db, objects, api, request, io };
+  let requested = false;
+  const request = () => {
+    if (!requested) { requested=true; return api.POST(new Request('https://test/api/performance-summary',{method:'POST',body:JSON.stringify({siteId:record.siteId,action:'reanalyze'})})); }
+    return api.GET(new Request(`https://test/api/performance-summary?siteId=${record.siteId}`));
+  };
+  return { db, objects, api, request, io, bucket, performanceData };
 }
+
+async function canonicalFixture(t) {
+  const equipment=[{id:'meter',name:'Meter',type:'revenue_meter',externalId:'meter',aliases:'[]'},
+    {id:'inv',name:'Inverter',type:'inverter',parentId:'meter',externalId:'inv',acRatedCapacityKw:'100',aliases:'[]'},
+    {id:'modules',name:'Modules',type:'module_group',parentId:'inv',externalId:'modules',moduleRatedCapacityW:'400',quantity:250,aliases:'[]'}];
+  const rows=[];
+  for(const hour of [10,11,12,13])for(const [id,measurement,value,unit] of [['meter','Energy',hour===11?0:40,'kWh'],['inv','Energy',hour===11?0:40,'kWh'],['meter','POA irradiance',600,'W/m2'],['@site','Expected Production',40,'kWh']])rows.push({timestamp:`2026-06-01T${hour}:00:00.000Z`,channel:{id:JSON.stringify([id,measurement]),equipmentId:id,measurement,unit},value});
+  let store=versionedStore(rows),adapters={},commit;
+  if(t) {
+    const root=mkdtempSync(join(process.env.TMPDIR||'/opt/data/cache/scratch','publication-'));
+    const db=new LocalDatabase(join(root,'shared.sqlite'),'drizzle'),bucket=new LocalBucket(db,join(root,'objects'));
+    const manager=new PerformanceStoreManager(join(root,'performance'));
+    t.after(()=>{manager.close();db.close();rmSync(root,{recursive:true,force:true});});
+    const schema=loadSource('db/schema.ts',[],{sql,...sqliteCore}),orm=drizzle(db);
+    await orm.insert(schema.siteSettings).values({id:'site',name:'Synthetic publication test'});
+    await orm.insert(schema.equipmentAssets).values(equipment.map(asset=>({...asset,siteId:'site'})));
+    store=manager.site('site');
+    commit=async readings=>{
+      const preview=await store.stage({source:'csv',fileName:'synthetic.csv',timezone:'UTC',intervalMinutes:60,modelRevision:'fixture'},readings);
+      return store.commit(preview.stageId,{previewToken:preview.previewToken,approveOverlap:true,modelRevision:'fixture',actor:'test'});
+    };
+    await commit(rows);
+    adapters={db,bucket,bindings:{...schema,eq,desc,getDb:()=>orm}};
+  }
+  const data=loadSource('app/api/performance-data/analysis.ts',[],performanceBindings(store)),record=data.performanceAnalysisInput('site');
+  return {...await analysisApi('',equipment,record,null,store,adapters),store,data,record,equipment,rows,commit};
+}
+async function finish(f) {
+  let result;
+  for(let i=0;i<16;i++){const response=await f.request();result=await response.json();assert.ok(response.ok,JSON.stringify(result));if(response.status!==202)return result;}
+  assert.fail(`Analysis did not settle: ${JSON.stringify(result)}`);
+}
+
+const browse = (f,query='') => f.api.GET(new Request(`https://test/api/performance-summary?siteId=site${query}`));
+const control = (f,action,attemptId) => f.api.POST(new Request('https://test/api/performance-summary',{
+  method:'POST',body:JSON.stringify({siteId:'site',action,attemptId}),
+}));
+async function terminalize(f,attemptId,status) {
+  const active=await browse(f),progress=await active.json();
+  assert.equal(active.status,202,JSON.stringify(progress));
+  assert.equal(progress.progress.attemptId,attemptId);
+  assert.equal(progress.progress.stage,'equipment');
+  if(status==='canceled') return control(f,'cancel',attemptId);
+  if(status==='failed') {
+    const get=f.bucket.get.bind(f.bucket);
+    f.bucket.get=async key=>{if(key.endsWith(`/${attemptId}/summary.json`))throw new Error('Injected retained checkpoint read failure');return get(key);};
+    try{return await browse(f);}finally{f.bucket.get=get;}
+  }
+  const job=f.db.sqlite.prepare('SELECT * FROM analysis_jobs WHERE attempt_id=?').get(attemptId);
+  assert.ok(await jobs.claimJob(f.db,job));
+  f.db.sqlite.prepare('UPDATE analysis_jobs SET lease_until=1 WHERE attempt_id=?').run(attemptId);
+  return browse(f);
+}
+function publicationClients(f) {
+  const review=loadSource('app/issue-review.ts');
+  const bindings={...f.data,...review,...checkpointStorage,getDatabaseBinding:()=>f.db,getBucketBinding:()=>f.bucket};
+  const saved=loadSource('app/api/analysis-history/service.ts',[],bindings);
+  const service=loadSource('app/api/issue-reviews/service.ts',[],{...bindings,...saved});
+  const reviews=loadSource('app/api/issue-reviews/route.ts',[],{...bindings,...saved,...service,blankReview:review.blankReview});
+  return {saved,reviews};
+}
+async function retainedSnapshot(f,runId) {
+  const bytes=async name=>Buffer.from(await(await f.bucket.get(`analysis/site/jobs/${runId}/${name}.json`)).arrayBuffer());
+  return {
+    result:await bytes('result'),index:await bytes('review-index'),
+    pointer:f.db.sqlite.prepare('SELECT * FROM performance_summaries').all(),
+    run:f.db.sqlite.prepare('SELECT * FROM analysis_runs WHERE id=?').get(runId),
+    occurrences:f.db.sqlite.prepare('SELECT * FROM performance_issue_occurrences WHERE analysis_run_id=? ORDER BY id').all(runId),
+    reviews:f.db.sqlite.prepare('SELECT * FROM issue_event_reviews ORDER BY id').all(),
+    audit:f.db.sqlite.prepare('SELECT * FROM issue_review_changes ORDER BY id').all(),
+  };
+}
+
+for(const status of ['canceled','failed','interrupted'])test(`published current result survives a ${status} same-input rerun with editable reviews and retry controls`,async t=>{
+  const f=await canonicalFixture(t),first=await finish(f),runId=first.issueDatabase.analysisRunId;
+  assert.equal(first.hasData,true);const issue=first.analysis.issues[0];assert.ok(issue);
+  const {saved,reviews}=publicationClients(f);
+  const reviewPath=`https://test/api/issue-reviews?siteId=site&runId=${runId}&issueId=${encodeURIComponent(issue.id)}`;
+  const initialResponse=await reviews.GET(new Request(reviewPath)),initialReview=await initialResponse.json();
+  assert.equal(initialResponse.status,200,JSON.stringify(initialReview));
+  const save=async(version,state,note)=>{
+    const response=await reviews.POST(new Request('https://test/api/issue-reviews',{method:'POST',body:JSON.stringify({siteId:'site',runId,issueId:issue.id,baseVersion:version,state,note})}));
+    const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));return result;
+  };
+  await save(0,{...initialReview.review.state,status:'Confirmed'},'Keep the published decision.');
+  const before=await retainedSnapshot(f,runId);
+  const started=await control(f,'reanalyze'),start=await started.json();assert.equal(started.status,202);
+  const attemptId=start.progress.attemptId;assert.notEqual(attemptId,runId);
+  const stopped=await terminalize(f,attemptId,status),stoppedData=await stopped.json();
+  assert.equal(stopped.status,200,JSON.stringify(stoppedData));
+  // A failed/expired GET itself restores the published view; cancellation POST
+  // remains an attempt-control response, and the next browse restores it.
+  if(status!=='canceled')assert.equal(stoppedData.hasData,true,JSON.stringify(stoppedData));
+  const job=await jobs.readJob(f.db,f.db.sqlite.prepare('SELECT id FROM analysis_jobs WHERE attempt_id=?').get(attemptId).id);
+  assert.equal(job.status,status);
+  const jobRows=f.db.sqlite.prepare('SELECT * FROM analysis_jobs ORDER BY id').all();
+  for(let count=0;count<2;count++) {
+    const response=await browse(f),current=await response.json();
+    assert.equal(response.status,200);assert.equal(current.hasData,true,JSON.stringify(current));
+    assert.equal(current.processing,false);assert.equal(current.progress,undefined);assert.equal(current.analysisRequired,undefined);
+    assert.equal(current.issueDatabase.analysisRunId,runId);
+    assert.equal(current.dataFreshness.status,'current');
+    assert.deepEqual(current.analysis,first.analysis);
+    assert.deepEqual(current.lastAttempt,JSON.parse(JSON.stringify(jobs.jobProgress(job))));
+    assert.match(response.headers.get('cache-control'),/no-store/);
+  }
+  assert.deepEqual(f.db.sqlite.prepare('SELECT * FROM analysis_jobs ORDER BY id').all(),jobRows,'browsing must not create or restart work');
+  assert.deepEqual(await retainedSnapshot(f,runId),before,'browsing and terminal attempts must not rewrite publication/evidence/reviews');
+  const history=await saved.listAnalysisHistory('site');assert.equal(history.runs.find(r=>r.id===runId).is_current,true);
+  const detail=await(await browse(f,`&issueId=${encodeURIComponent(issue.id)}`)).json();assert.equal(detail.issue.eventKey,issue.eventKey);assert.ok(detail.issue.evidence);
+  for(const query of [`&progressOnly=1&attemptId=${attemptId}`,`&attemptId=${attemptId}`]) {
+    const progress=await(await browse(f,query)).json();assert.equal(progress.hasData,false);assert.equal(progress.progress.status,status);assert.equal(progress.progress.attemptId,attemptId);
+  }
+  const editable=await(await reviews.GET(new Request(reviewPath))).json();assert.equal(editable.review.state.status,'Confirmed');
+  await save(editable.review.version,{...editable.review.state,classification:'Fuse Failure'},'Still editable as the current result.');
+  const updated=await(await reviews.GET(new Request(reviewPath))).json();assert.equal(updated.review.version,2);assert.equal(updated.review.state.classification,'Fuse Failure');
+  const updatedSnapshot=await retainedSnapshot(f,runId);
+  const retry=await control(f,'retry',attemptId),retryData=await retry.json();assert.equal(retry.status,202);
+  if(status==='canceled')assert.notEqual(retryData.progress.attemptId,attemptId);
+  else {assert.equal(retryData.progress.attemptId,attemptId);assert.equal(retryData.progress.stage,'equipment');}
+  const resumed=await browse(f);assert.equal(resumed.status,202);assert.equal((await resumed.json()).processing,true);
+  const replacement=await finish(f);assert.equal(replacement.hasData,true);assert.equal(replacement.issueDatabase.analysisRunId,retryData.progress.attemptId);assert.equal(replacement.lastAttempt,undefined);
+  const after=await retainedSnapshot(f,runId);
+  for(const key of ['result','index','run','occurrences','reviews','audit'])assert.deepEqual(after[key],updatedSnapshot[key]);
+  const finalHistory=await saved.listAnalysisHistory('site');assert.equal(finalHistory.runs.find(r=>r.id===runId).is_current,false);assert.equal(finalHistory.runs.find(r=>r.id===replacement.issueDatabase.analysisRunId).is_current,true);
+});
+
+for(const change of ['revision','model'])test(`published snapshot remains current after a failed ${change} rerun until successful publication`,async t=>{
+  const f=await canonicalFixture(t),first=await finish(f),runId=first.issueDatabase.analysisRunId,before=await retainedSnapshot(f,runId);
+  if(change==='revision')await f.commit(f.rows.map(r=>r.channel.measurement==='Energy'&&r.value===40?{...r,value:30}:r));
+  else f.db.sqlite.prepare("UPDATE equipment_assets SET ac_rated_capacity_kw='110' WHERE id='inv'").run();
+  const start=await(await control(f,'reanalyze')).json(),attemptId=start.progress.attemptId;
+  await terminalize(f,attemptId,'failed');
+  const current=await(await browse(f)).json();assert.equal(current.hasData,true,JSON.stringify(current));assert.equal(current.issueDatabase.analysisRunId,runId);assert.equal(current.lastAttempt.attemptId,attemptId);assert.equal(current.lastAttempt.status,'failed');
+  assert.equal(current.dataFreshness.status,change==='revision'?'older':'current');assert.deepEqual(await retainedSnapshot(f,runId),before);
+  assert.equal((await publicationClients(f).saved.listAnalysisHistory('site')).runs.find(r=>r.id===runId).is_current,true);
+  const retry=await(await control(f,'retry',attemptId)).json();assert.equal(retry.progress.attemptId,attemptId);
+  const replacement=await finish(f);assert.equal(replacement.issueDatabase.analysisRunId,attemptId);assert.equal(replacement.lastAttempt,undefined);assert.equal(replacement.dataFreshness.status,'current');
+  assert.notEqual(f.db.sqlite.prepare('SELECT summary FROM performance_summaries').get().summary,before.pointer[0].summary);
+  const after=await retainedSnapshot(f,runId);for(const key of ['result','index','run','occurrences','reviews','audit'])assert.deepEqual(after[key],before[key]);
+});
+
+test('canceling work keeps polling; expired cancellation restores publication without requiring the stopped input checkpoint',async t=>{
+  const f=await canonicalFixture(t),first=await finish(f),runId=first.issueDatabase.analysisRunId;
+  const started=await(await control(f,'reanalyze')).json(),attemptId=started.progress.attemptId;
+  const job=f.db.sqlite.prepare('SELECT * FROM analysis_jobs WHERE attempt_id=?').get(attemptId);
+  assert.ok(await jobs.claimJob(f.db,job));
+  const cancel=await control(f,'cancel',attemptId),cancelData=await cancel.json();assert.equal(cancel.status,202);assert.equal(cancelData.progress.status,'canceling');
+  const waiting=await browse(f),waitingData=await waiting.json();assert.equal(waiting.status,202);assert.equal(waitingData.hasData,false);assert.equal(waitingData.progress.status,'canceling');assert.equal(waitingData.lastAttempt,undefined);
+  f.db.sqlite.prepare('UPDATE analysis_jobs SET lease_until=1 WHERE attempt_id=?').run(attemptId);
+  await f.bucket.delete(`analysis/site/jobs/${attemptId}/input.json`);
+  const restored=await(await browse(f)).json();assert.equal(restored.hasData,true);assert.equal(restored.issueDatabase.analysisRunId,runId);assert.equal(restored.lastAttempt.status,'canceled');assert.equal(restored.lastAttempt.stage,'read');
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM analysis_jobs').get().n,1);
+});
+
+test('a completed but unpublished rerun never displaces the published browse identity',async t=>{
+  const f=await canonicalFixture(t),first=await finish(f),runId=first.issueDatabase.analysisRunId,before=await retainedSnapshot(f,runId);
+  const started=await(await control(f,'reanalyze')).json(),attemptId=started.progress.attemptId;
+  const put=f.bucket.put.bind(f.bucket);
+  f.bucket.put=async(key,...args)=>{
+    const result=await put(key,...args);
+    if(key===`analysis/site/jobs/${attemptId}/result.json`)await f.commit(f.rows.map(r=>r.channel.measurement==='Energy'&&r.value===40?{...r,value:30}:r));
+    return result;
+  };
+  const completed=await finish(f);assert.equal(completed.publicationSkipped,true);assert.equal(completed.progress.status,'completed');
+  const current=await(await browse(f)).json();assert.equal(current.hasData,true);assert.equal(current.issueDatabase.analysisRunId,runId);assert.equal(current.lastAttempt,undefined);assert.equal(current.dataFreshness.status,'older');
+  assert.deepEqual(await retainedSnapshot(f,runId),before);
+  const historical=await(await browse(f,`&attemptId=${attemptId}`)).json();assert.equal(historical.issueDatabase.analysisRunId,attemptId);
+  const history=await publicationClients(f).saved.listAnalysisHistory('site');assert.equal(history.runs.find(r=>r.id===runId).is_current,true);assert.equal(history.runs.find(r=>r.id===attemptId).is_current,false);
+});
+
+for(const status of ['canceled','failed','interrupted'])test(`no published snapshot keeps ${status} attempt progress and offers explicit current-input analysis without creating jobs`,async t=>{
+  const f=await canonicalFixture(t),started=await(await f.request()).json(),attemptId=started.progress.attemptId;
+  await terminalize(f,attemptId,status);
+  const rows=f.db.sqlite.prepare('SELECT * FROM analysis_jobs ORDER BY id').all();
+  for(let count=0;count<2;count++) {
+    const response=await browse(f),result=await response.json();assert.equal(response.status,200);assert.equal(result.hasData,false);assert.equal(result.processing,false);assert.equal(result.progress.status,status);assert.equal(result.progress.attemptId,attemptId);assert.equal(result.lastAttempt,undefined);
+    assert.equal(result.analysisRequired,true);assert.match(response.headers.get('cache-control'),/no-store/);
+  }
+  for(const query of [`&attemptId=${attemptId}`,`&progressOnly=1&attemptId=${attemptId}`]) {
+    const result=await(await browse(f,query)).json();assert.equal(result.progress.attemptId,attemptId);assert.equal(result.progress.status,status);assert.equal(result.analysisRequired,undefined,'Explicit checkpoint/progress reads must not offer analysis of different current inputs');
+  }
+  assert.deepEqual(f.db.sqlite.prepare('SELECT * FROM analysis_jobs ORDER BY id').all(),rows);
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM performance_summaries').get().n,0);
+});
+
+for(const status of ['canceled','failed','interrupted'])test(`a ${status} first attempt cannot advertise fresh analysis when the current input is unavailable`,async t=>{
+  const f=await canonicalFixture(t),started=await(await f.request()).json();
+  await terminalize(f,started.progress.attemptId,status);
+  const before=f.db.sqlite.prepare('SELECT * FROM analysis_jobs ORDER BY id').all();
+  // Simulate current-input discovery finding no available source. The stopped
+  // attempt and its checkpoint remain intact in the real shared DB/bucket.
+  const missing=await analysisApi('',f.equipment,f.record,null,f.store,{db:f.db,bucket:f.bucket,bindings:{currentAnalysisInput:async()=>undefined}});
+  const response=await browse(missing),result=await response.json();assert.equal(response.status,200);assert.equal(result.hasData,false);assert.equal(result.analysisRequired,undefined);assert.match(result.reason,/No telemetry import/);
+  assert.deepEqual(f.db.sqlite.prepare('SELECT * FROM analysis_jobs ORDER BY id').all(),before);
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM performance_summaries').get().n,0);
+});
+
+for(const status of ['processing','canceling'])test(`active first ${status} analysis does not advertise a competing fresh start`,async t=>{
+  const f=await canonicalFixture(t),started=await(await f.request()).json();
+  if(status==='canceling'){
+    const job=f.db.sqlite.prepare('SELECT * FROM analysis_jobs WHERE attempt_id=?').get(started.progress.attemptId);assert.ok(await jobs.claimJob(f.db,job));
+    await control(f,'cancel',started.progress.attemptId);
+  }
+  const response=await browse(f),result=await response.json();assert.equal(response.status,202);assert.equal(result.hasData,false);assert.equal(result.progress.status,status);assert.equal(result.analysisRequired,undefined);assert.equal(result.progress.attemptId,started.progress.attemptId);
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM analysis_jobs').get().n,1);
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM performance_summaries').get().n,0);
+});
+
+test('explicit start persists the pinned input before a worker can claim the new attempt',async()=>{
+  const f=await canonicalFixture(),put=f.bucket.put.bind(f.bucket);let checked=false;
+  f.bucket.put=async(key,...args)=>{
+    if(key.endsWith('/input.json')&&!checked){
+      checked=true;
+      assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) n FROM analysis_jobs WHERE status='processing'").get().n,0,'an incomplete input checkpoint must not be published as runnable');
+      const browse=await(await f.api.GET(new Request('https://test/api/performance-summary?siteId=site'))).json();assert.equal(browse.analysisRequired,true);
+    }
+    return put(key,...args);
+  };
+  const response=await f.request();assert.equal(response.status,202);assert.equal(checked,true);
+});
+
+test('retry of a canceled read pins the original dataset before publishing its replacement attempt',async()=>{
+  const f=await canonicalFixture(),started=await(await f.request()).json(),original=started.progress.attemptId;
+  await f.api.POST(new Request('https://test/api/performance-summary',{method:'POST',body:JSON.stringify({siteId:'site',attemptId:original,action:'cancel'})}));
+  f.store.replace(f.rows.map(r=>({...r,value:r.value===40?80:r.value})));
+  const put=f.bucket.put.bind(f.bucket);
+  f.bucket.put=async(key,...args)=>{if(key.endsWith('/input.json'))assert.equal(f.db.sqlite.prepare('SELECT attempt_id FROM analysis_jobs').get().attempt_id,original);return put(key,...args);};
+  const retried=await(await f.api.POST(new Request('https://test/api/performance-summary',{method:'POST',body:JSON.stringify({siteId:'site',attemptId:original,action:'retry'})}))).json();
+  const replacement=retried.progress.attemptId;assert.notEqual(replacement,original);f.bucket.put=put;
+  const input=await storedData(f.objects.get(`analysis/site/jobs/${replacement}/input.json`));assert.equal(input.record.id,f.record.id);assert.equal(input.provenance,null);
+  await f.request();assert.equal(f.store.analysis(replacement).revision,1);
+  assert.equal((await finish(f)).publicationSkipped,true);
+});
+
+test('browsing never creates a run; read and retry retain their revision/model checkpoint through new imports',async()=>{
+  const f=await canonicalFixture();
+  const browse=await(await f.api.GET(new Request('https://test/api/performance-summary?siteId=site'))).json();
+  assert.equal(browse.analysisRequired,true);assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM analysis_jobs').get().n,0);
+  const requested=await(await f.request()).json(),attempt=requested.progress.attemptId;
+  // A new import lands even before the first read request. POST already pinned the input.
+  f.store.replace(f.rows.map(r=>({...r,value:r.channel.measurement==='Energy'?999:r.value})));
+  f.equipment[1].acRatedCapacityKw='900';
+  assert.equal((await f.request()).status,202);
+  const root=`analysis/site/jobs/${attempt}`,input=await storedData(f.objects.get(`${root}/input.json`));
+  assert.equal(input.provenance.revision,1);assert.equal(input.equipment[1].acRatedCapacityKw,'100');
+  const summary=loadSource('app/api/performance-summary/analysis-storage.ts').unpackSummary(await storedData(f.objects.get(`${root}/summary.json`)));
+  assert.equal(summary.totalEnergyKwh,120);
+  f.db.sqlite.prepare("UPDATE analysis_jobs SET status='failed',error='simulated interruption'").run();
+  const retry=await(await f.api.POST(new Request('https://test/api/performance-summary',{method:'POST',body:JSON.stringify({siteId:'site',attemptId:attempt,action:'retry'})}))).json();
+  assert.equal(retry.progress.attemptId,attempt);
+  const completed=await finish(f);assert.equal(completed.publicationSkipped,true);assert.equal(completed.processing,false);
+  const saved=await storedData(f.objects.get(`${root}/result.json`)),index=await storedData(f.objects.get(`${root}/review-index.json`));
+  assert.deepEqual(saved.provenance,input.provenance);assert.deepEqual(index.provenance,input.provenance);assert.deepEqual(saved.methodology.inputProvenance,input.provenance);
+  assert.equal(saved.importId,f.record.id);assert.equal(saved.methodology.datasetRevision,1);assert.equal(saved.summary.totalEnergyKwh,120);
+  assert.equal(f.db.sqlite.prepare('SELECT status FROM analysis_runs WHERE id=?').get(attempt).status,'completed');
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM performance_summaries').get().n,0);
+  const current=await(await f.request()).json();assert.equal(current.analysisRequired,true);assert.equal(current.processing,undefined);
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM analysis_jobs').get().n,1);
+  const historical=await(await f.api.GET(new Request(`https://test/api/performance-summary?siteId=site&attemptId=${attempt}`))).json();
+  assert.equal(historical.issueDatabase.analysisRunId,attempt);assert.equal(historical.dataFreshness.status,'older');
+});
+
+test('late import during final result write keeps newer pointer while completing immutable history',async()=>{
+  const f=await canonicalFixture();
+  await f.request();await f.request();
+  f.db.sqlite.prepare('INSERT INTO performance_summaries VALUES (?,?,?,?)').run('newer','site','newer-pointer','now');
+  const put=f.bucket.put.bind(f.bucket);
+  f.bucket.put=async(key,...args)=>{const result=await put(key,...args);if(key.endsWith('/result.json'))f.store.replace(f.rows.map(r=>({...r,value:r.value===40?50:r.value})));return result;};
+  const completed=await finish(f);
+  assert.equal(completed.publicationSkipped,true);assert.equal(f.db.sqlite.prepare('SELECT summary FROM performance_summaries').get().summary,'newer-pointer');
+  assert.equal(f.db.sqlite.prepare('SELECT status FROM analysis_runs').get().status,'completed');
+  assert.equal((await storedData([...f.objects].find(([k])=>k.endsWith('/result.json'))[1])).provenance.revision,1);
+});
+
+test('freshness, history browsing and reanalysis never rewrite completed evidence, event identities, or analyst reviews',async()=>{
+  const f=await canonicalFixture(),first=await finish(f),runId=first.issueDatabase.analysisRunId,root=`analysis/site/jobs/${runId}`;
+  assert.equal(first.dataFreshness.status,'current');
+  const result=await storedData(f.objects.get(`${root}/result.json`)),issue=result.analysis.issues[0];assert.ok(issue);
+  const review=loadSource('app/issue-review.ts'),reviews=loadSource('app/api/issue-reviews/service.ts',[],review);
+  await reviews.saveReview(f.db,'site',issue.eventKey,runId,0,{...review.blankReview(issue,issue.evidenceSignature),status:'Confirmed'},'Retained analyst note','analyst');
+  const beforeResult=f.objects.get(`${root}/result.json`).text,beforeIndex=f.objects.get(`${root}/review-index.json`).text;
+  const beforeReview=JSON.stringify(f.db.sqlite.prepare('SELECT * FROM issue_event_reviews').all()),beforeAudit=JSON.stringify(f.db.sqlite.prepare('SELECT * FROM issue_review_changes').all());
+  f.store.replace(f.rows.map(r=>r.channel.equipmentId==='inv'&&r.timestamp.includes('13:00')?{...r,value:30}:r));
+  const freshness=loadSource('app/api/analysis-freshness/route.ts',[],{...f.data,getDatabaseBinding:()=>f.db});
+  assert.equal((await(await freshness.GET(new Request(`https://test/api/analysis-freshness?siteId=site&runId=${runId}`))).json()).status,'older');
+  const saved=loadSource('app/api/analysis-history/service.ts',[],{...f.data,...review,...checkpointStorage,getDatabaseBinding:()=>f.db,getBucketBinding:()=>f.bucket});
+  const history=loadSource('app/api/analysis-history/route.ts',[],{...f.data,...saved,...checkpointStorage});
+  const loaded=await(await history.GET(new Request(`https://test/api/analysis-history?siteId=site&runId=${runId}`))).json();
+  assert.equal(loaded.dataFreshness.status,'older');assert.equal(loaded.analysis.issues[0].eventKey,issue.eventKey);assert.equal(loaded.analysis.issues[0].evidenceSignature,issue.evidenceSignature);
+  const current=await(await f.request()).json();assert.equal(current.issueDatabase.analysisRunId,runId);assert.equal(current.dataFreshness.status,'older');
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM analysis_jobs').get().n,1);
+  await f.api.POST(new Request('https://test/api/performance-summary',{method:'POST',body:JSON.stringify({siteId:'site',action:'reanalyze'})}));
+  const second=await finish(f);assert.notEqual(second.issueDatabase.analysisRunId,runId);assert.equal(second.dataFreshness.status,'current');
+  assert.deepEqual(f.objects.get(`${root}/result.json`).text,beforeResult);assert.deepEqual(f.objects.get(`${root}/review-index.json`).text,beforeIndex);
+  assert.equal(JSON.stringify(f.db.sqlite.prepare('SELECT * FROM issue_event_reviews').all()),beforeReview);assert.equal(JSON.stringify(f.db.sqlite.prepare('SELECT * FROM issue_review_changes').all()),beforeAudit);
+  assert.deepEqual(f.store.analysis(runId),result.provenance);
+});
 
 test("staged analysis resumes across requests and serves only the completed saved JSON", async () => {
   const equipment = [

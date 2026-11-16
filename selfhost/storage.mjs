@@ -42,6 +42,28 @@ export class LocalDatabase {
     }catch(error){this.sqlite.close();throw error;}
   }
   prepare(sql){return new LocalStatement(this,sql,[]);}
+  withSynchronousRead(operation){
+    if(typeof operation!=='function'||Object.prototype.toString.call(operation)==='[object AsyncFunction]')throw Error('A synchronous read callback is required.');
+    if(this.synchronousReadActive)throw Error('A synchronous read guard is already active.');
+    const queryOnly=this.sqlite.prepare('PRAGMA query_only').get().query_only;
+    // Reserve the shared DB writer lock before reading. Model/settings writes
+    // from other connections wait; query_only also forbids reentrant writes on
+    // this connection. No transaction is held across an await. A separate site
+    // DB retains its OWN commit/rollback boundary, not a cross-database commit.
+    this.sqlite.exec('BEGIN IMMEDIATE');
+    this.synchronousReadActive=true;
+    let active=true;
+    const statement=sql=>{if(!active)throw Error('The synchronous reader is no longer active.');return this.sqlite.prepare(sql);};
+    const read=Object.freeze({first:(sql,...values)=>statement(sql).get(...values)??null,all:(sql,...values)=>statement(sql).all(...values)});
+    try{
+      this.sqlite.exec('PRAGMA query_only=ON');
+      const result=operation(read);
+      if(result&&typeof result.then==='function')throw Error('The read callback must be synchronous, not a Promise.');
+      this.sqlite.exec('COMMIT');
+      return result;
+    }catch(error){this.sqlite.exec('ROLLBACK');throw error;}
+    finally{active=false;this.synchronousReadActive=false;this.sqlite.exec(`PRAGMA query_only=${queryOnly?1:0}`);}
+  }
   async batch(statements){
     // No await inside the transaction: another request cannot join a partial batch.
     this.sqlite.exec('BEGIN IMMEDIATE');

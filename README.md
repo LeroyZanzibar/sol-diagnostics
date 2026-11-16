@@ -1,6 +1,6 @@
 # Sol Diagnostics — Docker edition for UmbrelOS
 
-A self-contained edition of Sol Diagnostics based on hosted version 116 (source commit `0820d6762070df30649ee47dba79e5ab29286c46`). Release version **2026.11.15.2**; see [CHANGELOG.md](CHANGELOG.md) and GitHub Releases for publication status.
+A self-contained edition of Sol Diagnostics based on hosted version 116 (source commit `0820d6762070df30649ee47dba79e5ab29286c46`). Release version **2026.11.16.1**; see [CHANGELOG.md](CHANGELOG.md) and GitHub Releases for publication status.
 
 The complete application is included: site and array configuration (including transformers), performance CSV imports, cached/resumable analyses, issue review and recurring groups, visibility settings, summaries and spreadsheet exports, Timeline, maintenance CSV/Excel uploads, and all three themes.
 
@@ -44,7 +44,7 @@ https://umbrel.com/support/apps/running-custom-docker-containers
 Use a directory you control on persistent storage, outside any existing app's data directory. Copy the downloaded archive there. Open a terminal on your Umbrel with access to its Docker daemon (or use the Portainer workflow below).
 
 ```sh
-tar -xzf Sol-Diagnostics-Umbrel-2026.11.15.2.tar.gz
+tar -xzf Sol-Diagnostics-Umbrel-2026.11.16.1.tar.gz
 cd sol-diagnostics-umbrel
 sh setup.sh
 docker compose up -d --build
@@ -53,7 +53,7 @@ docker compose ps
 
 `setup.sh` generates a unique password, prints it once, and saves it in the private `.env` file. Running setup again preserves the existing settings. Do not share `.env`.
 
-Open `http://umbrel.local:3080`, or use your Umbrel server's LAN IP with port 3080. Sign in as **admin** with the generated password. The first launch opens **Site settings** to add your first site. Then configure its **Array model**, upload **Performance data**, and run the analysis. Upload your cross-site maintenance calendar through **Data uploads → Maintenance data**.
+Open `http://umbrel.local:3080`, or use your Umbrel server's LAN IP with port 3080. Sign in as **admin** with the generated password. The first launch opens **Site settings** to add your first site. Then configure its **Array model**, upload **Performance data**, and run the analysis. Upload your cross-site maintenance calendar through **Data management → Maintenance data**.
 
 If port 3080 is already occupied, edit `SOL_PORT` in `.env` and run `docker compose up -d` again. Read startup errors with:
 
@@ -65,11 +65,15 @@ For remote access from your laptop, use your existing Tailscale connection and t
 
 ### Portainer workflow
 
-The archive is **source**, not a prebuilt Docker image. First build the image in the Docker environment managed by Portainer. Extract the archive, then run `docker compose build` from the extracted directory against that same Docker daemon. This creates the image tagged `sol-diagnostics:2026.11.15.2`.
+The archive is **source**, not a prebuilt Docker image. First build the image in the Docker environment managed by Portainer. Extract the archive, then run `docker compose build` from the extracted directory against that same Docker daemon. This creates the image tagged `sol-diagnostics:2026.11.16.1`.
 
 Create a stack from `docker-compose.yml`, remove the `build: .` line, and set the environment variables in Portainer (at minimum `SOL_PASSWORD` to a unique password of at least 16 characters). Keep the named `sol-data` volume; do not replace it with an ephemeral container directory. Deploy the stack and open the server on port 3080.
 
 Custom containers are managed in Portainer and do not automatically appear as Umbrel home-screen apps. Back up the volume before removing Portainer or its managed containers.
+
+## Cumulative performance data and analysis history
+
+This version adds per-site SQLite performance datasets, explicit CSV/API overlap preview and approval, immutable analysis inputs/history, and shared data-freshness filters. Use **Data management → Performance data** to preview/import data, **Analysis → Findings** to run analysis, and **Data management → Manage Analyses** to select saved results. Existing retained CSVs require explicit migration preview/apply; historical analyses and reviews are preserved. See [docs/PERFORMANCE_DATA.md](docs/PERFORMANCE_DATA.md) for the API contract, migration/backup boundaries and verification scope, and the changelog for publication status.
 
 ## Bulk Site settings CSV
 
@@ -136,15 +140,15 @@ Database migrations run automatically at startup. A modified previously applied 
 
 ## Verification
 
-The following results were reported by the archive producer; they are not a claim that the public-release preparation reproduced the full build or suite:
+Local verification of the cumulative-data feature completed before release preparation:
 
 - Production Node build passed.
-- **263 tests passed**, including existing calculation, timezone, transformer, review, recurring-issue, maintenance, and upload tests.
-- A real HTTP test of the built production server created a site and array model, uploaded a two-part performance CSV, completed an analysis, saved a confirmed review, imported maintenance, restarted the server, and verified retained data and unchanged cached losses.
-- Storage tests cover atomic SQL rollback, streamed files, interrupted replacement, metadata, pagination, and persistence.
-- Authentication tests reject unsigned requests and cross-origin changes.
+- **532 tests passed**, covering calculation/timezone parity, cumulative imports and overlap approval, pinned input/history retention, freshness-filtered reports, corrected-input recovery and existing application workflows.
+- Independent specification, quality and final integration reviews approved the feature source. Real production HTTP tests use isolated synthetic datasets.
+- Real-browser checks exercised overlap approval, saved-analysis selection, canceled-rerun publication retention and corrected first-analysis recovery, including a 390px mobile viewport.
+- A 1.2-million-reading synthetic storage benchmark passed; see [the performance-data documentation](docs/PERFORMANCE_DATA.md) for scope and measured results.
 
-**Verification limit:** Docker Engine and an Umbrel device were unavailable in this workspace. The actual Docker image build, ARM execution, resource sizing for your largest production dataset, and deployment on your Umbrel still need to be verified there. Browser interactions use the existing interface; no new visual redesign is included.
+**Release gates and limits:** release preparation reruns the production build and full suite, then requires real hardened Docker smoke tests on native AMD64 and ARM64 GitHub runners before image publication. The release notes record those exact runs and results. Local feature verification alone does not establish native-container success, a live Umbrel upgrade/migration/restore, or resource sizing for your largest production dataset. Six verified baseline-existing standalone TypeScript diagnostics remain outside this release's scope.
 
 To run the checks on a machine with Node 24:
 
@@ -160,6 +164,6 @@ The source archive contains no installed `node_modules`, production data, or cre
 
 `.github/workflows/release.yml` first installs locked dependencies, builds, and runs the full suite on Node 24. Only after those checks pass, separate native Linux amd64 and arm64 runners build the Docker image and run `scripts/container-smoke.mjs`. The smoke check requires a Docker daemon and tests UID 1000, a read-only root filesystem, a writable `/data` bind mount, password protection, cross-origin rejection, and database/upload persistence across restart and container recreation.
 
-Pull requests, pushes to `main`, and manual runs validate without publishing. A pushed `v*` tag additionally publishes the smoke-tested architecture images to GHCR, then merges their immutable digests into a two-platform index tagged with the exact Git tag. No `latest` alias is created. Package visibility is separate from repository visibility and must be checked by the release owner.
+Pull requests, pushes to `main`, and manual runs validate without publishing. A pushed `v*` tag additionally publishes the smoke-tested architecture images to GHCR, then merges their immutable digests into a two-platform index tagged with the canonical version (without the source tag's leading `v`). No `latest` image alias is created. Package visibility is separate from repository visibility and must be checked by the release owner.
 
-See [the release checklist](docs/RELEASE_CHECKLIST.md) for verification limits, source/license provenance review, and release-owner gates. This preparation did not publish a container or deploy an Umbrel app.
+See [the release checklist](docs/RELEASE_CHECKLIST.md) for verification limits, source/license provenance review, and release-owner gates. Publishing source and images does not update the community-store entry or deploy an Umbrel app.

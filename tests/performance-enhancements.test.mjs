@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { loadSource, makeAnalysisFixture , modelCapacityBindings} from "./source-module.mjs";
 
 const checkpointStorage = loadSource("app/api/performance-summary/checkpoint-storage.ts");
+const {jobProgress} = loadSource("app/api/performance-summary/jobs.ts");
 const time = loadSource("app/telemetry-time.ts");
 const causes = { ...time, ...loadSource("app/api/performance-summary/causes.ts", [], time) };
 Object.assign(causes, loadSource("app/api/performance-summary/peer-comparison.ts", [], {...modelCapacityBindings(),...time}));
@@ -43,7 +44,7 @@ async function storedApi(parserVersion = 28) {
     issueDatabase: { analysisRunId: "run-1", persistedIssueCount: 10 },
     summary: { dailyProduction: [{ date: "2026-01-01", energyKwh: 500 }], totalEnergyKwh: 500 },
     analysis: analysis.buildAnalysis(summary, equipment) };
-  let threshold = "";
+  let threshold = "", job = null;
   const reads = [], writes = [];
   const objects = new Map();
   objects.set("analysis/site-1/current.json", { text: JSON.stringify(payload), etag: "full-1", customMetadata: {
@@ -60,7 +61,7 @@ async function storedApi(parserVersion = 28) {
     ...checkpointStorage, ...causes, monthlyLosses: loadSource("app/issue-periods.ts", [], time).monthlyLosses,
     siteSettings: "sites", telemetryImports: "imports", equipmentAssets: "equipment", performanceSummaries: "pointers",
     currentAnalysisInput:async()=>record, eq() {}, desc() {}, getDb: () => db,
-    getDatabaseBinding: () => ({ prepare: () => ({ bind: () => ({ first: async () => ({ minimum_issue_loss_kwh: threshold }) }) }) }),
+    getDatabaseBinding: () => ({ prepare: sql => ({ bind: () => ({ first: async () => sql.includes('analysis_jobs') ? job : ({ minimum_issue_loss_kwh: threshold }) }) }) }),
     getBucketBinding: () => ({
       head: async key => objects.get(key) || null,
       get: async key => {
@@ -71,15 +72,31 @@ async function storedApi(parserVersion = 28) {
       put: async (key, text, options) => { writes.push(key); objects.set(key, { text, ...options }); return { etag: "derivative" }; },
     }),
     analysisJobKey: async () => "new-run",
-    readJob: async () => null,
+    readJob: async () => job,
     getOrCreateJob: async () => ({ status: "processing", stage: "read", attempt_id: "new-attempt" }),
-    jobProgress: job => ({ status: job.status, stage: job.stage, percent: 0 }),
+    jobProgress,
   })});
   const request = (query = "", etag = "") => api.GET(new Request(`https://example.test/api/performance-summary?siteId=site-1${query}`, {
     headers: etag ? { "If-None-Match": etag } : {},
   }));
-  return { request, payload, record, equipment, objects, reads, writes, setThreshold(value) { threshold = value; } };
+  return { request, payload, record, equipment, objects, reads, writes, setThreshold(value) { threshold = value; }, setJob(value) { job = value; } };
 }
+
+test('terminal rerun metadata bypasses a prior result ETag without contaminating the retained compact snapshot',async()=>{
+  const api=await storedApi(),first=await api.request(),tag=first.headers.get('ETag');await first.json();
+  const full=api.objects.get('analysis/site-1/current.json').text,compact=api.objects.get('analysis/site-1/display.json').text;
+  for(const status of ['canceled','failed','interrupted']) {
+    const job={id:'new-run',site_id:'site-1',import_id:'import-1',attempt_id:`attempt-${status}`,status,stage:'equipment',completed:2,total:5,percent:41,updated_at:123,error:status==='canceled'?'':'Retained retry checkpoint.'};
+    api.setJob(job);
+    const response=await api.request('',tag),data=await response.json();
+    assert.equal(response.status,200);assert.equal(data.hasData,true,JSON.stringify(data));assert.equal(data.issueDatabase.analysisRunId,'run-1');
+    assert.deepEqual(data.lastAttempt,JSON.parse(JSON.stringify(jobProgress(job))));assert.equal(data.processing,false);assert.equal(data.progress,undefined);
+    assert.match(response.headers.get('cache-control'),/no-store/);assert.equal(response.headers.get('etag'),null);
+    assert.equal(api.objects.get('analysis/site-1/current.json').text,full);assert.equal(api.objects.get('analysis/site-1/display.json').text,compact);
+    const statusData=await(await api.request('&statusOnly=1')).json();assert.equal(statusData.cacheStatus,'stored');assert.deepEqual(statusData.lastAttempt,data.lastAttempt);
+  }
+  api.setJob(null);assert.equal((await api.request('',tag)).status,304);
+});
 
 test("compact results preserve totals, retain evidence on demand, and avoid full-object reads", async () => {
   const api = await storedApi();
@@ -114,14 +131,14 @@ test("compact results preserve totals, retain evidence on demand, and avoid full
   assert.equal((await api.request("&issueId=nonexistent")).status, 404);
 });
 
-test("older cached analyses are invalidated before serving corrected calculations", async () => {
+test("older cached analyses require explicit analysis instead of browse-triggered recalculation", async () => {
  for (const version of [19, 24]) {
   const api = await storedApi(version);
   const status = await (await api.request("&statusOnly=1")).json();
   assert.equal(status.cacheStatus, "stale");
   const response = await api.request();
-  assert.equal(response.status, 202);
-  assert.equal((await response.json()).progress.stage, "read");
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).analysisRequired, true);
   assert.ok(!api.reads.includes("analysis/site-1/current.json"));
   assert.equal(api.writes.length, 0);
  }
@@ -152,10 +169,10 @@ test("threshold, import, model and source changes invalidate conditional results
   assert.notEqual(filtered.headers.get("ETag"), tag);
   assert.ok((await filtered.json()).analysis.issues.every(issue => issue.category === "Communications"));
   api.record.id = "import-2";
-  assert.equal((await api.request("", tag)).status, 202);
+  assert.equal((await (await api.request("", tag)).json()).analysisRequired, true);
   api.record.id = "import-1";
   api.equipment[1].acRatedCapacityKw = "110";
-  assert.equal((await api.request("", tag)).status, 202);
+  assert.equal((await (await api.request("", tag)).json()).analysisRequired, true);
   api.equipment[1].acRatedCapacityKw = "100";
   api.objects.get("analysis/site-1/current.json").etag = "full-2";
   api.reads.length = 0;

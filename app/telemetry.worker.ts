@@ -25,8 +25,8 @@ self.onmessage = (event: MessageEvent<CsvRequest & { id: number }>) => {
       } else if (!file) {
         throw new Error("Choose a CSV file first.");
       } else if (request.kind === "validate") {
-        const base = calculateValidation(headers, rows, request.mapping, request.signals, request.timezone, request.timestampConvention);
-        const capacity = capacityValidation(headers, rows, request.mapping, request.signals, request.equipment, request.timezone);
+        const base = calculateValidation(headers, rows, request.mapping, request.signals, request.timezone, request.timestampConvention, request.knownIntervalMinutes);
+        const capacity = capacityValidation(headers, rows, request.mapping, request.signals, request.equipment, request.timezone, request.knownIntervalMinutes);
         value = { ...base, ...capacity, warnings: base.warnings + capacity.capacityExceededRows + (capacity.capacityCheckReady ? 0 : 1) };
       } else {
         value = mappedCsvFile(file, headers, rows, request.mapping, request.signals);

@@ -9,12 +9,22 @@ function fixture(){
  const stmt=(sql,values=[])=>({bind(...v){return stmt(sql,v)},async first(){return sqlite.prepare(sql).get(...values)||null},async all(){return {results:sqlite.prepare(sql).all(...values)}},async run(){return {meta:{changes:Number(sqlite.prepare(sql).run(...values).changes)}}}});
  const db={prepare:stmt,async batch(items){sqlite.exec('BEGIN');try{const out=[];for(const item of items)out.push(await item.run());sqlite.exec('COMMIT');return out}catch(e){sqlite.exec('ROLLBACK');throw e}}};
  const objects=new Map(),bucket={async put(key,body){objects.set(key,typeof body==='string'?body:await new Response(body).text())},async delete(keys){for(const k of Array.isArray(keys)?keys:[keys])objects.delete(k)},async list({prefix,limit}){const keys=[...objects.keys()].filter(k=>k.startsWith(prefix));return {objects:keys.slice(0,limit).map(key=>({key})),truncated:keys.length>limit}}};
- const shared=loadSource('app/api/telemetry-imports/shared.ts',[],{...fileService,getDatabaseBinding:()=>db,getBucketBinding:()=>bucket,depotCleanupInProgress:async()=>false});
- const metadata={siteId:'site',fileName:'data.csv',fileSize:4,timezone:'UTC',mapping:{timestamp:'time',value:'power'},equipmentMapping:{signals:[]},detectedTypes:[],validation:{totalRows:1,validRows:1,start:'2026-01-01T00:00:00.000Z',end:'2026-01-01T00:00:00.000Z'},prepareHistory:true};
- const upload=(patch={})=>shared.retainImport({...metadata,...patch},new Response('time,power\n2026-01-01T00:00:00Z,1').body,['time','power']);
- return {sqlite,db,bucket,objects,shared,metadata,upload};
+ // These are regression tests for the retired legacy helper, not for the new
+ // upload routes. Canonical staging/approval is covered in performance-data-api.
+ const metadata={siteId:'site',fileName:'data.csv',fileSize:4,timezone:'UTC',mapping:'{}',detectedTypes:'[]',validation:'{}',rowCount:1,validRows:1,warningCount:0,errorCount:0,status:'imported',timestampStart:null,timestampEnd:null};
+ const upload=async(patch={})=>{
+  const record={...metadata,...patch,id:crypto.randomUUID(),createdAt:new Date().toISOString()},previous=await fileService.currentImportId(db,record.siteId);
+  if(patch.replacesImportId!==undefined&&patch.replacesImportId!==previous)throw new fileService.UploadConflictError('The current file changed.');
+  record.objectKey=`mapped/${record.siteId}/${record.id}.csv`;
+  await fileService.stagePerformanceFile(db,record.siteId,record.objectKey);
+  try{await bucket.put(record.objectKey,'legacy synthetic CSV');await fileService.commitPerformanceFile(db,record,previous)}catch(error){
+   if(!sqlite.prepare('SELECT id FROM telemetry_imports WHERE id=?').get(record.id)){await fileService.retireFailedUpload(db,record.objectKey);throw error}
+  }
+  await fileService.drainPerformanceFileCleanup(db,bucket).catch(()=>undefined);return record;
+ };
+ return {sqlite,db,bucket,objects,metadata,upload};
 }
-test('uploads immediately replace the site file and leave other sites and saved results intact',async()=>{
+test('legacy-only helper replaces its file and leaves other sites and saved results intact',async()=>{
  const f=fixture(),old=await f.upload(),other=await f.upload({siteId:'other'});
  f.sqlite.prepare('INSERT INTO analysis_runs(id,site_id,import_id,parser_version,model_revision,analysis_object_key) VALUES (?,?,?,?,?,?)').run('run','site',old.id,28,'model','analysis/site/result.json');
  f.objects.set('analysis/site/result.json','saved analysis');
