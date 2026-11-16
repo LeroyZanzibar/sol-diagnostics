@@ -3,7 +3,7 @@
 import { Fragment, useMemo, useState, type ReactNode, type CSSProperties } from "react";
 import { formatDateTime } from "./issue-date-format";
 import { localMoment, hasTimeZone, calendarDayMoment, type ReportRange } from "./issue-periods";
-import {activeSegments,type RecurringIssue} from './recurring-issues';
+import {activeSegments} from './recurring-issues';
 import type {IntervalLoss} from './issue-periods';
 import {formatAxis,firstOfMonth,nextMonth,reviewMonthDays} from "./timeline-axis";
 import {isValidTimezone} from './telemetry-time';
@@ -47,7 +47,6 @@ export default function IssueTimeline({
   siteName,
   onBack,
   reportingPeriod,
-  episodes=[],
   siteId,
   sites,
   onSiteChange,
@@ -59,7 +58,6 @@ export default function IssueTimeline({
   siteName: string;
   onBack: () => void;
   reportingPeriod?: ReactNode;
-  episodes?:RecurringIssue[];
   siteId:string;
   sites:{id:string;name:string}[];
   onSiteChange:(siteId:string)=>void;
@@ -110,10 +108,11 @@ export default function IssueTimeline({
       { name: string; equipmentName: string; issues: TimelineIssue[] }
     >();
     filtered.forEach((issue) => {
-      const key = issue.recurringId||issue.id;
-      const episode=episodes.find(e=>e.id===issue.recurringId);
+      // Timeline rows describe an issue on an asset, not a detection episode.
+      // Use the stable equipment ID so equal display names never merge assets.
+      const key = JSON.stringify([issue.equipmentId, issue.name]);
       const current = grouped.get(key) || {
-        name: episode?`${episode.name} · ${episode.firstDay}–${episode.lastDay}`:issue.name,
+        name: issue.name,
         equipmentName: issue.equipmentName,
         issues: [],
       };
@@ -161,7 +160,7 @@ export default function IssueTimeline({
           a.equipmentName.localeCompare(b.equipmentName);
         return issueSort === "asc" ? comparison : -comparison;
       });
-  }, [filtered, issueSort,episodes]);
+  }, [filtered, issueSort]);
   const axis = useMemo(() => {
     if (!range) return [];
     const ticks: Array<{ value: number; left: string }> = [];
@@ -196,7 +195,7 @@ export default function IssueTimeline({
         <div>
           <p className="eyebrow">ISSUE HISTORY</p>
           <h1 id="timeline-title">Timeline</h1>
-          <p>{siteName} · one row per recurring episode or standalone finding. Recurring bars show active intervals only.</p>
+          <p>{siteName} · one row per issue and equipment. Expand a row to see individual occurrences. Recurring bars show active intervals only.</p>
         </div>
         <div className="timeline-header-actions"><label>Site<select aria-label="Timeline site" value={siteId} onChange={event=>onSiteChange(event.target.value)}>{sites.map(site=><option value={site.id} key={site.id}>{site.name}</option>)}</select></label><button className="secondary-btn" onClick={onBack}>
           Back to issues
