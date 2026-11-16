@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.11.15.1 — pending publication
+
+- Fix Depot performance uploads and analysis failing with `no such table: maintenance_tasks` by creating the required table through a new additive startup migration.
+- Preserve existing maintenance-task records and cleanup safety checks; do not invoke legacy cleanup or delete performance data during initialization.
+- Validate the maintenance table's schema before serving requests, with fresh-install, upgrade, restart, and Depot upload regression coverage.
+
 ## 2026.11.14.1 — published November 14, 2026
 
 Published as `v2026.11.14.1` from source commit `03095fba561ad43dc9ef41211831419ff0929c8a`. The immutable multi-platform image digest is `sha256:d1d6127b86db3d0d6991eaf3626bbfe204430050484db1db97e1fc22210bd3c2`. Both native architecture images and anonymous pulls were verified. See [the GitHub release](https://github.com/LeroyZanzibar/sol-diagnostics/releases/tag/v2026.11.14.1) for downloads and verification details. The tagged source snapshot retains the pre-publication changelog; this entry records the confirmed result without moving that tag.

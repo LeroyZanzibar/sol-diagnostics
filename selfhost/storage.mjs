@@ -5,22 +5,41 @@ import {open, rename, unlink, readdir} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {Readable} from 'node:stream';
 
+const maintenanceMigration='0019_maintenance_tasks.sql';
+function validateMaintenanceSchema(sqlite,required=false){
+  const object=sqlite.prepare("SELECT type FROM sqlite_master WHERE name='maintenance_tasks' COLLATE NOCASE AND type IN ('table','view')").get();
+  if(!object&&!required)return;
+  const columns=object?.type==='table'?sqlite.prepare('PRAGMA table_xinfo(maintenance_tasks)').all():[];
+  const expected=[['id',1],['status',0],['completed_at',0]];
+  if(object?.type!=='table'||columns.length!==expected.length||expected.some(([name,pk])=>{
+    const column=columns.find(column=>column.name===name);
+    return !column||column.type.toUpperCase()!=='TEXT'||column.notnull!==1||column.pk!==pk||column.hidden!==0;
+  }))throw Error('Incompatible maintenance_tasks schema; startup refused. Expected exactly id TEXT PRIMARY KEY NOT NULL, status TEXT NOT NULL, completed_at TEXT NOT NULL. Back up the database and reconcile the schema without deleting task records.');
+}
+
 // Implements the D1 subset used by the existing application, including Drizzle's
 // raw positional rows and atomic batches. Analysis SQL and calculations stay intact.
 export class LocalDatabase {
   constructor(filename, migrations) {
     this.sqlite=new DatabaseSync(filename);
-    this.sqlite.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
-    this.sqlite.exec('CREATE TABLE IF NOT EXISTS __sol_migrations(name TEXT PRIMARY KEY, hash TEXT NOT NULL)');
-    for(const name of readdirSync(migrations).filter(n=>/^\d+.*\.sql$/.test(n)).sort()){
-      const sql=readFileSync(join(migrations,name),'utf8'),hash=createHash('sha256').update(sql).digest('hex');
-      const applied=this.sqlite.prepare('SELECT hash FROM __sol_migrations WHERE name=?').get(name);
-      if(applied){if(applied.hash!==hash)throw Error(`Applied migration changed: ${name}. Restore the matching application version.`);continue;}
-      this.sqlite.exec('BEGIN IMMEDIATE');
-      try{this.sqlite.exec(sql);this.sqlite.prepare('INSERT INTO __sol_migrations VALUES (?,?)').run(name,hash);this.sqlite.exec('COMMIT');}
-      catch(error){this.sqlite.exec('ROLLBACK');throw error;}
-    }
-    this.sqlite.exec('CREATE TABLE IF NOT EXISTS __sol_objects(key TEXT PRIMARY KEY,path TEXT NOT NULL,size INTEGER NOT NULL,etag TEXT NOT NULL,uploaded TEXT NOT NULL,http TEXT NOT NULL,custom TEXT NOT NULL)');
+    try{
+      // IF NOT EXISTS cannot validate a legacy table. Refuse incompatible schemas
+      // before applying any migration; never repair task state by running cleanup.
+      validateMaintenanceSchema(this.sqlite);
+      this.sqlite.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
+      this.sqlite.exec('CREATE TABLE IF NOT EXISTS __sol_migrations(name TEXT PRIMARY KEY, hash TEXT NOT NULL)');
+      for(const name of readdirSync(migrations).filter(n=>/^\d+.*\.sql$/.test(n)).sort()){
+        const sql=readFileSync(join(migrations,name),'utf8'),hash=createHash('sha256').update(sql).digest('hex');
+        const applied=this.sqlite.prepare('SELECT hash FROM __sol_migrations WHERE name=?').get(name);
+        if(applied){if(applied.hash!==hash)throw Error(`Applied migration changed: ${name}. Restore the matching application version.`);continue;}
+        this.sqlite.exec('BEGIN IMMEDIATE');
+        try{this.sqlite.exec(sql);this.sqlite.prepare('INSERT INTO __sol_migrations VALUES (?,?)').run(name,hash);this.sqlite.exec('COMMIT');}
+        catch(error){this.sqlite.exec('ROLLBACK');throw error;}
+      }
+      // Check on every startup, including databases that already recorded 0019.
+      validateMaintenanceSchema(this.sqlite,!!this.sqlite.prepare('SELECT 1 FROM __sol_migrations WHERE name=?').get(maintenanceMigration));
+      this.sqlite.exec('CREATE TABLE IF NOT EXISTS __sol_objects(key TEXT PRIMARY KEY,path TEXT NOT NULL,size INTEGER NOT NULL,etag TEXT NOT NULL,uploaded TEXT NOT NULL,http TEXT NOT NULL,custom TEXT NOT NULL)');
+    }catch(error){this.sqlite.close();throw error;}
   }
   prepare(sql){return new LocalStatement(this,sql,[]);}
   async batch(statements){
