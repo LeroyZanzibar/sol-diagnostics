@@ -1,6 +1,13 @@
 import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+// Operational cleanup state is schema, not a reason to run legacy data cleanup.
+export const maintenanceTasks = sqliteTable('maintenance_tasks', {
+  id:text('id').primaryKey().notNull(),
+  status:text('status').notNull(),
+  completedAt:text('completed_at').notNull(),
+});
+
 // Imported calendar annotations are independent of timed maintenance windows and losses.
 export const maintenanceCalendarState = sqliteTable('maintenance_calendar_state', {
   id:text('id').primaryKey(), revision:text('revision').notNull(),

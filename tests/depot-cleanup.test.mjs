@@ -9,7 +9,6 @@ const site=cleanup.DEPOT_SITE_ID;
 function fixture(){
  const sqlite=new DatabaseSync(':memory:');
  for(const f of readdirSync('drizzle').filter(f=>f.endsWith('.sql')).sort())sqlite.exec(readFileSync(`drizzle/${f}`,'utf8'));
- sqlite.exec('CREATE TABLE maintenance_tasks(id TEXT PRIMARY KEY,status TEXT NOT NULL,completed_at TEXT NOT NULL)');
  const statement=(sql,values=[])=>({bind(...v){return statement(sql,v)},async first(){return sqlite.prepare(sql).get(...values)||null},async all(){return {results:sqlite.prepare(sql).all(...values)}},async run(){return {meta:{changes:Number(sqlite.prepare(sql).run(...values).changes)}}}});
  const db={sqlite,prepare:statement,async batch(items){sqlite.exec('BEGIN');try{const out=[];for(const i of items)out.push(await i.run());sqlite.exec('COMMIT');return out}catch(e){sqlite.exec('ROLLBACK');throw e}}};
  function insert(table,suffix,siteId=site,extra={}){

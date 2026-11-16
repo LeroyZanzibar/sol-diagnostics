@@ -134,6 +134,13 @@
       "when": 1793286964668,
       "tag": "0018_freezing_valkyrie",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1794796873098,
+      "tag": "0019_maintenance_tasks",
+      "breakpoints": true
     }
   ]
 }
