@@ -2,6 +2,7 @@
 @import "./uploads.css";
 @import "./array.css";
 @import "./reviews.css";
+@import "./manual-vcom.css";
 :root{--ink:#16241f;--muted:#6f7b75;--line:#e4e8e3;--paper:#f4f5f1;--white:#fff;--nav:#13211d;--gold:#d7a739;--green:#438b67;--red:#b85846}
 .active-analysis,.freshness-controls{display:flex;gap:18px;align-items:center;justify-content:space-between;padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;background:var(--white)}
 .active-analysis p,.freshness-controls p,.analysis-selection-note p{margin:6px 0;font-size:12px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}

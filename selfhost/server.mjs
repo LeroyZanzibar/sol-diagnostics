@@ -3,6 +3,8 @@ import {resolve} from 'node:path';
 import {createHash,timingSafeEqual} from 'node:crypto';
 import {LocalDatabase,LocalBucket,LocalFixedLengthStream} from './storage.mjs';
 import {PerformanceStoreManager} from './performance-store.mjs';
+import {ManualVcomStore} from './manual-vcom-store.mjs';
+import {ManualVcomDriver} from './manual-vcom-driver.mjs';
 
 const password=process.env.SOL_PASSWORD_FILE?readFileSync(process.env.SOL_PASSWORD_FILE,'utf8').trim():process.env.SOL_PASSWORD;
 const username=process.env.SOL_USERNAME||'admin';
@@ -14,7 +16,8 @@ const database=new LocalDatabase(resolve(data,'sol-diagnostics.sqlite'),resolve(
 const bucket=new LocalBucket(database,resolve(data,'objects'));await bucket.collectOrphans();
 // Keep canonical site databases outside the object bucket's orphan cleanup.
 const performance=new PerformanceStoreManager(resolve(data,'performance'));
-const runtime={database,bucket,performance,cleanup:undefined};
+const manualVcom=new ManualVcomDriver({store:new ManualVcomStore({database,dataDirectory:data}),username,password});
+const runtime={database,bucket,performance,manualVcom,cleanup:undefined};
 globalThis[Symbol.for('sol-diagnostics.runtime')]=runtime;
 globalThis.FixedLengthStream=LocalFixedLengthStream;
 const {startProdServer}=await import('vinext/server/prod-server');
@@ -37,6 +40,9 @@ server.on('request',(req,res)=>{
     res.writeHead(401,{'WWW-Authenticate':'Basic realm="Sol Diagnostics", charset="UTF-8"','Content-Type':'text/plain; charset=utf-8'});res.end('Sign in with your local Sol Diagnostics username and password.');return;
   }
   failures.delete(address);
+  if(req.url?.split('?')[0]==='/api/manual-vcom/work'&&!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(address)){
+    res.writeHead(403);res.end('The private manual import worker is loopback-only.');return;
+  }
   if(!['GET','HEAD','OPTIONS'].includes(req.method||'GET')){
     const origin=req.headers.origin;
     if(req.headers['sec-fetch-site']==='cross-site'||(origin&&origin!==publicOrigin&&origin!==`http://${req.headers.host}`&&origin!==`https://${req.headers.host}`)){
@@ -50,10 +56,12 @@ server.on('request',(req,res)=>{
   for(const handler of handlers)handler(req,res);
 });
 server.requestTimeout=10*60*1000;
+// Start only after the same Basic/Origin protection wraps the actual listener.
+manualVcom.start(server);
 let cleaning;
 async function cleanup(){if(!runtime.cleanup||cleaning)return;cleaning=Promise.resolve(runtime.cleanup()).catch(error=>console.error('Deferred file cleanup:',error.message)).finally(()=>{cleaning=null;});await cleaning;}
 const timer=setInterval(()=>void cleanup(),60000);timer.unref();
 let closing=false;
-function shutdown(){if(closing)return;closing=true;clearInterval(timer);server.close(async()=>{await cleaning;performance.close();database.close();process.exit(0);});setTimeout(()=>process.exit(1),110000).unref();}
+async function shutdown(){if(closing)return;closing=true;clearInterval(timer);setTimeout(()=>process.exit(1),110000).unref();await manualVcom.stop();server.close(async()=>{await cleaning;performance.close();database.close();process.exit(0);});}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
 console.log(`Sol Diagnostics: local storage ready (${data}); password protection enabled.`);

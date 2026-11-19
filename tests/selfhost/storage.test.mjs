@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,readFileSync} from 'node:fs';
+import {mkdtempSync,rmSync,readFileSync,readdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {LocalDatabase,LocalBucket,LocalFixedLengthStream} from '../../selfhost/storage.mjs';
@@ -12,7 +12,8 @@ test('all schema migrations apply once; D1 rows, raw ordering and failed batches
   assert.equal(await db.prepare('SELECT name FROM site_settings').first('name'),'Alpha');
   await assert.rejects(db.batch([db.prepare("UPDATE site_settings SET name='Wrong'"),db.prepare('INSERT INTO nonexistent VALUES (1)')]));
   assert.equal((await db.prepare('SELECT * FROM site_settings').first()).name,'Alpha');
-  const second=new LocalDatabase(join(root,'db.sqlite'),resolve('drizzle'));assert.equal((await second.prepare('SELECT COUNT(*) n FROM __sol_migrations').first()).n,20);second.close();
+  const second=new LocalDatabase(join(root,'db.sqlite'),resolve('drizzle'));
+  assert.deepEqual((await second.prepare('SELECT name FROM __sol_migrations ORDER BY name').all()).results.map(row=>row.name),readdirSync('drizzle').filter(name=>/^\d+.*\.sql$/.test(name)).sort());second.close();
 });
 test('files stream to disk, survive restart and retain content types and compressed checkpoint metadata',async t=>{
   const {db,bucket,root}=fixture(t),value='a,b\n'.repeat(300000);
