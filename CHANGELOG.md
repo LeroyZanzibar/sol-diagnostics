@@ -1,15 +1,15 @@
 # Changelog
 
-## 2026.11.19.1 — pending publication
+## 2026.11.19.1 — published November 19, 2026
 
 - Add manual VCOM imports to Performance data with the requested **Data / API setup / Field mapping / Activity** workspace, alongside the existing CSV flow.
 - Save site-scoped connections and explicit equipment mappings. Encrypt provider credentials server-side with an independent private key; credentials never return to the browser.
 - Download date-bounded hourly simulation, separate meter export/import, inverter energy, and combined satellite/selected-POA irradiance. Retain source and completeness evidence; partial simulation sums remain unscaled and are disclosed for review.
 - Keep manual downloads running without an open browser and resume from durable downloaded responses. Imports stop at preview and require explicit Apply, including overlap acceptance. Older readings, omitted/blank corrections and saved analyses retain the existing preservation rules.
 - Add a streaming, revision-pinned CSV export. Numeric negatives are preserved; formula-like text is prefixed with an apostrophe for spreadsheet safety.
-- No automatic refresh, automatic analysis, analysis-engine changes, or installed-app deployment. The one-calendar-year limit applies to each download, not retained history.
+- No automatic refresh, automatic analysis, or analysis-engine changes. The one-calendar-year limit applies to each download, not retained history; installed-app deployment is a separate rollout stage.
 
-Verification is in progress; final build, test, browser and review evidence will be recorded in the feature pull request. The date-based version is provisional until an authorized release; this entry is not a published release.
+Published as `v2026.11.19.1` from source commit `0cef17be68e2a41cdac9c56565bc6a1089e2b9a0`. The immutable multi-platform image digest is `sha256:79c469fba735b86806ffb280158ffa54338b30bdbd38d5f321e2d2595b02cd92`. The release build passed 685 tests and native AMD64/ARM64 hardened persistence checks. Independent anonymous native pulls verified the exact image/source/version labels; both uploaded source/checksum assets were downloaded anonymously and byte-verified. Independent specification and quality/integration reviews approved the feature, with synthetic production-HTTP and browser coverage. Six baseline-existing standalone TypeScript diagnostics remain unchanged; live VCOM authentication was not tested. See [the GitHub release](https://github.com/LeroyZanzibar/sol-diagnostics/releases/tag/v2026.11.19.1) for downloads and exact CI evidence. This documentation records publication without moving the source tag or rebuilding its images. Back up complete app storage and preserve the independent VCOM master key before any installed-app update or data move.
 
 ## 2026.11.16.1 — published November 16, 2026
 
