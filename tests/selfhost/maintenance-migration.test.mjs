@@ -62,7 +62,8 @@ test('upgrade from 0018 without maintenance_tasks preserves sites, equipment, im
     assert.equal(await depotCleanupInProgress(db,DEPOT_SITE_ID),false);
     assertColumns(db);assert.deepEqual(rows(db.sqlite,'maintenance_tasks'),[]);
     assert.deepEqual(retained(db.sqlite),before);
-    assert.deepEqual(rows(db.sqlite,'__sol_migrations').filter(row=>row.name!==migration),ledger);
+    assert.deepEqual(rows(db.sqlite,'__sol_migrations').map(row=>row.name),readdirSync(migrations).filter(name=>/^\d+.*\.sql$/.test(name)).sort());
+    assert.deepEqual(rows(db.sqlite,'__sol_migrations').filter(row=>Number(row.name.split('_')[0])<19),ledger);
     assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM __sol_migrations WHERE name=?').get(migration).n,1);
     const bucket=new LocalBucket(db,join(f.root,'objects'));
     for(const id of [DEPOT_SITE_ID,'red-mesa','other-site'])assert.equal(await(await bucket.get(`mapped/${id}/synthetic.csv`)).text(),`synthetic data for ${id}`);

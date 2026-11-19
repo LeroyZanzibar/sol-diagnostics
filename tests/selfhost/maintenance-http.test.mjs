@@ -112,7 +112,8 @@ for(const scenario of ['fresh','upgrade','legacy-active','legacy-completed'])tes
   f.inspect(db=>{
     assert.deepEqual(allRows(db,'maintenance_tasks'),initialTasks,'startup must preserve task state without completion markers');
     assert.equal(db.prepare('SELECT COUNT(*) n FROM __sol_migrations WHERE name=?').get(migration).n,1);
-    if(oldLedger)assert.deepEqual(allRows(db,'__sol_migrations').filter(row=>row.name!==migration),oldLedger);
+    assert.deepEqual(allRows(db,'__sol_migrations').map(row=>row.name),readdirSync('drizzle').filter(name=>/^\d+.*\.sql$/.test(name)).sort());
+    if(oldLedger)assert.deepEqual(allRows(db,'__sol_migrations').filter(row=>Number(row.name.split('_')[0])<19),oldLedger);
   });
   for(const [path,method] of [[`/api/performance-summary?siteId=${DEPOT_SITE_ID}`,'GET'],['/api/telemetry-imports/finalize','POST'],[`/api/telemetry-imports/chunk?uploadId=${randomUUID()}&part=1`,'PUT']]){
     const response=await fetch(f.base+path,{method,signal:AbortSignal.timeout(15000)});assert.equal(response.status,401);await response.text();

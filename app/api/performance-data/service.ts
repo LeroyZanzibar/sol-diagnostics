@@ -50,11 +50,11 @@ function readPerformanceConfiguration(read: SynchronousDatabaseReader, siteId: s
     FROM telemetry_imports WHERE site_id = ? AND status = 'imported' ORDER BY created_at DESC, id DESC LIMIT 1`, siteId);
   return { site, configured, legacyImport };
 }
-function withPerformanceConfiguration<T>(siteId: string, operation: (configuration: ReturnType<typeof readPerformanceConfiguration>) => T): T {
+function withPerformanceConfiguration<T>(siteId: string, operation: (configuration: ReturnType<typeof readPerformanceConfiguration>, read: SynchronousDatabaseReader) => T): T {
   const db = getDatabaseBinding();
   // Never fall back to separately awaited reads when the local guard is absent.
   if (!db.withSynchronousRead) throw new Error("A synchronous site configuration guard is required for performance ingestion.");
-  return db.withSynchronousRead((read: SynchronousDatabaseReader) => operation(readPerformanceConfiguration(read, siteId)));
+  return db.withSynchronousRead((read: SynchronousDatabaseReader) => operation(readPerformanceConfiguration(read, siteId), read));
 }
 export async function loadPerformanceContext(siteId: string) {
   requiredText(siteId, "site ID");
@@ -103,6 +103,34 @@ export async function previewPerformanceJson(payload: Record<string, unknown>) {
   const preview = await context.store.stage({ source: "api", fileName, timezone, intervalMinutes: prepared.intervalMinutes,
     sourceTimestampConvention: payload.timestampConvention as TimestampConvention, modelRevision: context.modelRevision }, prepared.readings, { expectedRevision: context.dataset.revision });
   return verifyPreviewContext(context, preview);
+}
+/** Provider-owned batches share ONE pinned grid and one atomic staged preview.
+ * This independent job limit never changes public HTTP JSON admission. */
+export async function previewPerformanceProvider(context: PerformanceContext,
+  input: { timezone: string; gridTimestamp: string; sourceImportId: string; originalObjectKey: string },
+  batches: AsyncIterable<IncomingReading[]>, assertCurrent: () => void) {
+  await assertPerformanceWritable(context);
+  const cadence = existingCadence(context), gridTimestamp = cadence.gridTimestamp || input.gridTimestamp;
+  let count = 0, bytes = 0;
+  async function* readings() {
+    for await (const batch of batches) {
+      assertCurrent();
+      if (!Array.isArray(batch) || batch.length > 2000) throw new PerformanceValidationError("Invalid provider staging batch.");
+      count += batch.length; bytes += new TextEncoder().encode(JSON.stringify(batch)).byteLength;
+      if (count > 2_000_000 || bytes > 512 * 1024 * 1024) throw new PerformanceValidationError("The complete provider import exceeds its safety limit.");
+      if (!batch.length) continue;
+      const prepared = prepareJsonImport({ equipment: context.equipment, timezone: input.timezone,
+        timestampConvention: "start", intervalMinutes: 60, knownIntervalMinutes: cadence.knownIntervalMinutes,
+        gridTimestamp, readings: batch });
+      yield* prepared.readings;
+    }
+    assertCurrent();
+  }
+  const preview = await context.store.stage({ source: "api", fileName: "Manual VCOM import", timezone: input.timezone,
+    intervalMinutes: 60, sourceTimestampConvention: "start", modelRevision: context.modelRevision,
+    sourceImportId: input.sourceImportId, originalObjectKey: input.originalObjectKey }, readings(), { expectedRevision: context.dataset.revision });
+  try { assertCurrent(); return await verifyPreviewContext(context, preview); }
+  catch (error) { context.store.cancel(preview.stageId); throw error; }
 }
 export type CsvPreviewInput = { siteId: string; fileName: string; timezone: string; mapping: Record<string, string>;
   equipmentMapping: { signals?: CsvSignal[] }; validation?: Record<string, unknown>; intervalMinutes?: number; timestampConvention?: TimestampConvention };
@@ -161,6 +189,13 @@ export async function commitPerformancePreview(payload: Record<string, unknown>,
   const siteId = requiredText(payload.siteId, "site ID"), stageId = requiredText(payload.stageId, "stage ID"), previewToken = requiredText(payload.previewToken, "preview token", 512);
   if (typeof payload.approveOverlap !== "boolean") throw new PerformanceValidationError("approveOverlap must explicitly be true or false.");
   requiredText(actor, "authenticated actor");
+  // Committed receipts outlive configuration/model/maintenance changes. Validate
+  // the exact token in the site store, without any new precommit fences.
+  const receiptStore = getPerformanceStoreManager().site(siteId), existing = receiptStore.preview(stageId);
+  if (existing.status === "committed" && existing.metadata.sourceImportId?.startsWith("vcom:")) {
+    const result = receiptStore.commit(stageId, { previewToken, approveOverlap: payload.approveOverlap, actor, modelRevision: existing.metadata.modelRevision });
+    return { committed: true, result, dataset: receiptStore.describe() };
+  }
   const context = await loadPerformanceContext(siteId), preview = context.store.preview(stageId);
   await assertPerformanceWritable(context, preview.metadata.source === "migration");
   // Hash outside the shared DB guard, then compare its EXACT input against a
@@ -169,9 +204,19 @@ export async function commitPerformancePreview(payload: Record<string, unknown>,
   // writers share the DB lock; the per-site store still owns its own transaction.
   const fresh = await loadPerformanceContext(siteId);
   const approveOverlap = payload.approveOverlap;
-  return withPerformanceConfiguration(siteId, live => {
+  return withPerformanceConfiguration(siteId, (live, read) => {
     const current = fresh.store.preview(stageId);
     if (current.status !== "committed") {
+      if (current.metadata.sourceImportId?.startsWith("vcom:")) {
+        const jobId = current.metadata.sourceImportId.slice(5);
+        const saved = read.first<{ generation: number; currentGeneration: number; stageId: string; status: string }>(
+          `SELECT j.generation, s.generation AS currentGeneration, j.stage_id AS stageId, j.status
+           FROM vcom_manual_jobs j JOIN vcom_site_settings s ON s.site_id=j.site_id WHERE j.id=? AND j.site_id=?`, jobId, siteId);
+        if (payload.manualVcomJobId !== jobId || !saved || saved.generation !== saved.currentGeneration ||
+            saved.stageId !== stageId || saved.status !== "awaiting_approval") {
+          throw new PerformanceConflictError("This exact manual VCOM job and preview must be approved from its current workspace.", "stale-vcom-approval");
+        }
+      }
       if (performanceModelSnapshot(live.site, live.configured) !== fresh.modelSnapshot) throw new PerformanceConflictError("The site model changed while validating approval. Create a fresh preview.", "stale-preview");
       if (live.legacyImport && fresh.store.describe().revision === 0 && current.metadata.source !== "migration") throw new PerformanceConflictError("Migrate the retained CSV before committing new readings.", "migration-required");
       if (current.metadata.source === "migration" &&

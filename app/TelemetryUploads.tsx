@@ -1,5 +1,7 @@
 "use client";
 import ImportProfiles from "./ImportProfiles";
+import VcomWorkspace, { type VcomTab, type VcomVerifiedData } from "./VcomWorkspace";
+import type { VcomManualJob } from "./manual-vcom-types";
 import type {PerformanceDataset,PerformancePreview,PerformanceImportAudit} from '../db/performance-store';
 import { isValidTimezone, type TimestampConvention } from "./telemetry-time";
 
@@ -54,6 +56,10 @@ export default function TelemetryUploads({ sites, initialSiteId, onBack, notify,
   const equipmentRef = useRef<EquipmentAsset[]>([]);
   useEffect(() => () => { processorRef.current?.close(); processorRef.current = null; }, []);
   const [step, setStep] = useState(1);
+  const [activeTab, setActiveTab] = useState<VcomTab>("data");
+  const [csvExpanded, setCsvExpanded] = useState(false);
+  const [apiTimezone, setApiTimezone] = useState("");
+  const [apiRevision, setApiRevision] = useState(0);
   const [siteId, setSiteId] = useState(initialSiteId || sites[0]?.id || "");
   const [timezone, setTimezone] = useState("");
   const [timestampConvention, setTimestampConvention] = useState<TimestampConvention>("start");
@@ -148,7 +154,7 @@ export default function TelemetryUploads({ sites, initialSiteId, onBack, notify,
   function mappingForFormat(next:Mapping,format:CsvFormat){return format==="wide"?{...EMPTY_MAPPING,timestamp:next.timestamp,expectedProduction:next.expectedProduction,unit:next.unit}:next}
   function refreshSignalMappings(structuralMapping:Mapping,nextEquipment=equipment){setSignalMappings(signalColumnsFor(headers,structuralMapping).map(column=>signalMappings.find(item=>item.column===column)||suggestSignal(column,nextEquipment)))}
   function clearPreview(){requestEpoch.current++;setPendingPreview(null);setApproveOverlap(false);setPreviewConflict(false);setCommitUncertain(false);operationBusy.current=false;setBusy(false);}
-  function changeSite(nextSiteId: string) { if (nextSiteId === siteId) return; clearPreview();currentSiteRef.current=nextSiteId;setEquipmentLoading(true); equipmentRef.current = []; setEquipment([]); setSiteId(nextSiteId); setDataset(null);setDatasetLoading(true);setImports([]);setRequiresMigration(false);setDatasetError('');setCurrentFile(null); setTimezone(""); setTimestampConvention("start"); setValidation(null);setStep(1); }
+  function changeSite(nextSiteId: string) { if (nextSiteId === siteId) return; clearPreview();currentSiteRef.current=nextSiteId;setApiTimezone("");setCsvExpanded(false);setEquipmentLoading(true); equipmentRef.current = []; setEquipment([]); setSiteId(nextSiteId); setDataset(null);setDatasetLoading(true);setImports([]);setRequiresMigration(false);setDatasetError('');setCurrentFile(null); setTimezone(""); setTimestampConvention("start"); setValidation(null);setStep(1); }
   function updateRole(key:keyof Mapping,value:string){clearPreview();setValidation(null);const next={...mapping,[key]:value};setMapping(next);refreshSignalMappings(mappingForFormat(next,fileFormat)); }
   function changeFormat(format:CsvFormat){clearPreview();setValidation(null);setFormatOverride(format);refreshSignalMappings(mappingForFormat(mapping,format))}
   function updateSignal(column:string,patch:Partial<SignalMapping>){clearPreview();setValidation(null);setSignalMappings(current=>current.map(item=>item.column===column?{...item,...patch,confidence:patch.equipmentId!==undefined?"high":item.confidence,reason:patch.equipmentId!==undefined?"Confirmed by user":item.reason}:item))}
@@ -164,6 +170,7 @@ export default function TelemetryUploads({ sites, initialSiteId, onBack, notify,
     setError("");
     if (!nextFile.name.toLowerCase().endsWith(".csv")) { setError("Choose a CSV file to continue."); return; }
     if (nextFile.size > MAX_FILE_SIZE) { setError("This first release accepts CSV files up to 100 MB."); return; }
+    setCsvExpanded(true);setStep(1);
     setBusy(true);
     setFile(null); setRows([]); setHeaders([]); setRowCount(0);
     try {
@@ -269,6 +276,7 @@ export default function TelemetryUploads({ sites, initialSiteId, onBack, notify,
     setDataset(updated);setImports((data.imports||[]) as PerformanceImportAudit[]);setRequiresMigration(Boolean(data.requiresMigration));setPendingPreview(null);setApproveOverlap(false);setPreviewConflict(false);setCommitUncertain(false);setError('');
     setStep(1);setFile(null);setHeaders([]);setRows([]);setMapping(EMPTY_MAPPING);setFormatOverride(null);setValidation(null);setDetectedTypes([]);setSignalMappings([]);setRowCount(0);
     processorRef.current?.close();processorRef.current=null;if(inputRef.current)inputRef.current.value='';
+    setApiRevision(value=>value+1);setCsvExpanded(false);
     notify(`Performance data applied and verified at revision ${saved.result.revision}. Omitted readings were preserved.`);onImported?.(saved.siteId);
   }
   async function checkCommit(){
@@ -312,12 +320,31 @@ export default function TelemetryUploads({ sites, initialSiteId, onBack, notify,
   };
   const mapTableStyle={"--signal-column":`${mapColumnWidths[0]}px`,"--equipment-column":`${mapColumnWidths[1]}px`,"--measurement-column":`${mapColumnWidths[2]}px`,"--match-column":`${mapColumnWidths[3]}px`} as CSSProperties;
 
-  return <section className="upload-view" aria-labelledby="upload-title">
-    <header className="settings-header upload-header"><div><p className="eyebrow">DATA MANAGEMENT</p><h1 id="upload-title">Performance data</h1><p>Add interval-meter, irradiance, inverter, and SCADA readings to a site's cumulative dataset.</p></div><button className="secondary-btn" onClick={onBack}>← Back to Findings</button></header>
-    <ol className="import-steps" aria-label="CSV import progress">{["Upload","Map fields","Validate","Review"].map((label,index) => <li key={label} className={step===index+1?"active":step>index+1?"done":""}><span>{step>index+1?"✓":index+1}</span><div><small>STEP {index+1}</small><strong>{label}</strong></div></li>)}</ol>
-    <div className="storage-note current-performance-file"><span>⌁</span><div><strong>Cumulative performance dataset</strong><p>{datasetLoading?'Loading cumulative coverage…':dataset?.revision?`Revision ${dataset.revision} · ${dataset.timestampCount.toLocaleString()} timestamps · ${dataset.readingCount.toLocaleString()} readings · ${dataset.channelCount} channels · ${formatDate(dataset.timestampStart,dataset.timezone)} – ${formatDate(dataset.timestampEnd,dataset.timezone)}`:'No readings have been applied to the cumulative dataset yet (revision 0).'}</p><p>Imports preserve omitted timestamps and channels, including within the uploaded date range. Blank or null values preserve saved readings; they do not clear them. Only supplied values at matching timestamps and channels can change existing readings, after explicit overlap approval. Partial uploads do not need every revenue meter.</p>{imports[0]&&<p>Latest source: {imports[0].metadata.source} · {imports[0].metadata.fileName} · {formatDate(imports[0].committedAt)} · revision {imports[0].revision}</p>}</div></div>
+  const tabs: [VcomTab,string][] = [["data","Data"],["setup","API setup"],["mapping","Field mapping"],["activity","Activity"]];
+  const latestImport=imports.reduce<PerformanceImportAudit|null>((latest,item)=>!latest||item.committedAt>latest.committedAt?item:latest,null);
+  const sourceLabel=latestImport?.metadata.source==='api'&&latestImport.metadata.sourceImportId?.startsWith('vcom:')?'VCOM API':latestImport?.metadata.source==='csv'?'CSV':latestImport?.metadata.source==='migration'?'Retained file':latestImport?.metadata.source==='api'?'API':'No applied imports';
+  const headerTimezone=apiTimezone||dataset?.timezone||"";
+  const exportHelp="Spreadsheet safety: formula-like text gets a leading apostrophe; numeric values are unchanged.";
+  function apiImported(data:VcomVerifiedData,job:VcomManualJob){
+    if(currentSiteRef.current!==siteId||job.siteId!==siteId||data.dataset.siteId!==siteId||job.status!=='committed')return;
+    setDataset(data.dataset);setImports(data.imports);setRequiresMigration(data.requiresMigration);setDatasetError('');setDatasetLoading(false);
+    if(pendingPreview)setPreviewConflict(true);
+    onImported?.(siteId);
+  }
+
+  return <section className="upload-view manual-vcom" aria-labelledby="upload-title">
+    <header className="settings-header upload-header manual-vcom-header"><div><p className="eyebrow">Data management</p><h1 id="upload-title">Performance data</h1><p>Import from VCOM or CSV. Review readings before applying changes.</p></div><label className="vcom-site-picker">Site<select aria-label="Site" value={siteId} onChange={event=>changeSite(event.target.value)}>{sites.map(site=><option key={site.id} value={site.id}>{site.name}</option>)}</select><small>{headerTimezone||'Timezone available after connection or import'}</small></label></header>
+    <div className="vcom-tabs" role="tablist" aria-label="Performance data workspace">{tabs.map(([tab,label],index)=><button type="button" role="tab" key={tab} id={`vcom-tab-${tab}`} aria-controls="vcom-active-panel" aria-selected={activeTab===tab} tabIndex={activeTab===tab?0:-1} onClick={()=>setActiveTab(tab)} onKeyDown={event=>{let next=index;if(event.key==='ArrowRight')next=(index+1)%tabs.length;else if(event.key==='ArrowLeft')next=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')next=0;else if(event.key==='End')next=tabs.length-1;else return;event.preventDefault();setActiveTab(tabs[next][0]);event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`#vcom-tab-${tabs[next][0]}`)?.focus();}}>{label}</button>)}</div>
+    <div id="vcom-active-panel" role="tabpanel" aria-labelledby={`vcom-tab-${activeTab}`} tabIndex={0}>
+    <div hidden={activeTab!=='data'}>
+    <section className="vcom-card vcom-stored" aria-labelledby="vcom-stored-title"><header className="vcom-card-head"><h2 id="vcom-stored-title">Stored data</h2>{!datasetLoading&&!datasetError&&dataset?.siteId===siteId&&dataset.revision>0&&dataset.readingCount>0?<a className="secondary-btn" href={`/api/performance-data/export?siteId=${encodeURIComponent(siteId)}`} download title={exportHelp}>Export CSV</a>:<button className="secondary-btn" disabled title={exportHelp}>Export CSV</button>}</header><dl className="vcom-stored-stats"><div><dt>Data through</dt><dd>{datasetLoading?'Loading…':datasetError?'Unavailable':dataset?.revision?formatDate(dataset.timestampEnd,dataset.timezone):'No applied data'}</dd><small>{!datasetLoading&&!datasetError&&dataset?.revision?`${formatDate(dataset.timestampStart,dataset.timezone)} onward retained`:'Apply an import to begin'}</small></div><div><dt>Latest source</dt><dd>{datasetLoading?'Loading…':datasetError?'Unavailable':sourceLabel}</dd><small>{!datasetLoading&&!datasetError&&latestImport?`Applied ${formatDate(latestImport.committedAt,headerTimezone)}`:'Only verified imports appear here'}</small></div><div><dt>Analysis</dt><dd>Manual analysis</dd><small>Imports do not run or replace saved analyses.</small></div></dl><div className="vcom-stored-foot"><p>Cumulative performance dataset{!datasetLoading&&!datasetError&&dataset?.revision?`: revision ${dataset.revision}, ${dataset.timestampCount.toLocaleString()} timestamps, ${dataset.readingCount.toLocaleString()} readings, ${dataset.channelCount} channels.`:'.'}</p><p>Older history is never trimmed by the download limit.</p></div><details className="vcom-preservation"><summary>Import and export behavior</summary><p>Imports preserve omitted timestamps and channels, including within the uploaded date range. Blank or null values preserve saved readings; they do not clear them. Only supplied values at matching timestamps and channels can change existing readings, after explicit overlap approval. Partial uploads do not need every revenue meter.</p><p>{exportHelp}</p></details></section>
     {datasetError&&<div role="alert" className="import-error">{datasetError} <button className="secondary-btn" onClick={()=>setDatasetRevision(value=>value+1)}>Retry loading dataset</button></div>}
     {requiresMigration&&<div className="storage-note migration-required"><div><strong>Migration required</strong><p>Preview and apply the retained file {currentFile?.fileName||''} before importing additional readings. Its original file and saved analyses will be preserved. Preview does not change the cumulative dataset.</p><button className="secondary-btn" disabled={busy||datasetLoading||!!datasetError||!!pendingPreview} onClick={previewLegacy}>Preview retained file</button></div></div>}
+    </div>
+    <VcomWorkspace key={siteId} siteId={siteId} isSiteCurrent={savedSiteId=>currentSiteRef.current===savedSiteId} activeTab={activeTab} equipment={equipment} equipmentLoading={equipmentLoading} dataset={dataset} datasetLoading={datasetLoading} datasetError={datasetError} requiresMigration={requiresMigration} refreshRevision={apiRevision} imports={imports} csvBusy={busy} csvFileName={file?.name||null} onChooseCsv={()=>{setCsvExpanded(true);setActiveTab('data');if(!file)inputRef.current?.click();}} onSelectTab={setActiveTab} onTimezone={(savedSiteId,zone)=>{if(currentSiteRef.current===savedSiteId)setApiTimezone(zone);}} onVerifiedImport={apiImported} notify={notify}/>
+    <div data-csv-controller="persistent" hidden={activeTab!=='data'||(!csvExpanded&&!file&&!pendingPreview&&!error)} className="vcom-csv-wizard">
+    <input ref={inputRef} style={{display:'none'}} aria-label="Performance CSV file" type="file" accept=".csv,text/csv" onChange={event=>void chooseFile(event.target.files?.[0])}/>
+    <ol className="import-steps" aria-label="CSV import progress">{["Upload","Map fields","Validate","Review"].map((label,index) => <li key={label} className={step===index+1?"active":step>index+1?"done":""}><span>{step>index+1?"✓":index+1}</span><div><small>STEP {index+1}</small><strong>{label}</strong></div></li>)}</ol>
     {pendingPreview&&pendingPreview.siteId===siteId&&<section className="panel performance-import-preview" aria-labelledby="performance-preview-title"><h2 id="performance-preview-title">Review staged import</h2><p><strong>{selectedSite?.name}</strong> · {pendingPreview.metadata.fileName} · {pendingPreview.metadata.source} · based on revision {pendingPreview.baseRevision}</p><p>{formatDate(pendingPreview.timestampStart,pendingPreview.metadata.timezone)} – {formatDate(pendingPreview.timestampEnd,pendingPreview.metadata.timezone)} · {pendingPreview.channelCount} channels. No readings are applied until you choose Apply.</p><dl className="import-preview-counts">{([['added','Added'],['overlapping','Overlapping'],['changed','Changed'],['identical','Identical'],['blankPreserved','Blank/null preserved']] as const).map(([key,label])=><div key={key}><dt>{label}</dt><dd>{pendingPreview.counts[key].toLocaleString()}</dd></div>)}</dl>
       {!!pendingPreview.samples.length&&<div className="table-wrap"><table><thead><tr><th>Timestamp</th><th>Equipment / channel</th><th>Saved value</th><th>Incoming value</th></tr></thead><tbody>{pendingPreview.samples.map((sample,index)=><tr key={index}><td>{sample.timestamp}</td><td>{sample.channel.equipmentId} / {sample.channel.measurement}</td><td>{sample.previous??'Blank'}</td><td>{sample.incoming??'Blank — preserved'}</td></tr>)}</tbody></table></div>}
       {pendingPreview.counts.overlapping>0&&<div className="overlap-approval"><p role="alert"><strong>Overlapping readings require approval.</strong> {pendingPreview.counts.changed} existing values would change; {pendingPreview.counts.identical} are identical. Omitted and blank values are preserved.</p><label><input type="checkbox" checked={approveOverlap} disabled={busy||previewConflict} onChange={event=>setApproveOverlap(event.target.checked)}/>I approve applying these overlapping readings to this site at revision {pendingPreview.baseRevision}.</label></div>}
@@ -326,11 +353,11 @@ export default function TelemetryUploads({ sites, initialSiteId, onBack, notify,
     <div className="upload-layout single-file-upload">
       <article className="panel import-panel">
         <fieldset disabled={busy} style={{ display: "contents" }}>
-        {step === 1 && <><div className="import-heading"><div><p className="eyebrow">STEP 1 OF 4</p><h2>Select a site and CSV</h2><p>Telemetry types are detected from your headers and data after upload.</p></div><span className="auto-chip">Auto-detect types</span></div>
-          <div className="upload-fields"><label className="field"><span>Destination site <em>*</em></span><select value={siteId} onChange={event=>changeSite(event.target.value)}>{sites.map(site=><option key={site.id} value={site.id}>{site.name} · {site.location}</option>)}</select></label><label className="field"><span>Source timezone <em>*</em></span><input aria-label="Source timezone" list="source-timezones" placeholder="Select an IANA timezone" value={timezone} onChange={event=>{clearPreview();setTimezone(event.target.value);setValidation(null)}} /><datalist id="source-timezones">{timezoneOptions.map(zone=><option key={zone} value={zone} />)}</datalist></label><label className="field"><span>Timestamps represent <em>*</em></span><select value={timestampConvention} onChange={event=>{clearPreview();setTimestampConvention(event.target.value as TimestampConvention);setValidation(null)}}><option value="start">Interval start</option><option value="end">Interval end</option></select></label></div><p>Use the source timezone for timestamps without an offset. Timestamps with an explicit UTC offset retain their exact instant. Interval end readings are assigned to the preceding interval.</p>
+        {step === 1 && <><div className="import-heading"><div><p className="eyebrow">STEP 1 OF 4</p><h2>Select a CSV</h2><p>Destination: {selectedSite?.name}. Telemetry types are detected from your headers and data after upload.</p></div><span className="auto-chip">Auto-detect types</span></div>
+          <div className="upload-fields"><label className="field"><span>Source timezone <em>*</em></span><input aria-label="Source timezone" list="source-timezones" placeholder="Select an IANA timezone" value={timezone} onChange={event=>{clearPreview();setTimezone(event.target.value);setValidation(null)}} /><datalist id="source-timezones">{timezoneOptions.map(zone=><option key={zone} value={zone} />)}</datalist></label><label className="field"><span>Timestamps represent <em>*</em></span><select value={timestampConvention} onChange={event=>{clearPreview();setTimestampConvention(event.target.value as TimestampConvention);setValidation(null)}}><option value="start">Interval start</option><option value="end">Interval end</option></select></label></div><p>Use the source timezone for timestamps without an offset. Timestamps with an explicit UTC offset retain their exact instant. Interval end readings are assigned to the preceding interval.</p>
           <div className={`equipment-ready ${equipment.length?"ready":"missing"}`}><span>{equipment.length?"✓":"!"}</span><div><strong>{equipment.length?`${equipment.length} configured equipment nodes available for matching`:"No saved equipment model for this site"}</strong><p>{equipment.length?"IDs, aliases, and expected channels will guide the next step.":"You can continue, but equipment assignments will require manual review."}</p></div></div>
-          <div className={`drop-zone ${dragging?"dragging":""} ${file?"has-file":""}`} onDragOver={event=>{event.preventDefault();setDragging(true)}} onDragLeave={()=>setDragging(false)} onDrop={handleDrop}>
-            <input ref={inputRef} type="file" accept=".csv,text/csv" onChange={event=>void chooseFile(event.target.files?.[0])}/>
+          <div className={`drop-zone ${dragging?"dragging":""} ${file?"has-file":""}`} onDragOver={event=>{event.preventDefault();setDragging(true)}} onDragLeave={()=>setDragging(false)} onDrop={handleDrop} onClick={event=>{if(!(event.target as HTMLElement).closest('button'))inputRef.current?.click()}}>
+
             {file ? <><span className="file-icon">CSV</span><div><strong>{file.name}</strong><p>{formatBytes(file.size)} · {rowCount.toLocaleString()} data rows</p></div><button type="button" className="secondary-btn" onClick={()=>inputRef.current?.click()}>Choose another file</button></> : <><span className="upload-icon">⇧</span><div><strong>{busy?"Reading CSV…":"Drop a CSV file here"}</strong><p>or click to browse · maximum 100 MB</p></div><button type="button" className="secondary-btn" onClick={()=>inputRef.current?.click()}>Choose file</button></>}
           </div>
           <div className="format-note"><span>i</span><div><strong>Long and wide formats are supported</strong><p>Use a header row and include at least one timestamp column. Telemetry categories do not need to be separated into different files.</p></div></div>
@@ -360,6 +387,8 @@ export default function TelemetryUploads({ sites, initialSiteId, onBack, notify,
         </fieldset>
       </article>
 
+    </div>
+    </div>
     </div>
   </section>;
 }

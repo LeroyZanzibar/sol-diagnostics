@@ -141,6 +141,13 @@
       "when": 1794796873098,
       "tag": "0019_maintenance_tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1795099221022,
+      "tag": "0020_manual_vcom",
+      "breakpoints": true
     }
   ]
 }

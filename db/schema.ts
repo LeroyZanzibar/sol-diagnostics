@@ -1,5 +1,38 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+
+// Manual-only provider state. Never part of the model/settings public row.
+export const vcomKeyIdentity = sqliteTable('vcom_key_identity', {
+  id:text('id').primaryKey().notNull(), keyId:text('key_id').notNull(),
+});
+export const vcomSiteSettings = sqliteTable('vcom_site_settings', {
+  siteId:text('site_id').primaryKey().notNull(), generation:integer('generation').notNull(),
+  systemKey:text('system_key').notNull(), authMode:text('auth_mode').notNull(),
+  credentials:text('credentials'), discovery:text('discovery'), mappings:text('mappings').notNull(),
+  selectedPoaSourceId:text('selected_poa_source_id'), updatedAt:text('updated_at').notNull(),
+},table=>[check('vcom_settings_generation',sql`${table.generation} >= 1`)]);
+export const vcomManualJobs = sqliteTable('vcom_manual_jobs', {
+  id:text('id').primaryKey().notNull(), siteId:text('site_id').notNull(), requestId:text('request_id').notNull(),
+  generation:integer('generation').notNull(), fromDate:text('from_date').notNull(), throughDate:text('through_date').notNull(),
+  actor:text('actor').notNull(), plan:text('plan').notNull(), status:text('status').notNull(),
+  createdAt:text('created_at').notNull(), updatedAt:text('updated_at').notNull(), nextAttemptAt:integer('next_attempt_at'),
+  completedRequests:integer('completed_requests').notNull().default(0), totalRequests:integer('total_requests').notNull(),
+  rawBytes:integer('raw_bytes').notNull().default(0), attempts:integer('attempts').notNull().default(0),
+  stageAttempts:integer('stage_attempts').notNull().default(0), leaseToken:text('lease_token'), leaseUntil:integer('lease_until'),
+  message:text('message').notNull(), errorCode:text('error_code'), stageId:text('stage_id'), preview:text('preview'),
+  result:text('result'), quality:text('quality'), state:text('state').notNull().default('{}'),
+},table=>[
+  uniqueIndex('vcom_request_identity').on(table.siteId,table.requestId),
+  uniqueIndex('vcom_one_unfinished').on(table.siteId).where(sql`${table.status} IN ('queued','downloading','staging','awaiting_approval')`),
+  index('vcom_pending_work').on(table.status,table.nextAttemptAt,table.leaseUntil),
+  check('vcom_job_status',sql`${table.status} IN ('queued','downloading','staging','awaiting_approval','committed','failed','canceled')`),
+  check('vcom_job_cursor',sql`${table.completedRequests} >= 0 AND ${table.completedRequests} <= ${table.totalRequests}`),
+]);
+export const vcomManualChunks = sqliteTable('vcom_manual_chunks', {
+  jobId:text('job_id').notNull().references(()=>vcomManualJobs.id), requestIndex:integer('request_index').notNull(),
+  requestId:text('request_id').notNull(), planHash:text('plan_hash').notNull(), payloadHash:text('payload_hash').notNull(),
+  raw:text('raw').notNull(), bytes:integer('bytes').notNull(),
+},table=>[primaryKey({columns:[table.jobId,table.requestIndex]}),uniqueIndex('vcom_chunk_identity').on(table.jobId,table.requestId)]);
 
 // Operational cleanup state is schema, not a reason to run legacy data cleanup.
 export const maintenanceTasks = sqliteTable('maintenance_tasks', {
