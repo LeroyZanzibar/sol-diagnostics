@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.11.19.2 — pending publication
+## 2026.11.19.2 — published November 19, 2026
 
 - Allow each discovered VCOM field to be included or explicitly excluded. Save exclusions across reload/discovery and enforce them in request planning and normalization; excluded fields never add canonical readings. Existing imported history is not deleted. All-excluded configurations may be saved, but downloads require at least one included field.
 - Suggest compatible equipment destinations with the same name/ID/alias/channel matcher and confidence levels used by CSV mapping. Preserve saved/manual mappings and exclusions; suggestions require explicit Save mappings.
@@ -8,9 +8,9 @@
 - Show fixed-width masked indicators for saved API key, username, password and bearer token without returning stored values or submitting mask text. Unchanged fields preserve saved credentials.
 - Keep manual preview/Apply, overlap approval, CSV imports, retained data, authentication and encryption-key protections unchanged. No scheduler, automatic analysis or SQL migration is introduced.
 
-Local verification: production build and 738/738 tests passed, including synthetic production-HTTP exclusions/restart/history-preservation coverage. Desktop/mobile browser checks passed for all four changes and selective preview → Apply. Standalone TypeScript retains exactly six reproduced baseline diagnostics; no new diagnostics. Live VCOM and installed-app behavior were not exercised.
+Pre-publication local verification: production build and 738/738 tests passed, including synthetic production-HTTP exclusions/restart/history-preservation coverage. Desktop/mobile browser checks passed for all four changes and selective preview → Apply. Standalone TypeScript retains exactly six reproduced baseline diagnostics; no new diagnostics. Live VCOM and installed-app behavior were not exercised at that checkpoint.
 
-This is a provisional development version and is not published or installed; release and deployment require separate approval.
+Published as `v2026.11.19.2` from source commit `7681f1ba07c13fe004faa0725bf56079d586b7ff`. The immutable multi-platform image digest is `sha256:d0b526316aab99b5e2426b1f92e92d149b76e002e9b2aa7f734f8ab5429d866d`. The release build passed 738/738 tests and native AMD64/ARM64 hardened persistence checks. Independent anonymous native pulls verified both architectures and the exact source/version labels. Both uploaded source/checksum assets were downloaded anonymously and byte-verified. See [the GitHub release](https://github.com/LeroyZanzibar/sol-diagnostics/releases/tag/v2026.11.19.2) for downloads and exact CI evidence. This publication-only documentation does not move the source tag or rebuild its images. Installed-app deployment is a separate stage; back up complete storage, including the independent VCOM master key, before updating.
 
 ## 2026.11.19.1 — published November 19, 2026
 
