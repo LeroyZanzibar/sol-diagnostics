@@ -69,6 +69,122 @@ function editChunk(chunks, kind, edit, abbreviation) {
   return target;
 }
 
+const excludedMapping = mapping => ({ ...mapping, equipmentId: '', excluded: true });
+const excludeSources = (mappings, ids) => mappings.map(m => ids.includes(m.sourceId) ? excludedMapping(m) : m);
+const planningInput = f => ({ siteId: 'test-site', ...f, fromDate: '2026-09-01', throughDate: '2026-09-01', modelRevision: 'model-1', datasetRevision: 0, now: NOW });
+
+test('exclusions distinguish valid saved decisions from import readiness, including legacy and explicit false', async () => {
+  const f = await fixture();
+  assert.deepEqual(validateVcomMappings(f), { valid: true, ready: true, issues: [] });
+  const explicit = { ...f, mappings: f.mappings.map(m => ({ ...m, excluded: false })) };
+  assert.deepEqual(validateVcomMappings(explicit), { valid: true, ready: true, issues: [] });
+  const all = { ...f, selectedPoaSourceId: null, mappings: f.mappings.map(excludedMapping), equipment: [] };
+  const decision = validateVcomMappings(all);
+  assert.equal(decision.valid, true); assert.equal(decision.ready, false);
+  assert.match(decision.issues.join(' '), /include at least one|at least one.*included/i);
+  assert.throws(() => planVcomImport(planningInput(all)), /include at least one|at least one.*included/i);
+});
+
+for (const [label, edit] of [
+  ...[undefined, null, 'true', 'false', 0, 1, {}, []].map(value => [`non-boolean ${String(value)}`, f => { f.mappings[0].excluded = value; }]),
+  ['retained destination', f => { f.mappings[0].excluded = true; }],
+  ['missing excluded destination', f => { f.mappings[0] = excludedMapping(f.mappings[0]); delete f.mappings[0].equipmentId; }],
+  ['null excluded destination', f => { f.mappings[0] = { ...excludedMapping(f.mappings[0]), equipmentId: null }; }],
+  ['wrong excluded measurement', f => { f.mappings[0] = { ...excludedMapping(f.mappings[0]), measurement: 'Energy' }; }],
+  ['excluded import is not Energy', f => { const i = f.mappings.findIndex(m => m.sourceId.endsWith('IMP')); f.mappings[i] = { ...excludedMapping(f.mappings[i]), measurement: 'Energy' }; }],
+  ['unknown excluded source', f => { f.mappings.push({ sourceId: 'inverter:Unknown:E_INT', measurement: 'Energy', equipmentId: '', excluded: true }); }],
+  ['duplicate exclusion', f => { f.mappings.push(excludedMapping(f.mappings[0])); }],
+  ['missing decision', f => { f.mappings.pop(); }],
+]) test(`exclusions reject ${label}`, async () => {
+  const f = await fixture(); edit(f);
+  const result = validateVcomMappings(f);
+  assert.equal(result.ready, false); assert.equal(result.valid, false); assert.ok(result.issues.length);
+  assert.throws(() => planVcomImport(planningInput(f)));
+});
+
+test('exclusions allow unsupported sources without destinations but retain full discovery and included collisions', async () => {
+  const f = await fixture({ overrides: { '/systems/ABCDE/inverters/Inv002.1/abbreviations': { data: [] } } });
+  assert.equal(validateVcomMappings(f).ready, false);
+  f.mappings = excludeSources(f.mappings, ['inverter:Inv002.1:E_INT']);
+  f.equipment = f.equipment.filter(e => e.id !== 'inv-2');
+  assert.deepEqual(validateVcomMappings(f), { valid: true, ready: true, issues: [] });
+  const plan = planVcomImport(planningInput(f));
+  assert.deepEqual(plan.discovery, f.discovery); assert.equal(plan.discovery.sources.length, 6);
+  assert.equal(plan.readingCount, 120);
+  const collision = await fixture(); collision.mappings.find(m => m.equipmentId === 'inv-2').equipmentId = 'inv-1';
+  assert.match(validateVcomMappings(collision).issues.join(' '), /collide/i);
+  collision.mappings = excludeSources(collision.mappings, ['inverter:Inv002.1:E_INT']);
+  assert.equal(validateVcomMappings(collision).valid, true);
+});
+
+for (const selectedPoaSourceId of ['poa:Sensor001.1', 'poa:missing', '']) test(`exclusions reject POA selection ${JSON.stringify(selectedPoaSourceId)} when combined irradiance is excluded`, async () => {
+  const f = await fixture(); f.mappings = excludeSources(f.mappings, ['irradiance:combined']); f.selectedPoaSourceId = selectedPoaSourceId;
+  const result = validateVcomMappings(f); assert.equal(result.valid, false); assert.match(result.issues.join(' '), /POA.*excluded|excluded.*POA/i);
+  assert.throws(() => planVcomImport(planningInput(f)), /POA.*excluded|excluded.*POA/i);
+});
+
+for (const [sourceId, expectedKinds, expectedValue] of [
+  ['simulation:expected', ['simulation'], 12], ['irradiance:combined', ['satellite', 'poa'], 0],
+  ['inverter:Inv001.1:E_INT', ['inverterBulk'], 2], ['inverter:Inv002.1:E_INT', ['inverterBulk'], 3],
+  ['meter:Meter651.1:M_E_INT_EXP', ['meter'], 5], ['meter:Meter651.1:M_E_INT_IMP', ['meter'], -1],
+]) test(`exclusions single included ${sourceId} fetches and normalizes only its analytical channel`, async () => {
+  const f = await fixture();
+  f.mappings = f.mappings.map(m => m.sourceId === sourceId ? m : excludedMapping(m));
+  if (sourceId !== 'irradiance:combined') f.selectedPoaSourceId = null;
+  const plan = planVcomImport(planningInput(f)), result = forWindow(plan, plan.windows[0], chunksFor(plan));
+  assert.equal(plan.readingCount, 24); assert.deepEqual(plan.requests.map(d => d.kind), expectedKinds);
+  assert.equal(result.readings.length, 24); assert.equal(result.quality.length, 24); assert.equal(result.summary.sources, 1);
+  assert.ok(result.quality.every(q => q.sourceId === sourceId)); assert.ok(result.readings.every(r => r.value === expectedValue));
+  assert.equal(result.summary.missingReadings, 0); assert.equal(result.summary.missingSimulationHours, 0);
+  assert.equal(result.summary.satelliteGaps, 0); assert.equal(result.summary.remainingIrradianceGaps, 0);
+  assert.doesNotMatch(result.summary.warnings.join(' '), /no positive|missing/i);
+  if (sourceId.endsWith('IMP')) assert.ok(result.readings.every(r => r.measurement === 'Other'));
+  const empty = plan.requests.map(d => chunk(d, ['simulation', 'satellite'].includes(d.kind) ? { data: [] } : d.kind === 'inverterBulk' ? {} : { data: {} }));
+  const missing = forWindow(plan, plan.windows[0], empty);
+  assert.equal(missing.readings.length, 24); assert.equal(missing.summary.missingReadings, 24);
+  assert.ok(missing.quality.every(q => q.sourceId === sourceId));
+  if (sourceId !== 'simulation:expected') { assert.equal(missing.summary.missingSimulationHours, 0); assert.doesNotMatch(missing.summary.warnings.join(' '), /no positive.*simulation|missing simulation/i); }
+  if (sourceId !== 'irradiance:combined') assert.equal(missing.summary.remainingIrradianceGaps, 0);
+});
+
+test('exclusions mixed bundle ignores excluded bulk measurements and quality, without weakening payload identity', async () => {
+  const f = await fixture(); f.selectedPoaSourceId = null;
+  f.mappings = excludeSources(f.mappings, ['simulation:expected', 'irradiance:combined', 'inverter:Inv002.1:E_INT', 'meter:Meter651.1:M_E_INT_IMP']);
+  const plan = planVcomImport(planningInput(f)), chunks = chunksFor(plan);
+  assert.deepEqual(plan.requests.map(d => [d.kind, d.abbreviation]), [['inverterBulk', 'E_INT'], ['meter', 'M_E_INT_EXP']]);
+  editChunk(chunks, 'inverterBulk', p => { for (const row of Object.values(p)) row['Inv002.1'] = { E_INT: 'not-a-number', ignored: { malformed: true } }; });
+  const result = forWindow(plan, plan.windows[0], chunks);
+  assert.equal(result.readings.length, 48); assert.equal(result.quality.length, 48); assert.equal(plan.readingCount, 48);
+  assert.deepEqual([...new Set(result.readings.map(r => r.equipmentId))].sort(), ['inv-1', 'meter']);
+  assert.equal(result.summary.missingReadings, 0); assert.equal(result.summary.sources, 2);
+  assert.doesNotMatch(result.summary.warnings.join(' '), /missing|simulation/i);
+  const tampered = clone(chunks); tampered[0].payload[Object.keys(tampered[0].payload)[0]]['Inv002.1'].E_INT = 123;
+  assert.throws(() => forWindow(plan, plan.windows[0], tampered), /digest/i);
+  editChunk(chunks, 'inverterBulk', p => { Object.values(p)[0].Foreign = { E_INT: 1 }; });
+  assert.throws(() => forWindow(plan, plan.windows[0], chunks), /foreign/i);
+});
+
+test('exclusions size windows and reading admission by included sources, not full discovery', async () => {
+  const f = await fixture();
+  for (let i = 0; i < 600; i++) {
+    const source = { ...f.discovery.sources.find(s => s.kind === 'inverter'), id: `inverter:Extra${i}:E_INT`, deviceId: `Extra${i}` };
+    f.discovery.sources.push(source); f.mappings.push({ sourceId: source.id, equipmentId: '', measurement: source.measurement, excluded: true });
+  }
+  const plan = planVcomImport({ ...planningInput(f), fromDate: '2025-01-01', throughDate: '2025-12-31' });
+  assert.equal(plan.discovery.sources.length, 606); assert.equal(plan.readingCount, 365 * 24 * 6);
+  assert.equal(plan.windows.length, 365); assert.ok(plan.windows.every(w => Date.parse(w.endUtc) - Date.parse(w.startUtc) === 24 * H));
+});
+
+test('exclusions preserve legacy omitted-property plan hashes, descriptors and normalized replay byte-for-byte', async () => {
+  // Captured before implementation from provider at 1750913e2299d2f10f0935601965b7a540b2d063.
+  const plan = await makePlan();
+  assert.equal(plan.planHash, '0bbcb9074afc2a93718046312f0b18063fa99a89d381ccbaf5a8e1e5075e5c39');
+  assert.equal(hash(plan.requests), '3775b2e76b20868fa9ca873d8fd0643cb0148a156efde8f2509c80c7469381f6');
+  assert.ok(plan.mappings.every(m => !Object.hasOwn(m, 'excluded')));
+  const replay = clone(plan), result = forWindow(replay, replay.windows[0], clone(chunksFor(plan)));
+  assert.equal(createHash('sha256').update(JSON.stringify(result)).digest('hex'), 'bce7b15314716d473506d3db83c01286732f3e3e32bd8cfc7d4112f59fd302b3');
+});
+
 // First gate: ordinary populated, complete exporter bundle, no server or credentials.
 test('ordinary full bundle discovers, plans and normalizes every source with canonical identities', async () => {
   const f = await fixture();
@@ -487,6 +603,8 @@ test('declarations typecheck a consumer against the real shared public shapes', 
     declare const auth: VcomCredentialsInput; declare const discovery: VcomDiscovery; declare const mappings: VcomMapping[]; declare const rawChunks: RawChunk[];
     const client = createVcomClient({auth, fetchImpl: fetch, timeoutMs:15000}); const found: Promise<VcomDiscovery> = discoverVcom({client,systemKey:'ABCDE'});
     const ready: boolean = validateVcomMappings({discovery,mappings,equipment:[],selectedPoaSourceId:null}).ready;
+    const valid: boolean = validateVcomMappings({discovery,mappings,equipment:[],selectedPoaSourceId:null}).valid;
+    const exclusion: VcomMapping = {sourceId:'simulation:expected',equipmentId:'',measurement:'Expected Production',excluded:true};
     const plan: VcomPlan = planVcomImport({siteId:'s',discovery,mappings,selectedPoaSourceId:null,fromDate:'2026-01-01',throughDate:'2026-01-01',modelRevision:'m',datasetRevision:0});
     const result = normalizeVcomWindow({plan,windowStartUtc:plan.startUtc,windowEndUtc:plan.endUtc,rawChunks});
     const quality: HourQuality[] = result.quality; const summary: VcomQualitySummary = result.summary; const code: string = new VcomError('VCOM_TEST','safe').code;

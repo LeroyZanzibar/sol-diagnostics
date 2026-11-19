@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { EquipmentAsset } from "./equipment";
+import { suggestSignal } from "./telemetry-csv";
 import type { PerformanceCommit, PerformanceDataset, PerformanceImportAudit, PerformancePreview } from "../db/performance-store";
 import type { VcomAction, VcomAuthMode, VcomManualJob, VcomMapping, VcomSettingsPublic, VcomSource, VcomWorkspace as Workspace } from "./manual-vcom-types";
 
@@ -17,6 +18,7 @@ type Props = {
 };
 type Uncertain = { action: "start"; requestId: string; generation: number; fromDate: string; throughDate: string } | { action: "apply"; jobId: string; stageId: string } | { action: "retry" | "cancel"; jobId: string };
 const activeStatuses = new Set(["queued", "downloading", "staging"]);
+const savedCredentialPlaceholder = "••••••••";
 const countLabels = [["added", "Added"], ["overlapping", "Overlapping"], ["changed", "Changed"], ["identical", "Identical"], ["blankPreserved", "Blank/null preserved"]] as const;
 const statusLabels: Record<VcomManualJob["status"], string> = { queued: "Queued", downloading: "Downloading", staging: "Preparing preview", awaiting_approval: "Awaiting approval", committed: "Applied", failed: "Failed", canceled: "Canceled" };
 
@@ -64,25 +66,45 @@ async function jsonResponse(response: Response) {
   if (!response.ok) throw Object.assign(new Error(typeof data?.error === "string" ? data.error : `Request failed (${response.status}).`), { status: response.status });
   return data;
 }
-function mappingDefaults(settings: VcomSettingsPublic): VcomMapping[] {
-  return settings.discovery?.sources.map(source => ({ sourceId: source.id, equipmentId: settings.mappings.find(m => m.sourceId === source.id)?.equipmentId || (source.kind === "simulation" ? "@site" : ""), measurement: source.measurement })) || [];
-}
 function destinations(source: VcomSource, equipment: EquipmentAsset[]) {
   const type = source.kind === "irradiance" ? "weather_sensor" : source.kind === "inverter" ? "inverter" : "revenue_meter";
   return equipment.filter(asset => asset.type === type);
 }
+function mappingSuggestion(source: VcomSource, equipment: EquipmentAsset[]) {
+  return source.kind === "simulation"
+    ? { equipmentId: "@site", confidence: "high" as const, reason: "Fixed site destination for Expected Production" }
+    : suggestSignal(source.name, destinations(source, equipment));
+}
+function mappingDefaults(settings: VcomSettingsPublic, equipment: EquipmentAsset[]): VcomMapping[] {
+  return settings.discovery?.sources.map(source => {
+    const saved = settings.mappings.find(m => m.sourceId === source.id);
+    return saved?.excluded === true
+      ? { sourceId: source.id, equipmentId: "", measurement: source.measurement, excluded: true }
+      : { sourceId: source.id, equipmentId: saved ? saved.equipmentId : mappingSuggestion(source, equipment).equipmentId, measurement: source.measurement };
+  }) || [];
+}
+function irradianceExcluded(settings: VcomSettingsPublic | undefined, draft: VcomMapping[]) {
+  return !!settings?.discovery?.sources.some(source => source.kind === "irradiance" && draft.some(m => m.sourceId === source.id && m.excluded === true));
+}
 function mappingsIssue(settings: VcomSettingsPublic | undefined, draft: VcomMapping[], equipment: EquipmentAsset[], poa: string | null) {
   if (!settings?.discovery) return "Test the saved connection before mapping fields.";
+  if (draft.length !== settings.discovery.sources.length || new Set(draft.map(m => m.sourceId)).size !== draft.length) return "Include or exclude every discovered source exactly once.";
   const seen = new Set<string>();
   for (const source of settings.discovery.sources) {
-    if (!source.eligible) return "Unsupported sources must be resolved before this complete bundle can be imported.";
     const mapping = draft.find(item => item.sourceId === source.id);
-    if (!mapping?.equipmentId || mapping.measurement !== source.measurement) return "Assign every source to its appropriate destination.";
+    if (!mapping || mapping.measurement !== source.measurement) return "Include or exclude every source with its fixed measurement.";
+    if (mapping.excluded === true) {
+      if (mapping.equipmentId !== "") return "Excluded sources must not have a destination.";
+      continue;
+    }
+    if (!source.eligible) return "Exclude unsupported sources before saving the field mappings.";
+    if (!mapping.equipmentId) return "Assign every included source to its appropriate destination, or exclude it.";
     if (source.kind === "simulation" ? mapping.equipmentId !== "@site" : !destinations(source, equipment).some(asset => asset.id === mapping.equipmentId)) return "A mapped destination is no longer available or has the wrong equipment type.";
     const key = JSON.stringify([mapping.equipmentId, mapping.measurement]);
     if (seen.has(key)) return "Each source needs a distinct equipment and measurement destination.";
     seen.add(key);
   }
+  if (poa !== null && irradianceExcluded(settings, draft)) return "Exclude irradiance without a POA fallback.";
   if (poa !== null && !settings.discovery.poaSensors.some(source => source.id === poa && source.eligible)) return "Choose an eligible POA fallback, or explicitly choose no fallback.";
   return "";
 }
@@ -98,7 +120,7 @@ function sameReceipt(a: PerformanceCommit | undefined | null, b: PerformanceComm
   return !!(a && b && a.siteId === b.siteId && a.stageId === b.stageId && a.revision === b.revision && a.revisionId === b.revisionId && a.committedAt === b.committedAt && countLabels.every(([key]) => Number.isSafeInteger(a.counts?.[key]) && a.counts[key] >= 0 && a.counts[key] === b.counts?.[key]));
 }
 function canonicalMappings(mappings: VcomMapping[]) {
-  return JSON.stringify(mappings.map(m => [m.sourceId, m.equipmentId, m.measurement]).sort((a, b) => a[0].localeCompare(b[0])));
+  return JSON.stringify([...mappings].sort((a, b) => a.sourceId.localeCompare(b.sourceId)).map(m => [m.sourceId, m.equipmentId, m.measurement, m.excluded === true]));
 }
 
 export default function VcomWorkspace(props: Props) {
@@ -117,6 +139,7 @@ export default function VcomWorkspace(props: Props) {
   const [configGeneration, setConfigGeneration] = useState(-1);
   const [mappingGeneration, setMappingGeneration] = useState(-1);
   const [mappingDraft, setMappingDraft] = useState<VcomMapping[]>([]);
+  const manualMappings = useRef(new Set<string>());
   const [selectedPoaSourceId, setSelectedPoaSourceId] = useState<string | null>(null);
   const [fromDate, setFromDate] = useState("");
   const [throughDate, setThroughDate] = useState("");
@@ -136,11 +159,15 @@ export default function VcomWorkspace(props: Props) {
   const activeJob = workspace?.jobs.find(job => activeStatuses.has(job.status));
   const unfinished = workspace?.jobs.some(job => activeStatuses.has(job.status) || job.status === "awaiting_approval");
   const hasSecretDraft = !!(apiKey || username || password || accessToken);
+  const credentialPlaceholder = settings?.hasCredentials && authMode === settings.authMode ? savedCredentialPlaceholder : undefined;
   const unsavedConfiguration = !!settings && (systemKey !== settings.systemKey || authMode !== settings.authMode || hasSecretDraft);
+  const unsavedMappings = !!settings?.discovery && (canonicalMappings(mappingDraft) !== canonicalMappings(settings.mappings) || selectedPoaSourceId !== (settings.selectedPoaSourceId ?? null));
+  const excludeIrradiance = irradianceExcluded(settings, mappingDraft);
+  const noIncludedSources = !!settings?.discovery?.sources.length && settings.discovery.sources.every(source => mappingDraft.some(m => m.sourceId === source.id && m.excluded === true));
   const rangeIssue = vcomRangeIssue(fromDate, throughDate, today);
   const mappingIssue = mappingsIssue(settings, mappingDraft, equipment, selectedPoaSourceId);
   const datasetBlocked = props.datasetLoading || !!props.datasetError || props.requiresMigration || !props.dataset || props.dataset.siteId !== siteId;
-  const startDisabled = loading || !!busy || !!uncertain || !settings?.ready || !!unfinished || datasetBlocked || !!rangeIssue;
+  const startDisabled = loading || !!busy || !!uncertain || !settings?.ready || unsavedMappings || noIncludedSources || !!unfinished || datasetBlocked || !!rangeIssue;
   const preview = validPreview(selectedJob, siteId) ? selectedJob!.preview : null;
   const previewIdentity = preview && selectedJob ? JSON.stringify([siteId, selectedJob.id, preview.stageId, preview.previewToken, preview.baseRevision, settings?.generation]) : null;
   const approvedOverlap = approveOverlap && approvalIdentity !== null && approvalIdentity === previewIdentity;
@@ -149,7 +176,8 @@ export default function VcomWorkspace(props: Props) {
 
   const resetDrafts = useCallback((saved: VcomSettingsPublic) => {
     setSystemKey(saved.systemKey); setAuthMode(saved.authMode); setConfigGeneration(saved.generation); setMappingGeneration(saved.generation);
-    setMappingDraft(mappingDefaults(saved)); setSelectedPoaSourceId(saved.selectedPoaSourceId ?? null);
+    const defaults = mappingDefaults(saved, latestProps.current.equipment);
+    setMappingDraft(defaults); manualMappings.current.clear(); setSelectedPoaSourceId(irradianceExcluded(saved, defaults) ? null : saved.selectedPoaSourceId ?? null);
     setApproveOverlap(false); setApprovalIdentity(null);
   }, []);
   const install = useCallback((saved: Workspace, reset = false) => {
@@ -187,6 +215,24 @@ export default function VcomWorkspace(props: Props) {
   }, [siteId]);
   // External CSV commits must also refresh configuration/history.
   useEffect(() => { void refresh(); }, [refresh, refreshRevision]);
+  // Equipment can arrive after discovery. Only untouched, unsaved suggestions
+  // follow that inventory; saved choices and deliberate blanks stay untouched.
+  useEffect(() => {
+    if (!settings?.discovery || equipmentLoading || mappingGeneration !== settings.generation) return;
+    setMappingDraft(current => {
+      let changed = false;
+      const next = current.map(mapping => {
+        if (mapping.excluded === true || manualMappings.current.has(mapping.sourceId) || settings.mappings.some(m => m.sourceId === mapping.sourceId)) return mapping;
+        const source = settings.discovery!.sources.find(s => s.id === mapping.sourceId);
+        if (!source) return mapping;
+        const equipmentId = mappingSuggestion(source, equipment).equipmentId;
+        if (equipmentId === mapping.equipmentId) return mapping;
+        changed = true;
+        return { ...mapping, equipmentId };
+      });
+      return changed ? next : current;
+    });
+  }, [equipment, equipmentLoading, settings, mappingGeneration]);
   useEffect(() => {
     if (!activeJob || busy || pollError) return;
     const controller = new AbortController(), ticket = sequence.current;
@@ -287,7 +333,27 @@ export default function VcomWorkspace(props: Props) {
     } else return mutate({ action: "configure", siteId, expectedGeneration: configGeneration, systemKey });
   }
   function discover() { if (settings?.hasCredentials && !unsavedConfiguration && !busy && !uncertain) return mutate({ action: "discover", siteId, expectedGeneration: settings.generation }); }
-  function saveMappings() { if (settings && !mappingIssue && !equipmentLoading && mappingGeneration === settings.generation && !busy && !uncertain) return mutate({ action: "mappings", siteId, expectedGeneration: mappingGeneration, mappings: mappingDraft, selectedPoaSourceId }); }
+  function saveMappings() {
+    if (settings && !mappingIssue && !equipmentLoading && mappingGeneration === settings.generation && !busy && !uncertain) {
+      const mappings = mappingDraft.map(m => ({ sourceId: m.sourceId, equipmentId: m.equipmentId, measurement: m.measurement, ...(m.excluded === true ? { excluded: true } : {}) }));
+      return mutate({ action: "mappings", siteId, expectedGeneration: mappingGeneration, mappings, selectedPoaSourceId });
+    }
+  }
+  function setSourceIncluded(source: VcomSource, included: boolean) {
+    if (!isCurrent() || operationBusy.current || uncertain) return;
+    manualMappings.current.add(source.id);
+    setMappingDraft(current => {
+      const previous = current.find(m => m.sourceId === source.id);
+      const mapping: VcomMapping = { sourceId: source.id, measurement: source.measurement, equipmentId: included ? previous?.equipmentId || mappingSuggestion(source, equipment).equipmentId : "", ...(!included ? { excluded: true } : {}) };
+      return previous ? current.map(m => m.sourceId === source.id ? mapping : m) : [...current, mapping];
+    });
+    if (!included && source.kind === "irradiance") setSelectedPoaSourceId(null);
+  }
+  function setDestination(source: VcomSource, equipmentId: string) {
+    if (!isCurrent() || operationBusy.current || uncertain || equipmentLoading || !source.eligible || mappingDraft.some(m => m.sourceId === source.id && m.excluded === true)) return;
+    manualMappings.current.add(source.id);
+    setMappingDraft(current => current.map(m => m.sourceId === source.id ? { sourceId: source.id, equipmentId, measurement: source.measurement } : m));
+  }
   function start() {
     if (startDisabled || !settings || operationBusy.current) return;
     return mutate({ action: "start", siteId, expectedGeneration: settings.generation, requestId: crypto.randomUUID(), fromDate, throughDate });
@@ -302,8 +368,9 @@ export default function VcomWorkspace(props: Props) {
     return mutate({ action, siteId, jobId: job.id });
   }
 
-  return <div className="vcom-workspace" aria-busy={loading || !!busy}>
+  return <div className="vcom-workspace">
     {loading && <p className="vcom-notice" role="status">Loading VCOM connection…</p>}
+    <div role="status" aria-live="polite" aria-atomic={true}>{busy === "discover" && <p className="vcom-notice">Testing connection… Waiting for saved-source discovery and verification.</p>}</div>
     {error && <div className="vcom-notice vcom-error" role="alert">{error}</div>}
     {message && <p className="vcom-notice" role="status">{message}</p>}
     {(error || uncertain) && <div className="vcom-actions vcom-recovery">{uncertain ? <button className="secondary-btn" disabled={!!busy} onClick={() => checkRequestStatus()}>Check request status</button> : <button className="secondary-btn" disabled={!!busy} onClick={() => refresh()}>Refresh connection</button>}</div>}
@@ -315,7 +382,7 @@ export default function VcomWorkspace(props: Props) {
           <div className="vcom-card-body">
             <div className="vcom-date-fields"><label>From<input aria-label="API From date" type="date" value={fromDate} max={throughDate && throughDate < today ? throughDate : today || undefined} disabled={!!busy || !!uncertain || !timezone} onChange={event => setFromDate(event.target.value)} /></label><label>Through<input aria-label="API Through date" type="date" value={throughDate} min={fromDate || undefined} max={today || undefined} disabled={!!busy || !!uncertain || !timezone} onChange={event => setThroughDate(event.target.value)} /></label></div>
             <div className="vcom-download-actions"><p>Up to 1 calendar year. Both dates included.<br />Review first; Apply and analysis are manual.</p><button className="primary-btn" disabled={startDisabled} onClick={start}>{busy === "start" ? "Requesting…" : "Download range"}</button></div>
-            {!loading && !settings?.ready && <p className="vcom-help">{settings?.discovery ? "Complete and save field mapping before downloading." : "Save configuration and test the connection before downloading."} <button className="vcom-text-button" onClick={() => props.onSelectTab(settings?.discovery ? "mapping" : "setup")}>{settings?.discovery ? "Open field mapping" : "Open API setup"}</button></p>}
+            {!loading && (!settings?.ready || unsavedMappings || noIncludedSources) && <p className="vcom-help">{noIncludedSources ? "No sources included. Include and save at least one source before downloading." : settings?.discovery ? "Review and save field mapping before downloading." : "Save configuration and test the connection before downloading."} <button className="vcom-text-button" onClick={() => props.onSelectTab(settings?.discovery ? "mapping" : "setup")}>{settings?.discovery ? "Open field mapping" : "Open API setup"}</button></p>}
             {settings?.ready && rangeIssue && <p className="vcom-help">{rangeIssue}</p>}
             {props.requiresMigration && <p className="vcom-help">Apply the retained-file migration before an API download.</p>}
             <p className="vcom-help">Downloads run on the server. You can close this page and return to review.</p>
@@ -341,16 +408,16 @@ export default function VcomWorkspace(props: Props) {
 
     <section hidden={activeTab !== "setup"} className="vcom-card" aria-labelledby="vcom-setup-title">
       <header className="vcom-card-head"><h2 id="vcom-setup-title">API setup</h2><span className="vcom-badge">{settings?.discovery ? "Saved discovery" : "Not tested"}</span></header>
-      <div className="vcom-card-body"><p>Credentials are saved on the server and never returned to this form. Leave every credential field blank to keep the saved credentials. Changing authentication mode requires a complete replacement.</p>
-        <fieldset className="vcom-form" disabled={loading || !!busy || !!uncertain}>
+      <div className="vcom-card-body"><p>Credentials are saved on the server and never returned to this form. Dots indicate saved credentials, not their values or lengths. Leave every credential field untouched to keep them. To replace any credential or change authentication mode, enter a complete replacement set.</p>
+        <fieldset className="vcom-form" aria-busy={!!busy} disabled={loading || !!busy || !!uncertain}>
           <label>VCOM system key<input aria-label="VCOM system key" value={systemKey} autoComplete="off" spellCheck={false} onChange={event => setSystemKey(event.target.value)} /></label>
           <label>Authentication<select aria-label="VCOM authentication" value={authMode} onChange={event => { setAuthMode(event.target.value as VcomAuthMode); setUsername(""); setPassword(""); setAccessToken(""); }}><option value="basic">Basic (deprecated)</option><option value="bearer">Bearer access token</option></select></label>
-          <label>API key<input aria-label="VCOM API key" type="password" value={apiKey} autoComplete="new-password" onChange={event => setApiKey(event.target.value)} /></label>
-          {authMode === "basic" ? <><label>Username<input aria-label="VCOM username" value={username} autoComplete="off" onChange={event => setUsername(event.target.value)} /></label><label>Password<input aria-label="VCOM password" type="password" value={password} autoComplete="new-password" onChange={event => setPassword(event.target.value)} /></label></> : <label>Access token<input aria-label="VCOM access token" type="password" value={accessToken} autoComplete="new-password" onChange={event => setAccessToken(event.target.value)} /></label>}
+          <label>API key<input aria-label="VCOM API key" type="password" value={apiKey} placeholder={credentialPlaceholder} aria-describedby="vcom-credential-help" autoComplete="new-password" onChange={event => setApiKey(event.target.value)} /></label>
+          {authMode === "basic" ? <><label>Username<input aria-label="VCOM username" value={username} placeholder={credentialPlaceholder} aria-describedby="vcom-credential-help" autoComplete="off" onChange={event => setUsername(event.target.value)} /></label><label>Password<input aria-label="VCOM password" type="password" value={password} placeholder={credentialPlaceholder} aria-describedby="vcom-credential-help" autoComplete="new-password" onChange={event => setPassword(event.target.value)} /></label></> : <label>Access token<input aria-label="VCOM access token" type="password" value={accessToken} placeholder={credentialPlaceholder} aria-describedby="vcom-credential-help" autoComplete="new-password" onChange={event => setAccessToken(event.target.value)} /></label>}
         </fieldset>
-        <p className="vcom-help">{settings?.hasCredentials ? "Credentials are saved. Secret inputs are intentionally blank." : "No credentials have been saved."} Saving configuration does not download telemetry.</p>
+        <p className="vcom-help" id="vcom-credential-help">{credentialPlaceholder ? "Credentials are saved for this authentication mode. Leave all fields untouched to keep them, or enter the full replacement set." : settings?.hasCredentials ? "No credentials are saved for the selected authentication mode. Enter the full replacement set to change modes." : "No credentials have been saved."} Saving configuration does not download telemetry.</p>
         {settings && configGeneration !== settings.generation && <p className="vcom-warning">Configuration changed elsewhere. Refresh the connection before saving this draft.</p>}
-        <div className="vcom-actions"><button className="primary-btn" disabled={loading || !!busy || !!uncertain || !systemKey || configGeneration !== settings?.generation} onClick={saveConfiguration}>Save configuration</button><button className="secondary-btn" disabled={loading || !!busy || !!uncertain || !settings?.hasCredentials || unsavedConfiguration} onClick={discover}>Test saved connection</button><button className="secondary-btn" disabled={!!busy || !!uncertain} onClick={() => refresh()}>Refresh connection</button></div>
+        <div className="vcom-actions"><button className="primary-btn" disabled={loading || !!busy || !!uncertain || !systemKey || configGeneration !== settings?.generation} onClick={saveConfiguration}>Save configuration</button><button className="secondary-btn" disabled={loading || !!busy || !!uncertain || !settings?.hasCredentials || unsavedConfiguration} aria-busy={busy === "discover"} onClick={discover}>{busy === "discover" ? <><span className="vcom-spinner" aria-hidden={true} />Testing connection…</> : "Test saved connection"}</button><button className="secondary-btn" disabled={!!busy || !!uncertain} onClick={() => refresh()}>Refresh connection</button></div>
         {unsavedConfiguration && <p className="vcom-help">Save configuration before testing this connection.</p>}
         {settings?.discovery && <div className="vcom-discovery"><h3>{settings.discovery.systemName}</h3><p>System: {settings.discovery.systemKey}<br />Timezone: {settings.discovery.timezone}<br />Discovered: {stamp(settings.discovery.discoveredAt, settings.discovery.timezone)}</p>{settings.discovery.warnings.map((warning, i) => <p className="vcom-warning" key={i}>{warning}</p>)}</div>}
         {!!settings?.issues.length && <ul className="vcom-issues">{settings.issues.map((issue, i) => <li key={i}>{issue}</li>)}</ul>}
@@ -359,10 +426,27 @@ export default function VcomWorkspace(props: Props) {
 
     <section hidden={activeTab !== "mapping"} className="vcom-card" aria-labelledby="vcom-mapping-title">
       <header className="vcom-card-head"><h2 id="vcom-mapping-title">Field mapping</h2><span className="vcom-help">Explicit confirmation required</span></header>
-      <div className="vcom-card-body"><p>Map every discovered analytical source. Measurements and normalized API units are fixed. Meters remain separate from inverter energy; meter import is Other, not generated Energy.</p>
+      <div className="vcom-card-body"><p>Include or exclude each discovered analytical source. Destination suggestions use the CSV equipment matcher; review them and choose Save mappings to confirm. Exclusions affect future imports only, not saved data. Measurements and normalized API units are fixed. Meters remain separate from inverter energy; meter import is Other, not generated Energy.</p>
         {!settings?.discovery ? <p>Test the saved connection in API setup to discover sources.</p> : <>
-          <div className="vcom-table-wrap"><table className="vcom-mapping-table"><thead><tr><th>VCOM source / device</th><th>Measurement / unit</th><th>Destination</th></tr></thead><tbody>{settings.discovery.sources.map(source => <tr key={source.id}><td><strong>{source.name}</strong><small>{source.id}</small><small>Device: {source.deviceId ?? "System-level"}</small>{!source.eligible && <p className="vcom-warning">Unsupported: {source.reason || "Source cannot be imported."}</p>}</td><td>{source.measurement}<small>{source.unit}</small><small>Upstream: {source.sourceUnit} / {source.aggregation}</small></td><td>{source.kind === "simulation" ? <span>Site Expected Production (@site)<small>Suggested. Confirm with Save mappings.</small></span> : <select aria-label={`Destination for ${source.id}`} value={mappingDraft.find(m => m.sourceId === source.id)?.equipmentId || ""} disabled={!source.eligible || !!busy || !!uncertain || equipmentLoading} onChange={event => setMappingDraft(current => current.map(m => m.sourceId === source.id ? { ...m, equipmentId: event.target.value, measurement: source.measurement } : m))}><option value="">Choose destination</option>{destinations(source, equipment).map(asset => <option key={asset.id} value={asset.id}>{asset.name} ({asset.id})</option>)}</select>}</td></tr>)}</tbody></table></div>
-          <div className="vcom-poa"><h3>Irradiance fallback</h3><p>Satellite irradiance is primary. The combined site irradiance series is authoritative. A selected raw POA sensor only fills satellite gaps; it is not imported as a second analytical irradiance series.</p><label>POA fallback source<select aria-label="POA fallback source" value={selectedPoaSourceId ?? ""} disabled={!!busy || !!uncertain} onChange={event => setSelectedPoaSourceId(event.target.value || null)}><option value="">No POA fallback</option>{settings.discovery.poaSensors.map(source => <option key={source.id} value={source.id} disabled={!source.eligible}>{source.name} ({source.deviceId ?? source.id}){!source.eligible ? ` - unsupported: ${source.reason}` : ""}</option>)}</select></label><p className="vcom-help">Raw satellite and selected POA provenance are retained. No sensor is selected automatically.</p></div>
+          <div className="vcom-table-wrap"><table className="vcom-mapping-table"><thead><tr><th>VCOM source / device</th><th>Measurement / unit</th><th>Import</th><th>Destination</th></tr></thead><tbody>{settings.discovery.sources.map(source => {
+            const mapping = mappingDraft.find(m => m.sourceId === source.id);
+            const excluded = mapping?.excluded === true;
+            const manual = manualMappings.current.has(source.id);
+            const saved = settings.mappings.some(m => m.sourceId === source.id);
+            const suggestion = mappingSuggestion(source, equipment);
+            return <tr key={source.id} className={excluded ? "vcom-mapping-excluded" : undefined}>
+              <td><strong>{source.name}</strong><small>{source.id}</small><small>Device: {source.deviceId ?? "System-level"}</small>{!source.eligible && <p className="vcom-warning">Unsupported: {source.reason || "Source cannot be imported."} Exclude this source to save the remaining mappings.</p>}</td>
+              <td>{source.measurement}<small>{source.unit}</small><small>Upstream: {source.sourceUnit} / {source.aggregation}</small></td>
+              <td><label className="vcom-include"><input type="checkbox" aria-label={`Include ${source.id}`} checked={!excluded} disabled={!!busy || !!uncertain} onChange={event => setSourceIncluded(source, event.target.checked)} /><span>{excluded ? "Excluded" : "Included"}</span></label></td>
+              <td>{source.kind === "simulation" ? <span>{excluded ? "Not imported" : "Site Expected Production (@site)"}</span> : <select aria-label={`Destination for ${source.id}`} value={mapping?.equipmentId || ""} disabled={excluded || !source.eligible || !!busy || !!uncertain || equipmentLoading} onChange={event => setDestination(source, event.target.value)}><option value="">{excluded ? "Not imported" : "Choose destination"}</option>{destinations(source, equipment).map(asset => <option key={asset.id} value={asset.id}>{asset.name} ({asset.id})</option>)}</select>}
+                <small className="vcom-mapping-choice">{manual ? excluded ? "Manual exclusion" : "Manual choice" : saved ? excluded ? "Saved exclusion" : "Saved mapping" : "Suggested mapping"}</small>
+                {excluded ? <small>Not included in future downloads after Save mappings.</small> : manual || saved ? <small>Kept as chosen; automatic matching does not replace this destination.</small> : <small className={`vcom-confidence vcom-confidence-${suggestion.confidence}`}>{suggestion.confidence === "high" ? "High" : suggestion.confidence === "medium" ? "Medium" : "Low"} confidence · {suggestion.reason}. Confirm with Save mappings.</small>}
+              </td>
+            </tr>;
+          })}</tbody></table></div>
+          {noIncludedSources && <p className="vcom-warning">No sources included. You can save these exclusions, but downloads remain unavailable until at least one source is included and saved.</p>}
+          {unsavedMappings && !noIncludedSources && <p className="vcom-help">Mapping changes are not saved. Choose Save mappings before downloading.</p>}
+          <div className="vcom-poa"><h3>Irradiance fallback</h3><p>Satellite irradiance is primary. The combined site irradiance series is authoritative. A selected raw POA sensor only fills satellite gaps; it is not imported as a second analytical irradiance series.</p><label>POA fallback source<select aria-label="POA fallback source" value={selectedPoaSourceId ?? ""} disabled={excludeIrradiance || !!busy || !!uncertain} onChange={event => { if (!excludeIrradiance && !operationBusy.current && !uncertain) setSelectedPoaSourceId(event.target.value || null); }}><option value="">No POA fallback</option>{settings.discovery.poaSensors.map(source => <option key={source.id} value={source.id} disabled={!source.eligible}>{source.name} ({source.deviceId ?? source.id}){!source.eligible ? ` - unsupported: ${source.reason}` : ""}</option>)}</select></label><p className="vcom-help">{excludeIrradiance ? "Irradiance is excluded, so its POA fallback is cleared and disabled." : "Raw satellite and selected POA provenance are retained. No sensor is selected automatically."}</p></div>
           {!!settings.discovery.excludedMeters.length && <details><summary>Excluded meters ({settings.discovery.excludedMeters.length})</summary><ul>{settings.discovery.excludedMeters.map(meter => <li key={meter.id}>{meter.name} ({meter.id}): {meter.reason}</li>)}</ul></details>}
         </>}
         {mappingIssue && <p className="vcom-warning">{mappingIssue}</p>}{settings && mappingGeneration !== settings.generation && <p className="vcom-warning">The mapping draft is based on an older configuration. Refresh the connection and review it again.</p>}

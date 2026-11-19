@@ -15,6 +15,41 @@ function fixture(t){
  t.after(()=>{db.close();rmSync(root,{recursive:true,force:true});});
  return {root,get db(){return db;},get store(){return store;},advance(ms){now+=ms;},reopen(){db.close();return open();}};
 }
+test('exclusions native mappings JSON survives discovery refresh and reopen without legacy default injection',async t=>{
+ const f=fixture(t),fetchImpl=createSyntheticVcomFetch({fallback:()=>{throw Error('No live VCOM calls permitted.');}});
+ const client=createVcomClient({auth:fixtureAuth,minSpacingMs:0,fetchImpl,clock:()=>f.store.clock()});
+ const discovery=await discoverVcom({client,systemKey:'TEST1'});
+ f.store.configure('site',0,'TEST1',fixtureAuth);f.store.saveDiscovery('site',1,discovery);f.store.saveMappings('site',2,fixtureMappings,null);
+ const legacy=JSON.stringify(fixtureMappings);assert.equal(f.db.sqlite.prepare('SELECT mappings FROM vcom_site_settings WHERE site_id=?').get('site').mappings,legacy);
+ f.reopen();assert.equal(JSON.stringify(f.store.settings('site').mappings),legacy);assert.ok(f.store.settings('site').mappings.every(m=>!Object.hasOwn(m,'excluded')));
+ const mappings=fixtureMappings.map(m=>m.sourceId==='inverter:101:E_INT'?m:{...m,equipmentId:'',excluded:true});
+ f.store.saveMappings('site',3,mappings,null);const encoded=JSON.stringify(mappings);
+ f.reopen();assert.equal(f.db.sqlite.prepare('SELECT mappings FROM vcom_site_settings WHERE site_id=?').get('site').mappings,encoded);
+ const refreshed={...discovery,systemName:'Refreshed synthetic name'};f.store.saveDiscovery('site',4,refreshed);
+ f.reopen();assert.equal(f.store.settings('site').generation,5);assert.deepEqual(f.store.settings('site').mappings,mappings);assert.equal(f.store.settings('site').selectedPoaSourceId,null);
+ assert.equal(f.db.sqlite.prepare('SELECT mappings FROM vcom_site_settings WHERE site_id=?').get('site').mappings,encoded);
+ const plan=planVcomImport({siteId:'site',discovery:f.store.settings('site').discovery,mappings:f.store.settings('site').mappings,selectedPoaSourceId:null,fromDate:'2026-01-01',throughDate:'2026-01-01',modelRevision:'model',datasetRevision:0});
+ assert.equal(plan.readingCount,24);assert.deepEqual(plan.requests.map(r=>r.kind),['inverterBulk']);
+ const job=f.store.createJob({...jobInput(plan),generation:5}),pinned=JSON.stringify(f.store.job('site',job.id).plan);f.reopen();assert.equal(JSON.stringify(f.store.job('site',job.id).plan),pinned);
+});
+
+test('exclusions native save atomically fences leases while retaining old omitted-property plans and completed chunks',async t=>{
+ const f=fixture(t),fetchImpl=createSyntheticVcomFetch({fallback:()=>{throw Error('No live transport.');}}),client=createVcomClient({auth:fixtureAuth,minSpacingMs:0,fetchImpl,clock:()=>f.store.clock()});
+ const discovery=await discoverVcom({client,systemKey:'TEST1'});f.store.configure('site',0,'TEST1',fixtureAuth);f.store.saveDiscovery('site',1,discovery);f.store.saveMappings('site',2,fixtureMappings,null);
+ const plan=planVcomImport({siteId:'site',discovery,mappings:fixtureMappings,selectedPoaSourceId:null,fromDate:'2026-01-01',throughDate:'2026-01-01',modelRevision:'model',datasetRevision:0});
+ const job=f.store.createJob({...jobInput(plan),generation:3}),lease=f.store.claim(),chunk=await client.get(plan.requests[0]);f.store.completeChunk(job.id,lease.leaseToken,chunk);f.advance(2000);
+ const next=f.store.claim();assert.ok(next.leaseToken);const before=f.store.settings('site'),jobBefore=f.store.job('site',job.id),excluded=fixtureMappings.map(m=>({...m,equipmentId:'',excluded:true}));
+ f.db.sqlite.exec("CREATE TRIGGER injected_exclusion_failure BEFORE UPDATE OF status ON vcom_manual_jobs WHEN NEW.error_code='stale-configuration' BEGIN SELECT RAISE(ABORT,'exclusion rollback'); END");
+ assert.throws(()=>f.store.saveMappings('site',3,excluded,null),/exclusion rollback/);assert.deepEqual(f.store.settings('site'),before);assert.deepEqual(f.store.job('site',job.id),jobBefore);
+ f.db.sqlite.exec('DROP TRIGGER injected_exclusion_failure');f.store.saveMappings('site',3,excluded,null);
+ assert.equal(f.store.job('site',job.id).errorCode,'stale-configuration');assert.throws(()=>f.store.heartbeat(job.id,next.leaseToken),/stale|lease/i);
+ f.reopen();assert.deepEqual(f.store.settings('site').mappings,excluded);assert.equal(f.store.settings('site').generation,4);
+ const retained=f.store.job('site',job.id);assert.deepEqual(retained.plan,plan);assert.ok(retained.plan.mappings.every(m=>!Object.hasOwn(m,'excluded')));assert.equal(retained.completedRequests,1);assert.deepEqual(f.store.chunk(job.id,0),chunk);
+ const chunks=[chunk,...await Promise.all(plan.requests.slice(1).map(d=>client.get(d)))],window=plan.windows[0];
+ const replay=normalizeVcomWindow({plan:retained.plan,windowStartUtc:window.startUtc,windowEndUtc:window.endUtc,rawChunks:chunks});assert.equal(replay.readings.length,144);
+ assert.equal(f.store.claim(),null);
+});
+
 test('credentials encrypted, site-bound, private, persistent and fail closed across every site',t=>{
  const f=fixture(t);assert.equal(f.store.settings('site').generation,0);
  f.store.configure('site',0,'TEST1',auth);

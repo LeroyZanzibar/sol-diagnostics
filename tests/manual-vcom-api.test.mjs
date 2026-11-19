@@ -22,7 +22,7 @@ const mappings=discovery.sources.map((s,i)=>({sourceId:s.id,equipmentId:['@site'
 function fixtureProvider(calls){return {
  createVcomClient:()=>({get:async descriptor=>{calls.push(descriptor.requestId);return {version:1,requestId:descriptor.requestId,descriptor,payload:{synthetic:1},payloadSha256:'synthetic',decodedBodyByteLength:15};}}),
  discoverVcom:async()=>structuredClone(discovery),
- validateVcomMappings:({mappings:m,selectedPoaSourceId})=>({ready:m?.length===6&&(!selectedPoaSourceId||selectedPoaSourceId==='poa:301'),issues:m?.length===6?[]:['Map every supported source.']}),
+ validateVcomMappings:({mappings:m,selectedPoaSourceId})=>({valid:m?.length===6&&(!selectedPoaSourceId||selectedPoaSourceId==='poa:301'),ready:m?.length===6&&(!selectedPoaSourceId||selectedPoaSourceId==='poa:301'),issues:m?.length===6?[]:['Map every supported source.']}),
  planVcomImport:input=>({...input,version:1,systemKey:'TEST1',timezone:'UTC',startUtc:'2026-01-01T00:00:00.000Z',endUtc:'2026-01-02T00:00:00.000Z',planHash:'synthetic-plan',readingCount:144,requests:[0,1,2].map(i=>({requestId:`r${i}`,kind:'simulation',deviceId:null,abbreviation:null,path:'/systems/TEST1/simulation',query:{},ownedStartUtc:'2026-01-01T00:00:00.000Z',ownedEndUtcExclusive:'2026-01-02T00:00:00.000Z',sourceTimestampConvention:'start',conventionId:'synthetic'})),windows:[{startUtc:'2026-01-01T00:00:00.000Z',endUtc:'2026-01-02T00:00:00.000Z'}]}),
  normalizeVcomWindow:()=>({readings:Array.from({length:24},(_,hour)=>mappings.map((m,i)=>({timestamp:new Date(Date.UTC(2026,0,1,hour)).toISOString(),equipmentId:m.equipmentId,measurement:m.measurement,value:hour===0&&i===0?5:i===1?500:i===5?0:10,unit:discovery.sources[i].unit}))).flat(),quality:[{synthetic:true,partialExpectedKwh:5}],summary:{hours:24,sources:6,missingReadings:0,partialSimulationHours:1,missingSimulationHours:0,satelliteGaps:0,poaFilled:0,remainingIrradianceGaps:0,warnings:['Synthetic partial simulation /12 sum retained.']}})
 };}
@@ -42,6 +42,103 @@ async function fixture(t,providerOverrides={},serviceOverrides={}){
  const drain=async(id,maximum=30)=>{for(let i=0;i<maximum;i++){await tick();const job=(await get(id)).job;if(!['queued','downloading','staging'].includes(job.status))return job;}throw Error('Fixture job never completed bounded work.');};
  return {root,get ticks(){return ticks;},get wakes(){return wakes;},get db(){return db;},get manager(){return manager;},get store(){return store;},get bucket(){return bucket;},calls,service,controller,route,work,send,get,tick,ready,start,drain,reopen(){manager.close();db.close();open();}};
 }
+const exclude = mapping => ({...mapping,equipmentId:'',excluded:true});
+const decisions = included => fixtureMappings.map(m=>included.includes(m.sourceId)?m:exclude(m));
+async function realExclusionFixture(t,{mutatePayload=()=>{},holdMeasurement=async()=>{}}={}){
+ const requests=[],clone=value=>JSON.parse(JSON.stringify(value));let forbidPlanning=false;
+ const transport=createSyntheticVcomFetch({fallback:()=>{throw Error('No live VCOM calls permitted.');},onRequest:url=>requests.push(url.href)});
+ const fetchImpl=async(input,init)=>{const url=new URL(input),response=await transport(input,init),payload=await response.json();mutatePayload(url,payload);if(url.searchParams.has('from'))await holdMeasurement(url);return new Response(JSON.stringify(payload));};
+ const f=await fixture(t,{...realProvider,createVcomClient:opts=>realProvider.createVcomClient({...opts,minSpacingMs:0,fetchImpl}),
+  validateVcomMappings:opts=>realProvider.validateVcomMappings(clone(opts)),normalizeVcomWindow:opts=>realProvider.normalizeVcomWindow(clone(opts)),
+  planVcomImport:opts=>{assert.equal(forbidPlanning,false,'Reopened workers must use their exact saved plan.');return realProvider.planVcomImport(clone(opts));}});
+ await f.send({action:'configure',expectedGeneration:0,systemKey:'TEST1',credentials:fixtureAuth});await f.send({action:'discover',expectedGeneration:1});
+ return {f,requests,forbidPlanning(){forbidPlanning=true;}};
+}
+
+test('exclusions REAL API saves all-excluded, reopens and refreshes decisions, and refuses start without a fetch or job',async t=>{
+ const {f,requests}=await realExclusionFixture(t),excluded=fixtureMappings.map(exclude);
+ const saved=await f.send({action:'mappings',expectedGeneration:2,mappings:excluded,selectedPoaSourceId:null});
+ assert.equal(saved.settings.ready,false);assert.deepEqual(saved.settings.mappings,excluded);assert.equal(saved.settings.generation,3);
+ assert.match(saved.settings.issues.join(' '),/include at least one|at least one.*included/i);
+ f.reopen();assert.deepEqual((await f.get()).settings.mappings,excluded);
+ const refreshed=await f.send({action:'discover',expectedGeneration:3});assert.deepEqual(refreshed.settings.mappings,excluded);assert.equal(refreshed.settings.ready,false);
+ const before=[...requests],wakes=f.wakes;
+ const blocked=await f.send({action:'start',expectedGeneration:4,requestId:'excluded-all',fromDate:'2026-01-01',throughDate:'2026-01-01'},400);
+ assert.match(blocked.error,/include at least one|at least one.*included/i);assert.equal(f.store.jobs('site').length,0);assert.deepEqual(requests,before);assert.equal(f.wakes,wakes);
+ assert.equal(f.manager.site('site').describe().readingCount,0);
+});
+
+test('exclusions REAL API mixed import fetches, stages and commits included channels only across reopen',async t=>{
+ const {f,requests,forbidPlanning}=await realExclusionFixture(t,{mutatePayload:(url,payload)=>{if(url.pathname.endsWith('/inverters/bulk/measurements'))for(const row of Object.values(payload))row['102']={E_INT:'ignored-invalid',P_AC:null};}});
+ const mappings=decisions(['inverter:101:E_INT','meter:201:M_E_INT_IMP']);
+ assert.equal((await f.send({action:'mappings',expectedGeneration:2,mappings,selectedPoaSourceId:null})).settings.ready,true);
+ f.reopen();assert.deepEqual((await f.get()).settings.mappings,mappings);
+ const job=await f.start('excluded-mixed'),pinned=f.store.job('site',job.id).plan,before=requests.length;forbidPlanning();
+ assert.equal(pinned.readingCount,48);assert.deepEqual(pinned.requests.map(r=>[r.kind,r.abbreviation]),[['inverterBulk','E_INT'],['meter','M_E_INT_IMP']]);
+ assert.equal(pinned.discovery.sources.length,6);await f.tick();f.reopen();assert.deepEqual(f.store.job('site',job.id).plan,pinned);
+ const staged=await f.drain(job.id);assert.equal(staged.status,'awaiting_approval',JSON.stringify(staged));assert.equal(staged.preview.readingCount,48);assert.equal(requests.length,before+2);
+ assert.equal(staged.quality.sources,2);assert.equal(staged.quality.missingReadings,0);assert.equal(staged.quality.missingSimulationHours,0);assert.equal(staged.quality.remainingIrradianceGaps,0);
+ const manifest=await(await f.bucket.get(staged.preview.metadata.originalObjectKey)).json();assert.deepEqual(manifest.plan,pinned);
+ for(const reference of manifest.windows){const window=await(await f.bucket.get(reference.key)).json();assert.ok(window.quality.every(q=>['inverter:101:E_INT','meter:201:M_E_INT_IMP'].includes(q.sourceId)));assert.equal(window.readings.length,48);}
+ await f.send({action:'apply',jobId:job.id,stageId:staged.stageId,previewToken:staged.preview.previewToken,approveOverlap:false});f.reopen();
+ const rows=[...f.manager.site('site').rows()];assert.equal(rows.length,48);assert.deepEqual([...new Set(rows.map(r=>[r.channel.equipmentId,r.channel.measurement].join(':')))].sort(),['inv1:Energy','meter:Other']);
+ assert.ok(rows.every(r=>r.value===(r.channel.equipmentId==='inv1'?2:-1)));assert.equal((await f.get(job.id)).job.status,'committed');
+ assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM analysis_jobs').get().n,0);
+});
+
+test('exclusions REAL API rejects malformed and contradictory decisions before changing saved settings',async t=>{
+ const {f}=await realExclusionFixture(t);await f.send({action:'mappings',expectedGeneration:2,mappings:fixtureMappings,selectedPoaSourceId:null});
+ const before=f.store.settings('site'),bad=[
+  ...[null,0,1,'true','false',{},[]].map(excluded=>({...fixtureMappings[0],excluded})),
+  {...fixtureMappings[0],excluded:true}, {...exclude(fixtureMappings[0]),measurement:'Energy'},
+ ];
+ for(const mapping of bad)await f.send({action:'mappings',expectedGeneration:3,mappings:[mapping,...fixtureMappings.slice(1)],selectedPoaSourceId:null},400);
+ const noIrradiance=fixtureMappings.map(m=>m.sourceId==='irradiance:combined'?exclude(m):m);
+ for(const selectedPoaSourceId of ['poa:301','poa:missing','']){
+  const response=await f.send({action:'mappings',expectedGeneration:3,mappings:noIrradiance,selectedPoaSourceId},400);assert.match(response.error,/POA.*excluded|excluded.*POA/i);
+ }
+ for(const mappings of [fixtureMappings.slice(1),[...fixtureMappings,exclude(fixtureMappings[0])],[...fixtureMappings,{sourceId:'unknown',equipmentId:'',measurement:'Energy',excluded:true}]])await f.send({action:'mappings',expectedGeneration:3,mappings,selectedPoaSourceId:null},400);
+ assert.deepEqual(f.store.settings('site'),before);assert.equal(f.store.jobs('site').length,0);
+});
+
+test('exclusions REAL API permits unsupported excluded devices and refresh never silently removes the decision',async t=>{
+ const {f}=await realExclusionFixture(t,{mutatePayload:(url,payload)=>{if(url.pathname.endsWith('/inverters/102/abbreviations'))payload.data=[];}});
+ const mappings=fixtureMappings.map(m=>m.sourceId==='inverter:102:E_INT'?exclude(m):m);
+ assert.equal((await f.send({action:'mappings',expectedGeneration:2,mappings,selectedPoaSourceId:null})).settings.ready,true);
+ f.reopen();const refreshed=await f.send({action:'discover',expectedGeneration:3});assert.equal(refreshed.settings.ready,true);assert.deepEqual(refreshed.settings.mappings,mappings);
+ assert.equal(refreshed.settings.discovery.sources.find(s=>s.deviceId==='102').eligible,false);
+ const job=(await f.send({action:'start',expectedGeneration:4,requestId:'unsupported-excluded',fromDate:'2026-01-01',throughDate:'2026-01-01'},202)).job;
+ const staged=await f.drain(job.id);assert.equal(staged.status,'awaiting_approval');assert.equal(staged.preview.readingCount,120);
+});
+
+test('exclusions REAL API invalidates an actual pending preview but preserves canonical history, receipts and saved analysis',async t=>{
+ const {f}=await realExclusionFixture(t);await f.send({action:'mappings',expectedGeneration:2,mappings:fixtureMappings,selectedPoaSourceId:null});
+ const committed=await f.start('before-exclusions'),preview=await f.drain(committed.id);
+ await f.send({action:'apply',jobId:committed.id,stageId:preview.stageId,previewToken:preview.preview.previewToken,approveOverlap:false});
+ f.db.sqlite.exec("INSERT INTO analysis_runs(id,site_id,import_id,parser_version,model_revision,analysis_object_key) VALUES('saved-exclusions','site','canonical',28,'old','analysis/exclusions'); INSERT INTO issue_event_reviews(id,site_id,event_key,version,state,updated_at) VALUES('review-exclusions','site','event',1,'{}','now');");await f.bucket.put('analysis/exclusions','retained analysis bytes');
+ const history=()=>JSON.stringify({dataset:f.manager.site('site').describe(),rows:[...f.manager.site('site').rows()],imports:f.manager.site('site').imports(),receipt:f.manager.site('site').preview(preview.stageId),analysis:f.db.sqlite.prepare('SELECT * FROM analysis_runs').all(),reviews:f.db.sqlite.prepare('SELECT * FROM issue_event_reviews').all()});
+ const before=history(),next=await f.start('preview-before-exclusions'),pending=await f.drain(next.id);
+ assert.equal(pending.status,'awaiting_approval');assert.equal(pending.preview.counts.overlapping,144);
+ await f.send({action:'mappings',expectedGeneration:3,mappings:fixtureMappings.map(exclude),selectedPoaSourceId:null});
+ assert.equal(f.store.job('site',next.id).errorCode,'stale-configuration');assert.equal(f.manager.site('site').preview(pending.stageId).status,'canceled');
+ await f.send({action:'apply',jobId:next.id,stageId:pending.stageId,previewToken:pending.preview.previewToken,approveOverlap:true},409);
+ f.reopen();assert.equal(history(),before);assert.equal((await f.get(committed.id)).job.status,'committed');assert.equal(await(await f.bucket.get('analysis/exclusions')).text(),'retained analysis bytes');
+ assert.equal(f.manager.site('site').describe().readingCount,144);
+});
+
+test('exclusions REAL API fences an observable in-flight old-plan fetch before chunk publication',async t=>{
+ const entered=Promise.withResolvers(),release=Promise.withResolvers();t.after(()=>release.resolve());
+ const {f}=await realExclusionFixture(t,{holdMeasurement:async()=>{entered.resolve();await release.promise;}});
+ await f.send({action:'mappings',expectedGeneration:2,mappings:fixtureMappings,selectedPoaSourceId:null});const job=await f.start('inflight-exclusions'),pending=f.tick();await entered.promise;
+ assert.ok(f.store.job('site',job.id).leaseToken);
+ try{
+  await f.send({action:'mappings',expectedGeneration:3,mappings:fixtureMappings.map(exclude),selectedPoaSourceId:null});
+ }finally{release.resolve();await pending;}
+ f.reopen();
+ assert.equal(f.store.job('site',job.id).errorCode,'stale-configuration');assert.equal(f.store.job('site',job.id).completedRequests,0);
+ assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) n FROM vcom_manual_chunks').get().n,0);assert.equal(f.manager.site('site').describe().revision,0);
+});
+
 test('ordinary synthetic full bundle config -> saved discovery -> fetch -> preview -> apply -> reopen; GET never advances work',async t=>{
  const f=await fixture(t);assert.equal((await f.get()).settings.generation,0);assert.equal((await f.ready()).settings.ready,true);assert.equal(f.calls.length,0);
  const job=await f.start();for(let i=0;i<3;i++)assert.equal((await f.get(job.id)).job.completedRequests,0);assert.equal(f.calls.length,0);
