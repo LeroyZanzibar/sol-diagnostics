@@ -355,22 +355,30 @@ export async function discoverVcom({ client, systemKey, signal }) {
 
 export function validateVcomMappings({ discovery, mappings, selectedPoaSourceId = null, equipment } = {}) {
   const issues = [];
-  try { verifyDiscovery(discovery); } catch { return { ready: false, issues: ['Refresh valid complete VCOM discovery before mapping.'] }; }
-  if (!Array.isArray(mappings) || mappings.length > LIMITS.sources) return { ready: false, issues: ['Map every analytical source exactly once.'] };
+  try { verifyDiscovery(discovery); } catch { return { valid: false, ready: false, issues: ['Refresh valid complete VCOM discovery before mapping.'] }; }
+  if (!Array.isArray(mappings) || mappings.length > LIMITS.sources) return { valid: false, ready: false, issues: ['Include or exclude every analytical source exactly once.'] };
   let assets;
   if (equipment !== undefined) {
     if (!Array.isArray(equipment) || equipment.some(e => !isObject(e) || typeof e.id !== 'string') || new Set(equipment.map(e => e.id)).size !== equipment.length) issues.push('Invalid equipment inventory.');
     else assets = new Map(equipment.map(e => [e.id, e]));
   }
   const sources = new Map(discovery.sources.map(s => [s.id, s])), seen = new Set(), channels = new Set();
-  for (const source of discovery.sources) if (!supported(source)) issues.push(`Source ${source.id} is unsupported; refresh its unit and aggregation metadata.`);
+  let included = 0, irradianceExcluded = false;
   for (const mapping of mappings) {
     if (!isObject(mapping)) { issues.push('Invalid mapping.'); continue; }
     const source = sources.get(mapping.sourceId);
     if (!source) { issues.push('Mappings may contain only the discovered analytical sources.'); continue; }
     if (seen.has(source.id)) issues.push(`Map ${source.id} exactly once.`); seen.add(source.id);
-    try { text(mapping.equipmentId, 'equipment ID'); } catch { issues.push('Mapping has an invalid exact equipment ID.'); continue; }
+    if (own(mapping, 'excluded') && typeof mapping.excluded !== 'boolean') issues.push('Mapping excluded must be exactly true or false when supplied.');
     if (mapping.measurement !== source.measurement) issues.push(`Keep the fixed measurement for ${source.id}.`);
+    if (mapping.excluded === true) {
+      if (mapping.equipmentId !== '') issues.push(`Excluded source ${source.id} must have an empty equipment destination.`);
+      if (source.kind === 'irradiance') irradianceExcluded = true;
+      continue;
+    }
+    included++;
+    if (!supported(source)) issues.push(`Source ${source.id} is unsupported; refresh its unit and aggregation metadata or explicitly exclude it.`);
+    try { text(mapping.equipmentId, 'equipment ID'); } catch { issues.push('Mapping has an invalid exact equipment ID.'); continue; }
     if (source.kind === 'simulation') { if (mapping.equipmentId !== '@site') issues.push('Simulation must map to @site Expected Production.'); }
     else {
       if (mapping.equipmentId === '@site') issues.push('Device and irradiance sources require equipment destinations.');
@@ -380,11 +388,20 @@ export function validateVcomMappings({ discovery, mappings, selectedPoaSourceId 
     if (channels.has(channel)) issues.push('Two VCOM sources collide on the same canonical equipment/measurement channel.'); channels.add(channel);
   }
   for (const source of discovery.sources) if (!seen.has(source.id)) issues.push(`Missing mapping for ${source.id}.`);
+  if (irradianceExcluded && selectedPoaSourceId !== null) issues.push('Clear the POA fallback when combined irradiance is excluded.');
   if (selectedPoaSourceId !== null && selectedPoaSourceId !== '' && selectedPoaSourceId !== undefined) {
     const selected = discovery.poaSensors.find(s => s.id === selectedPoaSourceId);
     if (!selected || !supported(selected)) issues.push('The explicitly selected POA fallback is missing or unsupported.');
   }
-  return { ready: issues.length === 0, issues: [...new Set(issues)] };
+  const valid = issues.length === 0, ready = valid && included > 0;
+  if (valid && !ready) issues.push('Include at least one analytical source before starting a download.');
+  return { valid, ready, issues: [...new Set(issues)] };
+}
+// Preserve the full authenticated discovery and exact mapping snapshot in plans;
+// only the included population contributes requests, limits and normalized cells.
+function includedSources(discovery, mappings) {
+  const included = new Set(mappings.filter(m => m.excluded !== true).map(m => m.sourceId));
+  return discovery.sources.filter(source => included.has(source.id));
 }
 
 export function planVcomImport({ siteId, discovery, mappings, selectedPoaSourceId = null, fromDate, throughDate, modelRevision, datasetRevision, now = Date.now() }) {
@@ -393,11 +410,12 @@ export function planVcomImport({ siteId, discovery, mappings, selectedPoaSourceI
   const ready = validateVcomMappings({ discovery, mappings, selectedPoaSourceId });
   if (!ready.ready) fail(ready.issues.join(' '), 'VCOM_MAPPINGS');
   selectedPoaSourceId = selectedPoaSourceId || null;
-  const { a, b } = dateRange(fromDate, throughDate, discovery.timezone, now), readingCount = (b - a) / HOUR * discovery.sources.length;
+  const sources = includedSources(discovery, mappings);
+  const { a, b } = dateRange(fromDate, throughDate, discovery.timezone, now), readingCount = (b - a) / HOUR * sources.length;
   if (readingCount > LIMITS.readings) fail('Projected readings exceed the two-million-reading limit.');
   const windows = [], requests = [];
   // Bound the per-step readings/quality artifact as well as total job size.
-  const windowSize = Math.min(24, Math.max(1, Math.floor(5000 / discovery.sources.length))) * HOUR;
+  const windowSize = Math.min(24, Math.max(1, Math.floor(5000 / sources.length))) * HOUR;
   for (let t = a; t < b; t += windowSize) windows.push({ startUtc: iso(t), endUtc: iso(Math.min(t + windowSize, b)) });
   const add = (kind, size, deviceId = null, abbreviation = null) => {
     for (let t = a; t < b; t += size) {
@@ -405,9 +423,10 @@ export function planVcomImport({ siteId, discovery, mappings, selectedPoaSourceI
       requests.push(measurementDescriptor({ kind, systemKey: discovery.systemKey, deviceId, abbreviation, a: t, b: Math.min(t + size, b) }));
     }
   };
-  add('simulation', 31 * DAY); add('satellite', 30 * DAY);
-  if (discovery.sources.some(s => s.kind === 'inverter')) add('inverterBulk', DAY, null, 'E_INT');
-  for (const source of discovery.sources.filter(s => s.kind.startsWith('meter-'))) add('meter', DAY, source.deviceId, sourceInfo(source.kind).abbreviation);
+  if (sources.some(s => s.kind === 'simulation')) add('simulation', 31 * DAY);
+  if (sources.some(s => s.kind === 'irradiance')) add('satellite', 30 * DAY);
+  if (sources.some(s => s.kind === 'inverter')) add('inverterBulk', DAY, null, 'E_INT');
+  for (const source of sources.filter(s => s.kind.startsWith('meter-'))) add('meter', DAY, source.deviceId, sourceInfo(source.kind).abbreviation);
   if (selectedPoaSourceId) add('poa', DAY, discovery.poaSensors.find(s => s.id === selectedPoaSourceId).deviceId, 'SRAD');
   requests.sort((x, y) => cmp(x.ownedStartUtc, y.ownedStartUtc) || KIND_ORDER.indexOf(x.kind) - KIND_ORDER.indexOf(y.kind) || cmp(x.deviceId ?? '', y.deviceId ?? '') || cmp(x.abbreviation ?? '', y.abbreviation ?? ''));
   const value = { version: 1, siteId, systemKey: discovery.systemKey, timezone: discovery.timezone, fromDate, throughDate, startUtc: iso(a), endUtc: iso(b), modelRevision, datasetRevision, discovery: snapshot(discovery), mappings: snapshot(mappings).sort((x, y) => cmp(x.sourceId, y.sourceId)), selectedPoaSourceId, requests, windows, readingCount };
@@ -433,7 +452,7 @@ function numeric(record, field) {
   if (!(typeof value === 'number' || typeof value === 'string' && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) || !Number.isFinite(Number(value))) schema(false, 'VCOM returned a non-finite or non-decimal measurement.');
   return { value: Number(value), missingValue: false, explicitNull: false, empty: false };
 }
-function parsePayload(payload, descriptor, inverterIds, consume) {
+function parsePayload(payload, descriptor, inverterIds, includedInverterIds, consume) {
   schema(isObject(payload));
   if (descriptor.kind === 'inverterBulk') {
     const data = own(payload, 'data') ? payload.data : payload; schema(isObject(data));
@@ -441,6 +460,9 @@ function parsePayload(payload, descriptor, inverterIds, consume) {
       const time = instant(stamp); schema(isObject(devices));
       for (const [id, measurements] of Object.entries(devices)) {
         schema(inverterIds.has(id), 'VCOM returned a foreign inverter device.');
+        // Bulk responses can contain discovered excluded devices. Authenticate
+        // the complete raw chunk, but never parse or assess their measurements.
+        if (!includedInverterIds.has(id)) continue;
         schema(isObject(measurements) && Object.keys(measurements).every(k => k === 'E_INT'), 'VCOM returned an unexpected bulk abbreviation.');
         consume(`inverter:${id}:E_INT`, time, numeric(measurements, 'E_INT'));
       }
@@ -494,14 +516,16 @@ export function normalizeVcomWindow({ plan, windowStartUtc, windowEndUtc, rawChu
   const descriptors = plan.requests.filter(d => d.ownedStartUtc < windowEndUtc && d.ownedEndUtcExclusive > windowStartUtc);
   if (!Array.isArray(rawChunks) || rawChunks.length !== descriptors.length) fail('Every relevant completed raw request is required exactly once.', 'VCOM_INTEGRITY');
   const expected = new Map(descriptors.map(d => [d.requestId, d])), seen = new Set(), index = new Map(), simulationTimes = new Set();
+  const sources = includedSources(plan.discovery, plan.mappings), mappings = new Map(plan.mappings.map(m => [m.sourceId, m]));
   const inverterIds = new Set(plan.discovery.sources.filter(s => s.kind === 'inverter').map(s => s.deviceId));
+  const includedInverterIds = new Set(sources.filter(s => s.kind === 'inverter').map(s => s.deviceId));
   let numericSimulation = false;
   for (const raw of rawChunks) {
     const descriptor = expected.get(raw?.requestId);
     if (!descriptor || seen.has(raw.requestId)) fail('Unexpected or repeated VCOM raw request.', 'VCOM_INTEGRITY');
     seen.add(raw.requestId); validateDescriptor(descriptor); validateRaw(raw, descriptor);
     const left = canonicalInstant(descriptor.ownedStartUtc), right = canonicalInstant(descriptor.ownedEndUtcExclusive);
-    parsePayload(raw.payload, descriptor, inverterIds, (sourceId, time, cell) => {
+    parsePayload(raw.payload, descriptor, inverterIds, includedInverterIds, (sourceId, time, cell) => {
       const simulation = descriptor.kind === 'simulation';
       if ((time - anchor) % (simulation ? FIVE_MINUTES : HOUR)) fail('VCOM timestamps are off the pinned source cadence grid.', 'VCOM_CADENCE');
       // Validate every row, including guard data; consume only this descriptor's
@@ -516,10 +540,9 @@ export function normalizeVcomWindow({ plan, windowStartUtc, windowEndUtc, rawChu
   }
   const ordered = [...simulationTimes].sort((x, y) => x - y), cadenceProved = ordered.some((t, i) => i > 0 && t - ordered[i - 1] === FIVE_MINUTES);
   if (numericSimulation && !cadenceProved) fail('Positive five-minute simulation cadence evidence is required before /12.', 'VCOM_CADENCE');
-  const sources = plan.discovery.sources, mappings = new Map(plan.mappings.map(m => [m.sourceId, m]));
   const poa = plan.selectedPoaSourceId ? plan.discovery.poaSensors.find(s => s.id === plan.selectedPoaSourceId) : null;
-  const summary = { hours: (b - a) / HOUR, sources: sources.length, missingReadings: 0, partialSimulationHours: 0, missingSimulationHours: 0, satelliteGaps: 0, poaFilled: 0, remainingIrradianceGaps: 0, warnings: [WARNING_CONVENTIONS] };
-  if (!cadenceProved) summary.warnings.push('No positive five-minute simulation cadence evidence was available; all expected values are missing.');
+  const summary = { hours: (b - a) / HOUR, sources: sources.length, missingReadings: 0, partialSimulationHours: 0, missingSimulationHours: 0, satelliteGaps: 0, poaFilled: 0, remainingIrradianceGaps: 0, warnings: sources.some(s => s.kind === 'simulation' || s.kind === 'irradiance') ? [WARNING_CONVENTIONS] : [] };
+  if (!cadenceProved && sources.some(s => s.kind === 'simulation')) summary.warnings.push('No positive five-minute simulation cadence evidence was available; all expected values are missing.');
   const readings = [], quality = [];
   const cellAt = (id, t) => index.get(id)?.get(t);
   for (let t = a; t < b; t += HOUR) for (const source of sources) {

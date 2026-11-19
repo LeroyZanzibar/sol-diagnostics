@@ -70,14 +70,28 @@
 .manual-vcom .vcom-discovery, .manual-vcom .vcom-poa { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 20px; }
 .manual-vcom .vcom-poa label { max-width: 560px; }
 .manual-vcom .vcom-issues { padding-left: 20px; font-size: 11px; line-height: 1.7; color: var(--red); }
-.manual-vcom .vcom-table-wrap { width: 100%; overflow-x: auto; }
+.manual-vcom .vcom-table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
 .manual-vcom .vcom-table-wrap table { border-collapse: collapse; width: 100%; text-align: left; font-size: 11px; }
 .manual-vcom .vcom-table-wrap :is(th, td) { padding: 14px 12px; vertical-align: top; border-bottom: 1px solid var(--line); }
 .manual-vcom .vcom-table-wrap th { color: var(--muted); font-size: 10px; font-weight: 500; }
 .manual-vcom .vcom-table-wrap small { display: block; color: var(--muted); font-size: 10px; margin-top: 5px; }
-.manual-vcom .vcom-mapping-table { min-width: 660px; }
-.manual-vcom .vcom-mapping-table td:first-child { width: 36%; overflow-wrap: anywhere; }
-.manual-vcom .vcom-mapping-table td:nth-child(2) { width: 25%; }
+.manual-vcom .vcom-mapping-table { min-width: 760px; }
+.manual-vcom .vcom-mapping-table td:first-child { width: 30%; overflow-wrap: anywhere; }
+.manual-vcom .vcom-mapping-table td:nth-child(2) { width: 21%; }
+.manual-vcom .vcom-mapping-table td:last-child { min-width: 220px; }
+.manual-vcom .vcom-include { display: inline-flex; align-items: center; gap: 7px; min-height: 42px; cursor: pointer; white-space: nowrap; }
+.manual-vcom .vcom-include input { width: 16px; height: 16px; margin: 0; accent-color: var(--vcom-accent); }
+.manual-vcom .vcom-include input:focus-visible { outline: 2px solid var(--vcom-accent); outline-offset: 3px; }
+.manual-vcom .vcom-mapping-excluded > td { background: var(--vcom-input); }
+.manual-vcom .vcom-mapping-excluded strong { color: var(--muted); }
+.manual-vcom .vcom-mapping-table .vcom-mapping-choice { color: var(--ink); font-weight: 600; }
+.manual-vcom .vcom-confidence { line-height: 1.6; }
+.manual-vcom .vcom-form input::placeholder { color: var(--muted); opacity: 1; }
+.manual-vcom .vcom-spinner { display: inline-block; width: 1em; height: 1em; flex-shrink: 0; margin-right: 8px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: vcom-spin .8s linear infinite; }
+@keyframes vcom-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .manual-vcom .vcom-spinner { animation: none; }
+}
 .manual-vcom .vcom-job-review { margin-top: 18px; }
 .manual-vcom .vcom-quality { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 18px; }
 .manual-vcom .vcom-quality-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }

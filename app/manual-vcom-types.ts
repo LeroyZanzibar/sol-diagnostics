@@ -17,7 +17,8 @@ export type VcomDiscovery = {
   excludedMeters: { id: string; name: string; reason: string }[];
   warnings: string[]; metadataDigest: string;
 };
-export type VcomMapping = { sourceId: string; equipmentId: string; measurement: string };
+/** Missing/false preserves legacy inclusion; excluded rows keep no destination. */
+export type VcomMapping = { sourceId: string; equipmentId: string; measurement: string; excluded?: boolean };
 export type VcomSettingsPublic = {
   siteId: string; generation: number; systemKey: string; authMode: VcomAuthMode;
   hasCredentials: boolean; discovery: VcomDiscovery | null; mappings: VcomMapping[];

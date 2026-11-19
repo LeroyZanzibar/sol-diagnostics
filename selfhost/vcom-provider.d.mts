@@ -107,7 +107,7 @@ export function validateVcomMappings(options: {
   selectedPoaSourceId?: string | null;
   /** Planner checks identity/collisions; controller supplies exact current equipment. */
   equipment?: readonly IngestEquipment[];
-}): { ready: boolean; issues: string[] };
+}): { valid: boolean; ready: boolean; issues: string[] };
 export function planVcomImport(options: {
   siteId: string;
   discovery: VcomDiscovery;

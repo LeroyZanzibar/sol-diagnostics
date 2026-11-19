@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.11.19.2 — pending publication
+
+- Allow each discovered VCOM field to be included or explicitly excluded. Save exclusions across reload/discovery and enforce them in request planning and normalization; excluded fields never add canonical readings. Existing imported history is not deleted. All-excluded configurations may be saved, but downloads require at least one included field.
+- Suggest compatible equipment destinations with the same name/ID/alias/channel matcher and confidence levels used by CSV mapping. Preserve saved/manual mappings and exclusions; suggestions require explicit Save mappings.
+- Show immediate, accessible connection-test progress through discovery and saved-state verification, with clear success/error feedback and duplicate-action protection.
+- Show fixed-width masked indicators for saved API key, username, password and bearer token without returning stored values or submitting mask text. Unchanged fields preserve saved credentials.
+- Keep manual preview/Apply, overlap approval, CSV imports, retained data, authentication and encryption-key protections unchanged. No scheduler, automatic analysis or SQL migration is introduced.
+
+Local verification: production build and 738/738 tests passed, including synthetic production-HTTP exclusions/restart/history-preservation coverage. Desktop/mobile browser checks passed for all four changes and selective preview → Apply. Standalone TypeScript retains exactly six reproduced baseline diagnostics; no new diagnostics. Live VCOM and installed-app behavior were not exercised.
+
+This is a provisional development version and is not published or installed; release and deployment require separate approval.
+
 ## 2026.11.19.1 — published November 19, 2026
 
 - Add manual VCOM imports to Performance data with the requested **Data / API setup / Field mapping / Activity** workspace, alongside the existing CSV flow.

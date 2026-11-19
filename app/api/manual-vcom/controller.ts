@@ -67,10 +67,10 @@ export async function mutateManualVcom(payload:Record<string,unknown>,actor:stri
     const saved=store.cas(siteId,generation(action.expectedGeneration));
     if(!saved.discovery)throw new PerformanceValidationError('Discover this saved system first.');
     if(!Array.isArray(action.mappings)||action.mappings.length>10000)throw new PerformanceValidationError('Supply the complete explicit source mapping.');
-    const selected=action.selectedPoaSourceId===''?null:action.selectedPoaSourceId;
+    const selected=action.selectedPoaSourceId;
     if(selected!==null&&typeof selected!=='string')throw new PerformanceValidationError('Explicitly choose a POA source or no POA fallback.');
     const validation=validateVcomMappings({discovery:saved.discovery,mappings:action.mappings,selectedPoaSourceId:selected,equipment:context.equipment});
-    if(!validation.ready)throw new PerformanceValidationError(validation.issues.join(' ').slice(0,2000)||'The complete source mapping is not ready.');
+    if(!validation.valid)throw new PerformanceValidationError(validation.issues.join(' ').slice(0,2000)||'The complete source mapping is not valid.');
     // Recheck the exact live model after any asynchronous context loading.
     const fresh=await loadPerformanceContext(siteId);
     if(fresh.modelRevision!==context.modelRevision)throw new PerformanceConflictError('The model changed while saving mappings. Reload and review.','stale-model');
@@ -80,7 +80,7 @@ export async function mutateManualVcom(payload:Record<string,unknown>,actor:stri
     const previous=store.byRequest(siteId,input.requestId);
     if(previous){jobId=store.identity(previous,input).id;return manualVcomWorkspace(siteId,jobId);}
     store.cas(siteId,input.generation);const settings=settingsFor(context);
-    if(!settings.ready||!settings.discovery)throw new PerformanceValidationError('Discover and confirm every source mapping before starting a download.');
+    if(!settings.ready||!settings.discovery)throw new PerformanceValidationError(settings.issues.join(' ').slice(0,2000)||'Discover and confirm every source mapping before starting a download.');
     await assertPerformanceWritable(context);
     const plan=planVcomImport({siteId,discovery:settings.discovery,mappings:settings.mappings,selectedPoaSourceId:settings.selectedPoaSourceId,
       fromDate:input.fromDate,throughDate:input.throughDate,modelRevision:context.modelRevision,datasetRevision:context.dataset.revision});
