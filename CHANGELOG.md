@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.11.19.4 — release pending
+
+- Fix VCOM historical downloads failing with HTTP 400 because outgoing date parameters contain fractional seconds. Send whole-second UTC dates while preserving the exact requested instants.
+- Keep persisted download plans, request identifiers, hashes, completed responses, timezone boundaries and normalization unchanged. Existing jobs do not need their stored plans rewritten.
+- Preserve explicit preview/Apply, overlap approval, saved credentials, mappings and all retained data. No schema, dependency, scheduling or analysis changes; this update does not automatically retry a failed download or import data.
+
+Diagnosis verification: three bounded read-only simulation checks isolated the timestamp representation; the millisecond form was rejected while equivalent whole-second forms returned matching responses. The local production build and all 202 manual-VCOM tests passed, including regressions across ordinary and daylight-saving dates and every measurement request kind. Independent specification and quality/integration reviews approved the narrow hotfix. These checks do not claim a full live download; full-release verification and publication remain pending.
+
 ## 2026.11.19.3 — published November 19, 2026
 
 - Fix **Download range** silently failing when Sol Diagnostics is opened over ordinary HTTP, including Umbrel's local-network URL. Generate secure request identifiers with `crypto.getRandomValues` when `crypto.randomUUID` is unavailable.

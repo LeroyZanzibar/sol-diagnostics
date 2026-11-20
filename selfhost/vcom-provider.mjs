@@ -201,7 +201,11 @@ export function createVcomClient({ auth, fetchImpl = globalThis.fetch, clock = (
     try {
       const work = async () => {
         const url = new URL(ORIGIN + descriptor.path);
-        for (const key of Object.keys(descriptor.query).sort()) url.searchParams.set(key, descriptor.query[key]);
+        for (const key of Object.keys(descriptor.query).sort()) {
+          const value = descriptor.query[key];
+          // VCOM rejects fractional seconds. Keep persisted descriptors and request IDs unchanged.
+          url.searchParams.set(key, key === 'from' || key === 'to' ? value.replace(/\.000Z$/, 'Z') : value);
+        }
         const response = await fetchImpl(url.href, { method: 'GET', headers: { ...headers }, redirect: 'error', signal: controller.signal });
         if (controller.signal.aborted) {
           if (response?.body) void response.body.cancel().catch(() => {});

@@ -435,6 +435,37 @@ test('client uses fixed official origin, supplied credentials and raw hashes wit
   }
 });
 
+for (const date of ['2026-09-01', '2026-03-08', '2026-11-01']) test(`client sends whole-second measurement dates without changing saved plan identity: ${date}`, async () => {
+  // Reopen the existing persisted descriptor shape; only its wire representation may change.
+  const saved = JSON.stringify(await makePlan({ fromDate: date, throughDate: date }));
+  const plan = JSON.parse(saved), raw = [];
+  assert.deepEqual([...new Set(plan.requests.map(d => d.kind))].sort(), ['inverterBulk', 'meter', 'poa', 'satellite', 'simulation']);
+  let calls = 0;
+  const client = createVcomClient({ auth, clock: () => NOW, minSpacingMs: 0, fetchImpl: async (url, init) => {
+    const d = plan.requests[calls++], u = new URL(url);
+    assert.equal(u.origin, 'https://api.meteocontrol.de'); assert.equal(u.pathname, `/v2${d.path}`); assert.equal(init.method, 'GET');
+    assert.deepEqual([...u.searchParams.keys()].sort(), Object.keys(d.query).sort());
+    // Model the real provider's rejection rather than accepting every Date.parse-compatible string.
+    if (['from', 'to'].some(key => /\.\d+Z$/.test(u.searchParams.get(key)))) return new Response('Fractional-second dates are not accepted.', { status: 400 });
+    for (const key of ['from', 'to']) {
+      assert.match(d.query[key], /\.000Z$/); // Retained plans keep their original exact identity.
+      const sent = u.searchParams.get(key);
+      assert.match(sent, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+      assert.equal(Date.parse(sent), Date.parse(d.query[key]));
+    }
+    for (const [key, value] of Object.entries(d.query)) if (!['from', 'to'].includes(key)) assert.equal(u.searchParams.get(key), value);
+    return new Response(JSON.stringify(payloadFor(d)));
+  } });
+  for (const d of plan.requests) {
+    const response = await client.get(d);
+    assert.equal(response.requestId, d.requestId); assert.deepEqual(response.descriptor, d);
+    assert.equal(response.payloadSha256, hash(response.payload)); raw.push(response);
+  }
+  assert.equal(calls, plan.requests.length); assert.equal(JSON.stringify(plan), saved);
+  const { planHash, ...body } = plan; assert.equal(hash(body), planHash);
+  for (const window of plan.windows) assert.ok(forWindow(plan, window, raw).readings.length > 0);
+});
+
 test('client refuses arbitrary paths, query injection, repaired identifiers, credentials and descriptor tampering before fetch', async () => {
   let calls = 0;
   const client = createVcomClient({ auth, minSpacingMs: 0, fetchImpl: async () => { calls++; return new Response('{}'); } });
