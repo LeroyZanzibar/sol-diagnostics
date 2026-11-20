@@ -61,9 +61,9 @@ test("analysis rejects ambiguous local times and inconsistent cadence rather tha
 
 test("native sub-minute issue bounds and duration retain source precision", () => {
   const { analyzeEquipment } = loadSource("app/api/performance-summary/route.ts", ["analyzeEquipment"], {...modelCapacityBindings(),...(time)});
-  const points = Array.from({ length: 6 }, (_, index) => ({ timestamp: new Date(Date.UTC(2026, 5, 1, 12, 0, index * 30)).toISOString(), energyKwh: index === 3 ? .1 : .5 }));
+  const points = Array.from({ length: 6 }, (_, index) => ({ timestamp: new Date(Date.UTC(2026, 5, 1, 12, 0, index * 30)).toISOString(), energyKwh: index === 3 ? 0 : .5 }));
   const sun = new Map(points.map(point => [point.timestamp, { timestamp: point.timestamp, averageWm2: 600, insolationKwhM2: .005 }]));
-  const result = analyzeEquipment({ equipmentId: "inv", equipmentName: "Inverter", equipmentType: "inverter", capacityKw: 100, intervalProduction: points }, sun, .5, 100, new Map(), 100);
+  const result = analyzeEquipment({ equipmentId: "inv", equipmentName: "Inverter", equipmentType: "inverter", capacityKw: 100, intervalProduction: points }, sun, .5, 100, new Map());
   assert.equal(result.length, 1);
   assert.equal(result[0].startDateTime, "2026-06-01T12:01:30.000Z");
   assert.equal(result[0].endDateTime, "2026-06-01T12:02:00.000Z");

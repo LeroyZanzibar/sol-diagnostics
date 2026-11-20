@@ -42,7 +42,7 @@ test('partial onset and the adjoining telemetry-confirmed zero period form one o
  assert.equal(outage.actualEnergyKwh,260);assert.equal(outage.expectedEnergyKwh,1600);
  assert.equal(outage.evidence.rule,'merged_adjoining_site_outages_v1');
  assert.equal(outage.evidence.segments.length,2);
- assert.deepEqual(Array.from(outage.evidence.segments,s=>s.evidence.rule),['irradiance_adjusted_baseline','cross_checked_telemetry_v1']);
+ assert.deepEqual(Array.from(outage.evidence.segments,s=>s.evidence.rule),['supported_site_outage_onset_v2','cross_checked_telemetry_v1']);
  assert.equal(outage.evidence.intervalLosses.length,4);
  assert.equal(new Set(outage.evidence.intervalLosses.map(p=>p.timestamp)).size,4);
  assert.ok(!outage.description.includes('5% or less'));

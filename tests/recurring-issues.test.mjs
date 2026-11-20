@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {DatabaseSync} from 'node:sqlite';
-import {readFileSync,readdirSync} from 'node:fs';
+import {reviewDatabase} from './analysis-deletion-fixture.mjs';
 import * as XLSX from 'xlsx';
-import {loadSource} from './source-module.mjs';
+import {loadSource as sourceModule} from './source-module.mjs';
+const availability={...sourceModule('app/api/analysis-history/availability.ts',[],{Error}),...sourceModule('app/issue-visibility.ts'),...sourceModule('app/data-freshness.ts')};
+const loadSource=(path,names=[],bindings={})=>sourceModule(path,names,{Error,TypeError,...availability,...(bindings.savedAnalysis?{reviewedAnalysisBaseline:bindings.savedAnalysis}:{}),...bindings});
 const time=loadSource('app/telemetry-time.ts'),periods=loadSource('app/issue-periods.ts',[],time),r=loadSource('app/recurring-issues.ts',[],periods),review=loadSource('app/issue-review.ts');
 const json=x=>JSON.parse(JSON.stringify(x));
 const issue=(id,day,patch={})=>{const timestamp=`2026-06-${String(day).padStart(2,'0')}T12:00:00.000Z`;return {id,eventKey:`key-${id}`,evidenceSignature:`sig-${id}`,name:'Underperformance',equipmentName:'Inverter 1',equipmentId:'inv',equipmentType:'inverter',type:'Underperformance',category:'Performance',timezone:'America/New_York',startDateTime:timestamp,endDateTime:timestamp.replace('12:00','13:00'),estimatedLossKwh:10,actualEnergyKwh:40,expectedEnergyKwh:50,intervalMinutes:60,intervalLosses:[{timestamp,intervalMinutes:60,lossKwh:10,actualKwh:40,expectedKwh:50}],detectionBasis:'derived',...patch};};
@@ -50,7 +51,7 @@ test('site-local day boundaries are end-exclusive across DST and interval losses
 test('a partially observed recurrence window does not end a sequence and overlapping hours are counted once',()=>{
  const items=[issue('a',1),issue('b',2),issue('b2',2)];const e=r.buildRecurringIssues(items,{...summary,timestamps:['2026-06-03T16:00:00Z'],equipmentProduction:[]})[0];assert.equal(e.sequenceStatus,'Awaiting 5-day window');assert.equal(e.activeMinutes,120);assert.equal(r.recurringViews([e],items)[0].visibleActiveMinutes,120);
 });
-function database(){const sqlite=new DatabaseSync(':memory:');for(const file of readdirSync('drizzle').filter(f=>f.endsWith('.sql')).sort())sqlite.exec(readFileSync(`drizzle/${file}`,'utf8'));const prepare=(sql,values=[])=>({bind(...v){return prepare(sql,v)},async first(){return sqlite.prepare(sql).get(...values)||null},async all(){return {results:sqlite.prepare(sql).all(...values)}},async run(){return sqlite.prepare(sql).run(...values)}});return {sqlite,prepare,async batch(items){sqlite.exec('BEGIN');try{for(const item of items)await item.run();sqlite.exec('COMMIT')}catch(e){sqlite.exec('ROLLBACK');throw e}}};}
+const database=()=>reviewDatabase(['run','old']);
 function apiFixture(){const db=database(),items=[issue('a',1),issue('b',2)],basis={calculationVersion:27,modelRevision:'model'};const episode={...r.buildRecurringIssues(items)[0],eventKey:'parent-key',evidenceSignature:'parent-sig'};const payload={reviewCalculationBasis:basis,analysis:{issues:items,recurringIssues:[episode]}},old=json(payload);const savedAnalysis=async(site,run)=>{assert.equal(site,'site');return run==='old'?old:payload};const service=loadSource('app/api/issue-reviews/service.ts',[],{...review,savedAnalysis,getDatabaseBinding:()=>db});const api=loadSource('app/api/issue-reviews/route.ts',[],{...service,blankReview:review.blankReview,savedAnalysis,getDatabaseBinding:()=>db});const bulk=loadSource('app/api/issue-reviews/bulk/route.ts',[],{...review,...service,savedAnalysis,getDatabaseBinding:()=>db});return {db,items,basis,episode,payload,old,service,api,bulk};}
 const post=(api,body)=>api.POST(new Request('https://test/api',{method:'POST',body:JSON.stringify(body)}));
 test('parent decisions persist once, inherit to reviewed members, and respect explicit exceptions',async()=>{
@@ -106,8 +107,8 @@ test('individual save responses replace inherited reviews with only the explicit
  const saved=await response.json();assert.equal(response.status,200);assert.equal(saved.reviews.length,1);assert.equal(saved.reviews[0].eventKey,items[0].eventKey);assert.equal(saved.reviews[0].inheritedFrom,undefined);assert.equal(saved.reviews[0].version,1);assert.equal(saved.reviews[0].state.status,'Dismissed');
 });
 
-test('annual episode exports store members as rows, avoiding spreadsheet cell limits and duplicate loss totals',()=>{
+test('retired annual recurrence exports leave evidence intact without adding recurrence sheets',()=>{
  const e={...r.buildRecurringIssues([issue('a',1),issue('b',2)])[0],members:Array.from({length:2000},(_,i)=>({id:`id-${i}`,eventKey:'k'.repeat(64)+i,evidenceSignature:'s'.repeat(64)}))},book=XLSX.utils.book_new();
  const report=loadSource('app/report-methodology.ts',[],{XLSX,...review});report.appendReportMethodology(book,{recurringIssues:[e],reviewFilter:'Exclude dismissed',reviews:{},reviewRetrievedAt:'now',issues:[]});
- const saved=XLSX.read(XLSX.write(book,{type:'buffer',bookType:'xlsx'}));assert.equal(XLSX.utils.sheet_to_json(saved.Sheets['Recurring occurrences']).length,2000);assert.equal(XLSX.utils.sheet_to_json(saved.Sheets['Recurring issues'])[0].occurrenceCount,2000);
+ const saved=XLSX.read(XLSX.write(book,{type:'buffer',bookType:'xlsx'}));assert.equal(saved.Sheets['Recurring occurrences'],undefined);assert.equal(saved.Sheets['Recurring issues'],undefined);assert.equal(e.members.length,2000,'Retained recurrence evidence is not rewritten by export');
 });

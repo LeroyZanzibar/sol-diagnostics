@@ -12,8 +12,8 @@ type Summary = { timezone?: string; intervalMinutes?: number; timestamps?: strin
 type Loss = { timestamp: string; lossKwh: number; countedLossKwh?: number; actualKwh?: number; expectedKwh?: number; [key: string]: unknown };
 type Issue = { id: string; name: string; type: string; category: string; confidence: string; severity: string; equipmentId: string; equipmentName: string; equipmentType: string; equipmentExternalId: string;
   startDateTime: string; endDateTime: string; durationMinutes: number; durationDays: number; estimatedLossKwh: number; lossPercent: number; siteImpactPercent: number;
-  actualEnergyKwh: number; expectedEnergyKwh: number; description: string; lossUnknown?: boolean; productionUnknown?: boolean; affectedEquipment?: { id: string; name: string }[]; evidence?: Record<string, unknown> };
-type Event = { timestamp: string; type: 'Site outage' | 'Partial site outage' | 'Site telemetry outage' | 'Equipment telemetry issue' | 'Communication issue'; ids: Set<string>; loss: number; actual: number; expected: number; unknown: boolean; productionUnknown: boolean; coverage: number; reason: string };
+  actualEnergyKwh: number; expectedEnergyKwh: number; description: string; lossUnknown?: boolean; expectedUnknown?: boolean; productionUnknown?: boolean; affectedEquipment?: { id: string; name: string }[]; evidence?: Record<string, unknown> };
+type Event = { timestamp: string; type: 'Site outage' | 'Partial site outage' | 'Site telemetry outage' | 'Equipment telemetry issue' | 'Communication issue'; ids: Set<string>; loss: number; actual: number; expected: number; unknown: boolean; expectedUnknown: boolean; productionUnknown: boolean; coverage: number; reason: string };
 export type TelemetryPlan = { events: Event[]; blocked: Map<string, Set<string>>; minutes: number; allIds: Set<string>; meter: Asset | undefined; assets: Asset[]; inferred: Map<string, Set<string>> };
 const hasZone = (value: string) => /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
 const time = (s: string) => Date.parse(hasZone(s) ? s : s + 'Z');
@@ -39,7 +39,7 @@ export function prepareTelemetry(summary: Summary, assets: Asset[]): TelemetryPl
   const allIds = new Set(assets.filter(a=>a.type==='inverter'||a.type==='revenue_meter').map(a=>a.id));
   const totalCapacity = inverters.reduce((s,a)=>s+capacity(a),0);
   const series = summary.equipmentProduction || [];
-  const raw = new Map(series.map(p=>[p.equipmentId,new Map((p.intervalProduction || []).map(v=>[v.timestamp,v.energyKwh]))]));
+  const raw = new Map(series.map(p=>[p.equipmentId,new Map((p.intervalProduction || []).filter(v=>typeof v.energyKwh==='number'&&Number.isFinite(v.energyKwh)).map(v=>[v.timestamp,v.energyKwh]))]));
   // Most series are unchanged. Copy only series that receive a supported
   // substitution, avoiding a second year of inverter maps and point objects.
   const next = new Map(raw);
@@ -67,18 +67,21 @@ export function prepareTelemetry(summary: Summary, assets: Asset[]): TelemetryPl
   const block=(id:string,t:string)=>{const times=blocked.get(id)||new Set<string>();times.add(t);blocked.set(id,times);};
   const blockAll=(t:string)=>allIds.forEach(id=>block(id,t));
   for(const timestamp of [...keys].sort()) {
-    const moment=time(timestamp), exp=expected.get(timestamp), sun=irradiance.get(timestamp);
+    const moment=time(timestamp), sourceExpected=expected.get(timestamp), sun=irradiance.get(timestamp);
+    const exp=typeof sourceExpected==='number'&&Number.isFinite(sourceExpected)&&sourceExpected>=0?sourceExpected:undefined;
     const elevations=formatter?[0,.5,1].map(offset=>solarPosition(stamp(moment+cadence*offset, timestamp),lat,lon,formatter!).elevation):[];
     const night=elevations.length>0&&Math.max(...elevations)<-6 && !(exp!>0) && !(sun!>=50);
-    const qualified=(sun!==undefined?sun>=50:(exp || 0)>0);
+    const qualified=(sun!==undefined?Number.isFinite(sun)&&sun>=50:(exp || 0)>0);
     const values=inverters.map(asset=>({asset,value:raw.get(asset.id)?.get(timestamp)}));
     const reported=values.filter(v=>v.value!==undefined), producing=reported.filter(v=>v.value!>0);
     const missing=values.filter(v=>v.value===undefined);
     const knownCapacity=reported.reduce((s,v)=>s+capacity(v.asset),0), coverage=totalCapacity>0?knownCapacity/totalCapacity:0;
-    const complete=totalCapacity>0&&knownCapacity>=totalCapacity-1e-6;
-    const aggregate=capacityModel.hasTransformers?deliveredInverterEnergy(capacityModel,new Map(reported.map(v=>[v.asset.id,v.value!])),minutes/60):reported.reduce((s,v)=>s+v.value!,0)*factor;
+    const complete=inverters.length>0&&reported.length===inverters.length&&totalCapacity>0&&knownCapacity>=totalCapacity-1e-6;
+    const deliveryAvailable=(!capacityModel.hasTransformers||capacityModel.complete)&&[meter?.acLineLossPercent,meter?.transformerLossPercent]
+      .every(v=>v===undefined||v===null||v===''||(Number.isFinite(Number(v))&&Number(v)>=0&&Number(v)<100));
+    const aggregate=!deliveryAvailable?0:capacityModel.hasTransformers?deliveredInverterEnergy(capacityModel,new Map(reported.map(v=>[v.asset.id,v.value!])),minutes/60):reported.reduce((s,v)=>s+v.value!,0)*factor;
     const meterValue=meterRaw.get(timestamp);
-    const push=(type:Event['type'],ids:Set<string>,unknown:boolean,actual:number,reason:string,productionUnknown=false)=>events.push({timestamp,type,ids:new Set(ids),loss:unknown?0:Math.max(0,(exp??actual)-actual),actual,expected:exp??0,unknown,productionUnknown,coverage,reason});
+    const push=(type:Event['type'],ids:Set<string>,unknown:boolean,actual:number,reason:string,productionUnknown=false)=>events.push({timestamp,type,ids:new Set(ids),loss:unknown||exp===undefined?0:Math.max(0,exp-actual),actual,expected:exp??0,unknown:unknown||exp===undefined,expectedUnknown:exp===undefined,productionUnknown,coverage,reason});
     if(night) {
       for (const asset of assets.filter(a=>allIds.has(a.id))) if(raw.get(asset.id)?.get(timestamp)===undefined) nightMissingCounts[asset.id]=(nightMissingCounts[asset.id]||0)+1;
       if(meterValue===undefined) {meterNext.set(timestamp,0);nightMissing.push(timestamp);}
@@ -89,8 +92,8 @@ export function prepareTelemetry(summary: Summary, assets: Asset[]): TelemetryPl
       unknownProduction.push(timestamp);blockAll(timestamp);activeCohort=new Set<string>();continue;
     }
     if((meterValue===undefined||meterValue<=0) && producing.length>0) {
-      push('Communication issue',new Set(meter?[meter.id]:[]),!complete,aggregate,complete?'Meter is missing or zero while the complete inverter fleet reports production; delivered inverter energy substitutes for the meter.':'Meter is missing or zero while some inverters produce; incomplete capacity coverage cannot establish total site production.',!complete);
-      if(complete) {meterNext.set(timestamp,aggregate);substituted.push(timestamp);blockAll(timestamp);} else {meterNext.delete(timestamp);unknownProduction.push(timestamp);}
+      push('Communication issue',new Set(meter?[meter.id]:[]),!complete||!deliveryAvailable||exp===undefined,aggregate,complete&&deliveryAvailable?'Meter is missing or zero while the complete inverter fleet reports production; delivered inverter energy substitutes for the meter.':'Meter is missing or zero while some inverters produce; incomplete capacity coverage cannot establish total site production.',!complete||!deliveryAvailable);
+      if(complete&&deliveryAvailable) {meterNext.set(timestamp,aggregate);substituted.push(timestamp);blockAll(timestamp);} else {meterNext.delete(timestamp);unknownProduction.push(timestamp);}
       if(meter)block(meter.id,timestamp);
       // Partial inverter coverage stays unknown; do not infer missing inverters offline.
       for(const v of missing)block(v.asset.id,timestamp);
@@ -107,12 +110,11 @@ export function prepareTelemetry(summary: Summary, assets: Asset[]): TelemetryPl
     }
     if(meterValue===undefined) {unknownProduction.push(timestamp);if(meter)block(meter.id,timestamp);push('Communication issue',new Set(meter?[meter.id]:[]),true,aggregate,'Meter is missing and inverter coverage is insufficient to establish total site production.',true);}
     const deficit=meterValue!==undefined&&exp!==undefined?Math.max(0,exp-meterValue):0;
-    const matchesRemaining=meterValue!==undefined&&Math.abs(meterValue-aggregate)<=Math.max(1,meterValue*.12,(exp||0)*.04);
+    const matchesRemaining=deliveryAvailable&&meterValue!==undefined&&Math.abs(meterValue-aggregate)<=Math.max(1,meterValue*.12,(exp||0)*.04);
     const missingSupported=qualified&&meterValue!==undefined&&meterValue>0&&exp!==undefined&&meterValue<=exp*.8&&producing.length>0&&matchesRemaining;
     const down=new Set<string>();
     if(qualified) for(const v of values) {
-      const share=totalCapacity>0?(exp||0)*capacity(v.asset)/totalCapacity:0;
-      const isDown=v.value===0 || (v.value===undefined&&missingSupported) || (v.value!==undefined&&share>0&&v.value/share<.3);
+      const isDown=v.value===0 || (v.value===undefined&&missingSupported);
       if(isDown)down.add(v.asset.id);
       const recentlyOperating=(lastKnownPositive.get(v.asset.id)??-Infinity)>=moment-cadence*2;
       if(isDown&&previousDown.get(v.asset.id)===false&&recentlyOperating)onset.set(v.asset.id,moment);
@@ -125,8 +127,8 @@ export function prepareTelemetry(summary: Summary, assets: Asset[]): TelemetryPl
     }
     const cohort=new Set([...activeCohort,...[...onset].filter(([,t])=>moment-t<=cadence).map(([id])=>id)].filter(id=>down.has(id)));
     const affectedCapacity=inverters.filter(a=>cohort.has(a.id)).reduce((s,a)=>s+capacity(a),0);
-    if(qualified&&meterValue!==undefined&&meterValue>0&&deficit>0&&producing.length>0&&cohort.size>=3&&totalCapacity>0&&affectedCapacity/totalCapacity>=.2&&matchesRemaining) {
-      push('Partial site outage',cohort,false,meterValue,'A synchronized loss of at least three inverters and 20% of AC capacity is corroborated by the meter and the remaining producing fleet.');
+    if(qualified&&meterValue!==undefined&&meterValue>0&&(exp===undefined||deficit>0)&&producing.length>0&&cohort.size>=3&&totalCapacity>0&&affectedCapacity/totalCapacity>=.2&&matchesRemaining) {
+      push('Partial site outage',cohort,exp===undefined,meterValue,'A synchronized loss of at least three inverters and 20% of AC capacity is corroborated by the meter and the remaining producing fleet.');
       activeCohort=cohort;
     } else activeCohort=new Set<string>();
     const unresolved=missing.filter(v=>!missingSupported);
@@ -136,6 +138,7 @@ export function prepareTelemetry(summary: Summary, assets: Asset[]): TelemetryPl
     }
   }
   if(meter)next.set(meter.id,meterNext);
+  for(const asset of inverters)if(inferred.has(asset.id)&&!series.some(p=>p.equipmentId===asset.id))series.push({equipmentId:asset.id,equipmentName:asset.name,equipmentType:asset.type,externalId:asset.externalId,capacityKw:capacity(asset),intervalProduction:[],dailyProduction:[],readingCount:0,source:''});
   summary.equipmentProduction=series.map(p=>{const values=next.get(p.equipmentId);const points=values===raw.get(p.equipmentId)?p.intervalProduction||[]:[...(values||new Map())].sort(([a],[b])=>a.localeCompare(b)).map(([timestamp,energyKwh])=>({timestamp,energyKwh}));return {...p,intervalProduction:points,dailyProduction:daily(points,timezone)};});
   const sitePoints=[...meterNext].sort(([a],[b])=>a.localeCompare(b)).map(([timestamp,energyKwh])=>({timestamp,energyKwh}));
   summary.dailyProduction=daily(sitePoints,timezone);summary.totalEnergyKwh=sitePoints.reduce((s,p)=>s+p.energyKwh,0);
@@ -149,10 +152,10 @@ export function prepareTelemetry(summary: Summary, assets: Asset[]): TelemetryPl
 export function reconcileTelemetry<T extends Issue>(issues:T[], plan:TelemetryPlan):T[] {
   const {events,blocked,minutes,meter,assets}=plan, cadence=minutes*60000;
   const partial=new Map(events.filter(e=>e.type==='Partial site outage').map(e=>[e.timestamp,e]));
-  const independent=new Map<string,number>();
+  const independent=new Map<string,number>(),independentUnknown=new Set<string>();
   for(const issue of issues) for(const p of (issue.evidence?.intervalLosses || []) as Loss[]) {
     const event=partial.get(p.timestamp);
-    if(event&&issue.equipmentType==='inverter'&&!event.ids.has(issue.equipmentId)) independent.set(p.timestamp,(independent.get(p.timestamp)||0)+Math.max(0,p.countedLossKwh??p.lossKwh));
+    if(event&&issue.equipmentType==='inverter'&&!event.ids.has(issue.equipmentId)){if(issue.lossUnknown)independentUnknown.add(p.timestamp);else independent.set(p.timestamp,(independent.get(p.timestamp)||0)+Math.max(0,p.countedLossKwh??p.lossKwh));}
   }
   const remaining:T[]=[];
   for(const sourceIssue of issues) {
@@ -163,24 +166,24 @@ export function reconcileTelemetry<T extends Issue>(issues:T[], plan:TelemetryPl
     let changed=false;const groups:Loss[][]=[];let gap=false;
     for(const point of original) {
       const parent=partial.get(point.timestamp);
-      const covered=blocked.get(issue.equipmentId)?.has(point.timestamp) || (parent&&(parent.ids.has(issue.equipmentId)||issue.equipmentType==='revenue_meter')) || (point.countedLossKwh===0&&point.lossKwh>0);
+      const covered=blocked.get(issue.equipmentId)?.has(point.timestamp) || (parent&&(parent.ids.has(issue.equipmentId)||issue.equipmentType==='revenue_meter')) || point.hierarchyCovered===true;
       if(covered){changed=true;gap=true;continue;}
       const p={...point};
-      if(parent) {const total=independent.get(p.timestamp)||0;const factor=total>parent.loss?parent.loss/total:1;p.lossKwh=Math.max(0,p.countedLossKwh??p.lossKwh)*factor;p.countedLossKwh=p.lossKwh;if(factor<1)changed=true;}
+      if(parent&&!parent.unknown&&!independentUnknown.has(p.timestamp)&&!issue.lossUnknown) {const total=independent.get(p.timestamp)||0;const factor=total>parent.loss?parent.loss/total:1;p.lossKwh=Math.max(0,p.countedLossKwh??p.lossKwh)*factor;p.countedLossKwh=p.lossKwh;if(factor<1)changed=true;}
       if(!groups.length||gap)groups.push([]);groups.at(-1)!.push(p);gap=false;
     }
     if(!changed){remaining.push(issue);continue;}
     for(const [index,group] of groups.entries()) {
-      const loss=group.reduce((s,p)=>s+Math.max(0,p.countedLossKwh??p.lossKwh),0);if(loss<=0)continue;
+      const unknown=issue.lossUnknown||group.some(p=>p.lossUnknown),loss=unknown?0:group.reduce((s,p)=>s+Math.max(0,p.countedLossKwh??p.lossKwh),0);
       const start=group[0].timestamp,end=stamp(time(group.at(-1)!.timestamp)+cadence, start),duration=(time(end)-time(start))/60000;
       const actual=group.reduce((s,p)=>s+(p.actualKwh||0),0),expected=group.reduce((s,p)=>s+(p.expectedKwh||0),0);
-      remaining.push({...issue,id:`${issue.id}-visible-${index}`,startDateTime:start,endDateTime:end,durationMinutes:duration,durationDays:duration/1440,estimatedLossKwh:loss,actualEnergyKwh:actual,expectedEnergyKwh:expected,lossPercent:expected?100*loss/expected:0,evidence:{...issue.evidence,intervalLosses:group,originalIssueId:issue.id}});
+      remaining.push({...issue,id:`${issue.id}-visible-${index}`,startDateTime:start,endDateTime:end,durationMinutes:duration,durationDays:duration/1440,lossUnknown:unknown,estimatedLossKwh:loss,actualEnergyKwh:actual,expectedEnergyKwh:expected,lossPercent:expected?100*loss/expected:0,evidence:{...issue.evidence,lossUnknown:unknown,intervalLosses:group,originalIssueId:issue.id}});
     }
   }
   const grouped=new Map<string,Event[][]>();
   for(const e of events) {
-    if(e.type==='Partial site outage')e.loss=Math.max(0,e.loss-(independent.get(e.timestamp)||0));
-    const key=`${e.type}|${e.unknown}|${e.productionUnknown}|${e.type==='Equipment telemetry issue'?[...e.ids].sort().join(','):''}`;
+    if(e.type==='Partial site outage'){e.unknown=e.unknown||independentUnknown.has(e.timestamp);e.loss=e.unknown?0:Math.max(0,e.loss-(independent.get(e.timestamp)||0));}
+    const key=`${e.type}|${e.unknown}|${e.expectedUnknown}|${e.productionUnknown}|${e.type==='Equipment telemetry issue'?[...e.ids].sort().join(','):''}`;
     const groups=grouped.get(key)||[];const last=groups.at(-1);
     if(last&&time(e.timestamp)-time(last.at(-1)!.timestamp)===cadence)last.push(e);else groups.push([e]);grouped.set(key,groups);
   }
@@ -196,14 +199,14 @@ export function reconcileTelemetry<T extends Issue>(issues:T[], plan:TelemetryPl
     remaining.push({id:`${owner.id}-${first.type.replaceAll(' ','-')}-${first.timestamp}`,name:first.type==='Communication issue'?'Revenue meter communication issue':first.type,type:first.type,
       category:performance?'Performance':'Communications',confidence:performance?'model-based':'confirmed',severity:performance?'critical':'high',equipmentId:owner.id,equipmentName:owner.name,equipmentType:owner.type,equipmentExternalId:owner.externalId,
       startDateTime:first.timestamp,endDateTime:end,durationMinutes:duration,durationDays:duration/1440,estimatedLossKwh:loss,lossPercent:expected?100*loss/expected:0,actualEnergyKwh:actual,expectedEnergyKwh:expected,
-      lossUnknown:unknown,productionUnknown:first.productionUnknown,siteImpactPercent:first.type==='Partial site outage'||first.type==='Equipment telemetry issue'?share:100,affectedEquipment,
-      description:first.reason+(unknown?' Energy loss is unknown and excluded from quantified totals.':'')+(first.type==='Site telemetry outage'&&expected>0?` Expected energy during this gap: ${expected.toFixed(1)} kWh; this is not measured energy loss.`:''),evidence:{rule:'cross_checked_telemetry_v1',lossUnknown:unknown,productionUnknown:first.productionUnknown,affectedEquipment,expectedEnergyDuringGapKwh:unknown?expected:undefined,
-        minimumCapacityCoverage:Math.min(...group.map(e=>e.coverage)),intervalLosses:group.map(e=>({timestamp:e.timestamp,lossKwh:e.loss,countedLossKwh:e.loss,actualKwh:e.actual,expectedKwh:e.expected})),nighttimeImputation:false}} as unknown as T);
+      lossUnknown:unknown,expectedUnknown:first.expectedUnknown,productionUnknown:first.productionUnknown,siteImpactPercent:first.type==='Partial site outage'||first.type==='Equipment telemetry issue'?share:100,affectedEquipment,
+      description:first.reason+(unknown?' Energy loss is unknown and excluded from quantified totals.':'')+(first.type==='Site telemetry outage'&&expected>0?` Expected energy during this gap: ${expected.toFixed(1)} kWh; this is not measured energy loss.`:''),evidence:{rule:'cross_checked_telemetry_v1',lossUnknown:unknown,expectedUnknown:first.expectedUnknown,productionUnknown:first.productionUnknown,affectedEquipment,expectedEnergyDuringGapKwh:unknown?expected:undefined,
+        minimumCapacityCoverage:Math.min(...group.map(e=>e.coverage)),intervalLosses:group.map(e=>({timestamp:e.timestamp,lossKwh:e.loss,countedLossKwh:e.loss,actualKwh:e.actual,expectedKwh:e.expected,lossUnknown:e.unknown,expectedUnknown:e.expectedUnknown})),nighttimeImputation:false}} as unknown as T);
   }
   return mergeAdjoiningSiteOutages(remaining, minutes);
 }
 
-/** Join the partial onset retained by the baseline detector to its telemetry outage.
+/** Join the supported partial onset retained by the outage detector to its telemetry outage.
  * Only touching, quantified segments join. A healthy or unknown gap stays a boundary.
  * Each source ledger must fit its half-open event window so joining cannot duplicate
  * intervals or change the already-reconciled loss allocation.

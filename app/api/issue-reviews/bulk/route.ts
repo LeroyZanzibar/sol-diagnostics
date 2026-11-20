@@ -1,6 +1,6 @@
 import {getDatabaseBinding} from '../../../../db/binding';
 import {savedAnalysis} from '../../analysis-history/service';
-import {assessReviews,effectiveReviews} from '../service';
+import {assessReviews,effectiveReviews,writeReviewBatch} from '../service';
 import {blankReview,operationalCauses,type ReviewState} from '../../../issue-review';
 async function hash(value:unknown){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value))))].map(b=>b.toString(16).padStart(2,'0')).join('');}
 export async function POST(request:Request){try{
@@ -30,13 +30,13 @@ export async function POST(request:Request){try{
   if(patch.classification)state.classification=patch.classification;
   state.changeId=changeId;state.bulkOperationId=p.operationId;
   const json=JSON.stringify(state),version=item.baseVersion+1;
-  writes.push(db.prepare(`INSERT INTO issue_event_reviews (id,site_id,event_key,version,state,updated_at) SELECT ?,?,?,?,?,? WHERE ?=0 OR EXISTS (SELECT 1 FROM issue_event_reviews WHERE site_id=? AND event_key=? AND version=?) ON CONFLICT(site_id,event_key) DO UPDATE SET version=excluded.version,state=excluded.state,updated_at=excluded.updated_at WHERE issue_event_reviews.version=?`).bind(crypto.randomUUID(),p.siteId,key,version,json,now,item.baseVersion,p.siteId,key,item.baseVersion,item.baseVersion));
-  writes.push(db.prepare(`INSERT INTO issue_review_changes (id,site_id,event_key,run_id,version,state,note,actor,created_at) SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM issue_event_reviews WHERE site_id=? AND event_key=? AND version=? AND state=?) ON CONFLICT(id) DO NOTHING`).bind(changeId,p.siteId,key,p.runId,version,json,patch.note.trim(),actor,now,p.siteId,key,version,json));
+  writes.push({sql:`INSERT INTO issue_event_reviews (id,site_id,event_key,version,state,updated_at) SELECT ?,?,?,?,?,? WHERE ?=0 OR EXISTS (SELECT 1 FROM issue_event_reviews WHERE site_id=? AND event_key=? AND version=?) ON CONFLICT(site_id,event_key) DO UPDATE SET version=excluded.version,state=excluded.state,updated_at=excluded.updated_at WHERE issue_event_reviews.version=?`,values:[crypto.randomUUID(),p.siteId,key,version,json,now,item.baseVersion,p.siteId,key,item.baseVersion,item.baseVersion]});
+  writes.push({sql:`INSERT INTO issue_review_changes (id,site_id,event_key,run_id,version,state,note,actor,created_at) SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM issue_event_reviews WHERE site_id=? AND event_key=? AND version=? AND state=?) ON CONFLICT(id) DO NOTHING`,values:[changeId,p.siteId,key,p.runId,version,json,patch.note.trim(),actor,now,p.siteId,key,version,json]});
   pending.push({...item,changeId});
  }
- if(writes.length)await db.batch(writes);
+ writeReviewBatch(db,p.siteId,p.runId,writes);
  const current=await db.prepare(`SELECT r.event_key,r.version,r.state,r.updated_at,(SELECT c.run_id FROM issue_review_changes c WHERE c.site_id=r.site_id AND c.event_key=r.event_key AND c.version=r.version) AS run_id FROM issue_event_reviews r WHERE r.site_id=? AND r.event_key IN (${marks})`).bind(p.siteId,...keys).all();
  const assessed=await assessReviews(p.siteId,p.runId,payload,current.results.map((r:any)=>({eventKey:r.event_key,version:r.version,state:JSON.parse(r.state),updatedAt:r.updated_at,runId:r.run_id})));
  for(const item of pending){const review=assessed.find(r=>r.eventKey===item.issue.eventKey);results.push({issueId:item.issueId,eventKey:item.issue.eventKey,...(review?.state.changeId===item.changeId?{}:{error:'Another analyst updated this finding. Reload before applying changes.'})});}
  return Response.json({results:results.map(item=>({...item,review:assessed.find(r=>r.eventKey===item.eventKey)})),retrievedAt:now},{headers:{'Cache-Control':'private, no-store'}});
-}catch(e){return Response.json({error:e instanceof Error?e.message:'Unable to save bulk review.'},{status:409});}}
+}catch(e){return Response.json({error:e instanceof Error?e.message:'Unable to save bulk review.'},{status:409,headers:{'Cache-Control':'private, no-store'}});}}

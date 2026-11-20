@@ -28,7 +28,7 @@ function harness(path,initial={},bindings={}){
 function nodes(tree){if(!tree||typeof tree!=='object')return [];return [tree,...React.Children.toArray(tree.props?.children).flatMap(nodes)];}
 const button=(tree,label)=>nodes(tree).find(n=>n.type==='button'&&renderToStaticMarkup(n).includes(label));
 const html=tree=>renderToStaticMarkup(tree);
-const finding=(id,patch={})=>({id,eventKey:id,evidenceSignature:id,name:`Finding ${id}`,type:'Underperformance',category:'Performance',confidence:'model-based',severity:'high',equipmentId:'inverter',equipmentName:'Inverter',equipmentType:'inverter',equipmentExternalId:'INV',timezone:'UTC',startDateTime:'2026-06-01T08:00:00Z',endDateTime:'2026-06-01T09:00:00Z',durationMinutes:60,estimatedLossKwh:10,actualEnergyKwh:90,expectedEnergyKwh:100,lossPercent:10,siteImpactPercent:10,description:'Synthetic finding',...patch});
+const finding=(id,patch={})=>({id,eventKey:id,evidenceSignature:id,name:`Finding ${id}`,type:'Equipment outage',category:'Performance',confidence:'model-based',severity:'high',equipmentId:'inverter',equipmentName:'Inverter',equipmentType:'inverter',equipmentExternalId:'INV',timezone:'UTC',startDateTime:'2026-06-01T08:00:00Z',endDateTime:'2026-06-01T09:00:00Z',durationMinutes:60,estimatedLossKwh:10,actualEnergyKwh:90,expectedEnergyKwh:100,lossPercent:10,siteImpactPercent:10,description:'Synthetic finding',...patch});
 const assessment=(status='current')=>({runId:'run',status,assessedAt:'2026-11-16T12:00:00Z',comparedRevision:3,reasons:status==='older'?['Changed source readings']:[],dependencyScope:'analysis-range'});
 function home(initial={},status='current',ready=true,bindings={}){
  const fresh=loadSource('app/data-freshness.ts');
@@ -140,7 +140,7 @@ test('Manage Analyses distinguishes published current from selected snapshot and
  const calls=[],selected=[],runs=[{id:'run',completed_at:'2026-11-16T12:00:00Z',status:'completed',issue_count:4,source_revision:3,is_current:true,data_freshness:'current',timestamp_start:'2026-06-01',timestamp_end:'2026-06-30'},{id:'old',completed_at:'2026-11-15T12:00:00Z',issue_count:2,source_revision:1,is_current:false,data_freshness:'older'}];
  const h=harness('app/ManageAnalyses.tsx',{}, {fetch:async(url,options)=>{calls.push([url,options]);return Response.json(calls.length===1?{runs,next:'opaque/+=='}:{runs:[{id:'legacy',completed_at:'bad',issue_count:0}],next:null});}});
  const props={sites:uploadProps.sites,siteId:'site',runId:'old',revision:'run',onSiteChange:noop,onChange:id=>selected.push(id),onFindings:noop};
- assert.match(html(h.render(props)),/Loading analyses/);await h.flush();let tree=h.render(props);assert.match(html(tree),/Published current/);assert.match(html(tree),/Selected snapshot/);assert.match(html(tree),/Based on older data/);assert.doesNotMatch(html(tree),/Delete|Archive/);
+ assert.match(html(h.render(props)),/Loading analyses/);await h.flush();let tree=h.render(props);assert.match(html(tree),/Published current/);assert.match(html(tree),/Selected snapshot/);assert.match(html(tree),/Based on older data/);assert.match(html(tree),/Delete/);assert.doesNotMatch(html(tree),/Archive/);
  const selectedButton=button(tree,'Selected snapshot');assert.equal(selectedButton.props.disabled,true);selectedButton.props.onClick();assert.deepEqual(selected,[]);
  button(tree,'Use published current').props.onClick();assert.deepEqual(selected,['']);
  await button(tree,'Older analyses').props.onClick();tree=h.render(props);assert.match(calls[1][0],/before=opaque%2F%2B%3D%3D/);assert.match(html(tree),/Unknown/);assert.doesNotMatch(html(tree),/Invalid Date/);h.dispose();
@@ -198,13 +198,13 @@ test('actual Summaries and Timeline render only freshness-selected membership; s
  }
 });
 
-test('freshness changes hidden/dismissed totals and recurring export membership without changing source or review state',()=>{
- const parent=home({freshnessFilter:'older'},'older'),prefs={...visibility.defaultIssueVisibility,inverterUnderperformance:false};parent.state.user={...parent.state.user,issueVisibility:prefs};
+test('freshness changes hidden/dismissed totals without resurrecting legacy recurring exports or changing saved state',()=>{
+ const parent=home({freshnessFilter:'older'},'older'),prefs={...visibility.defaultIssueVisibility,equipmentOutage:false};parent.state.user={...parent.state.user,issueVisibility:prefs};
  let tree=parent.render();button(tree,'Export XLSX').props.onClick();let book=parent.getBook(),m=new Map(XLSX.utils.sheet_to_json(book.Sheets.Methodology,{header:1}));assert.equal(m.get('Findings hidden by issue visibility'),1);assert.equal(m.get('Known loss hidden by issue visibility (kWh)'),10);
  parent.state.freshnessFilter='current';tree=parent.render();button(tree,'Export XLSX').props.onClick();m=new Map(XLSX.utils.sheet_to_json(parent.getBook().Sheets.Methodology,{header:1}));assert.equal(m.get('Findings hidden by issue visibility'),0);assert.equal(m.get('Reporting period dismissed loss (kWh, before table filters)'),0);
  const fresh=loadSource('app/data-freshness.ts'),method=loadSource('app/report-methodology.ts',[],{...review,...visibility,...fresh,XLSX}),shown=finding('shown'),outside=finding('outside');
  const context={freshnessFilter:'older',dataFreshness:assessment('older'),freshnessReady:true,reviewFilter:'Exclude dismissed',reviews:{},reviewRetrievedAt:'now',issues:[shown],recurringIssues:[{id:'episode',members:[shown,outside],activeMinutes:120,estimatedLossKwh:20}]};const before=JSON.stringify(context);book=XLSX.utils.book_new();method.appendReportMethodology(book,context);
- assert.deepEqual(XLSX.utils.sheet_to_json(book.Sheets['Recurring occurrences']).map(r=>r.issueId),['shown']);const [episode]=XLSX.utils.sheet_to_json(book.Sheets['Recurring issues']);assert.equal(episode.exportedOccurrenceCount,1);assert.equal(episode.fullEpisodeLossKwh,20);assert.match(episode.scope,/context only/);assert.equal(JSON.stringify(context),before);
+ assert.equal(book.Sheets['Recurring occurrences'],undefined);assert.equal(book.Sheets['Recurring issues'],undefined);assert.deepEqual(XLSX.utils.sheet_to_json(book.Sheets['Analyst reviews']).map(r=>r.issueId),['shown']);assert.equal(JSON.stringify(context),before);
 });
 
 test('CSV wizard stages mapped data only, passes saved cadence for single-timestamp corrections and never auto-applies',async()=>{

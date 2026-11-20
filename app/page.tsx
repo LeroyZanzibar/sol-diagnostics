@@ -1,7 +1,5 @@
 "use client";
 
-import {recurringTableRows,recurringAggregate,type RecurringIssue} from "./recurring-issues";
-import RecurringTableGroup from "./RecurringTableGroup";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatDateTime } from "./issue-date-format";
 import { clipIssueToReport, localMoment, siteWallTime, type IntervalLoss, type PeriodLoss, type ReportRange } from "./issue-periods";
@@ -9,11 +7,10 @@ import ManageAnalyses from "./ManageAnalyses";
 import {useDataFreshness,matchesDataFreshness,freshnessLabel,freshnessOptions,type DataFreshnessFilter} from "./data-freshness";
 import IssueReviewDialog from "./IssueReviewDialog";
 import ReviewWorkbench from "./ReviewWorkbench";
-import {replaceInverterSelection} from "./inverter-review";
 import {useMaintenanceWindows} from "./MaintenanceWindows";
 import {maintenanceMatch} from "./review-groups";
 import {defaultConfidence,effectiveReviewStatus,matchesReviewFilter,reviewLossSummary,nextReviewFinding,type IssueReview,type ConfidenceDetail,type SavedIssueReview} from "./issue-review";
-import {appendReportMethodology,type ReportContext} from "./report-methodology";
+import {analysisMethodLabel,appendReportMethodology,type ReportContext} from "./report-methodology";
 import ReportingPeriod from "./ReportingPeriod";
 import IssueVisibilitySettings from "./IssueVisibilitySettings";
 import {defaultIssueVisibility,normalizeIssueVisibility,isIssueVisible,issueVisibilityOptions,type IssueVisibility} from "./issue-visibility";
@@ -91,6 +88,7 @@ type PerformanceIssue = {
   durationMinutes: number;
   estimatedLossKwh: number | null;
   lossUnknown?: boolean;
+  expectedUnknown?: boolean;
   productionUnknown?: boolean;
   affectedEquipment?: { id: string; name: string }[];
   lossPercent: number | null;
@@ -124,7 +122,6 @@ type PerformanceData = {
     source: "interval_energy" | "active_power" | "";
   };
   analysis: {
-    recurringIssues?:RecurringIssue[];
     timezone?: string;
     unfilteredTotalLossKwh?: number;
     thresholdExcludedLossKwh?: number;
@@ -159,7 +156,6 @@ type SortKey =
   | "name"
   | "category"
   | "confidence"
-  | "suspectedCause"
   | "equipmentName"
   | "severity"
   | "startDateTime"
@@ -172,7 +168,6 @@ type ColumnFilters = {
   type: string;
   category: "" | IssueCategory;
   confidence: string;
-  suspectedCause: string;
   equipmentName: string;
   severity: "" | Severity;
   startDateTime: string;
@@ -284,7 +279,6 @@ const defaultIssueColumns: IssueColumn[] = [
   { id: "name", label: "Issue" },
   { id: "category", label: "Category" },
   { id: "confidence", label: "Confidence" },
-  { id: "suspectedCause", label: "Suspected cause" },
   { id: "equipmentName", label: "Equipment" },
   { id: "severity", label: "Severity" },
   { id: "startDateTime", label: "Start" },
@@ -361,7 +355,7 @@ function userInitials(user: UserSettings) {
 function thresholdLabel(value: string) {
   const threshold = Number(value);
   return value.trim() && Number.isFinite(threshold)
-    ? `Show individual or recurring losses above ${formatKwh(threshold)}`
+    ? `Show individual losses above ${formatKwh(threshold)}`
     : "Log every detected issue";
 }
 export default function Home() {
@@ -431,6 +425,9 @@ export default function Home() {
   const [performanceRevision, setPerformanceRevision] = useState(0);
   const [analysisSelection,setAnalysisSelection]=useState({siteId:"",runId:""});
   const selectedRunId=analysisSelection.siteId===activeSiteId?analysisSelection.runId:"";
+  const performanceLoadRef=useRef({scope:"",generation:0});
+  const performanceScope=JSON.stringify([activeSiteId,selectedRunId,performanceRevision]);
+  performanceLoadRef.current.scope=performanceScope;
   const [freshnessFilter,setFreshnessFilter]=useState<DataFreshnessFilter>('all');
   const [reviews,setReviews]=useState<Record<string,IssueReview>>({});
   const [reviewsRetrievedAt,setReviewsRetrievedAt]=useState("");
@@ -446,7 +443,33 @@ export default function Home() {
   const freshnessReady=freshnessFilter==='all'||freshness.ready;
   const freshnessMatches=matchesDataFreshness(freshnessFilter,freshness.assessment.status,freshness.ready);
   function changeFreshness(value:DataFreshnessFilter){setFreshnessFilter(value);setSelectedFindings([]);setIssuePage(0);}
-  function selectAnalysis(runId:string){if(runId===selectedRunId)return;setAnalysisSelection({siteId:activeSiteId,runId});setPerformance(null);setSelectedFindings([]);setIssuePage(0);}
+  function selectAnalysis(runId:string){if(runId===selectedRunId)return;performanceLoadRef.current.generation++;currentReviewScope.current="";analysisViewRef.current={siteId:activeSiteId,selectedRunId:runId,analysisRunId:""};setAnalysisSelection({siteId:activeSiteId,runId});setPerformance(null);setReviewTarget(null);setSelectedFindings([]);setIssuePage(0);}
+  const analysisViewRef=useRef({siteId:activeSiteId,selectedRunId,analysisRunId});
+  analysisViewRef.current={siteId:activeSiteId,selectedRunId,analysisRunId};
+  function deletedAnalysis(siteId:string,runId:string,currentCleared:boolean){
+    // Evict both exact identities even when a delayed callback belongs to another site.
+    performanceCacheRef.current.delete(siteId);
+    performanceCacheRef.current.delete(`${siteId}|${runId}`);
+    const current=analysisViewRef.current;
+    if(current.siteId!==siteId)return;
+    // Fence an outstanding load synchronously; effect cleanup happens after the next render.
+    performanceLoadRef.current.generation++;
+    const affected=current.selectedRunId===runId||(!current.selectedRunId&&(currentCleared||current.analysisRunId===runId));
+    if(affected){
+      currentReviewScope.current="";
+      if(current.selectedRunId===runId)setAnalysisSelection({siteId,runId:""});
+      setPerformance(null);setReviewTarget(null);setSelectedFindings([]);setIssuePage(0);
+      setReviews({});setReviewsRetrievedAt("");setReviewScope("");setAnalysisState(null);
+    }
+    // Current's empty run ID is a sentinel: setting it again alone would never reload.
+    setPerformanceRevision(value=>value+1);
+  }
+  function changeAnalysisSite(siteId:string){
+    if(siteId===analysisSiteRef.current)return;
+    performanceLoadRef.current.generation++;currentReviewScope.current="";
+    analysisViewRef.current={siteId,selectedRunId:"",analysisRunId:""};
+    analysisSiteRef.current=siteId;setActiveSiteId(siteId);setPerformance(null);setReviewTarget(null);setSelectedFindings([]);setIssuePage(0);
+  }
   const currentReviewScope=useRef("");
   currentReviewScope.current=`${activeSiteId}:${analysisRunId}`;
   const reviewsReady=userSettingsReady&&!!reviewsRetrievedAt&&!reviewError&&reviewScope===`${activeSiteId}:${analysisRunId}`;
@@ -455,9 +478,9 @@ export default function Home() {
     const controller=new AbortController();setReviews({});setReviewsRetrievedAt("");setReviewError("");
     if(!analysisRunId)return;
     void (async()=>{const collected:Record<string,IssueReview>={};let cursor:number|null=0,retrievedAt="";
-      do{const response:Response=await fetch(`/api/issue-reviews?siteId=${encodeURIComponent(activeSiteId)}&runId=${encodeURIComponent(analysisRunId)}&cursor=${cursor}`,{signal:controller.signal});const data:{reviews:(IssueReview&{eventKey:string})[];next:number|null;retrievedAt:string;error?:string}=await response.json();if(!response.ok)throw new Error(data.error);if(controller.signal.aborted)return;for(const review of data.reviews)collected[review.eventKey]=review;cursor=data.next;retrievedAt=data.retrievedAt;}while(cursor!==null&&cursor!==undefined);
+      do{const response:Response=await fetch(`/api/issue-reviews?siteId=${encodeURIComponent(activeSiteId)}&runId=${encodeURIComponent(analysisRunId)}&cursor=${cursor}`,{signal:controller.signal});const data:{reviews:(IssueReview&{eventKey:string})[];next:number|null;retrievedAt:string;error?:string}=await response.json();if(!response.ok)throw new Error(data.error);if(controller.signal.aborted||currentReviewScope.current!==`${activeSiteId}:${analysisRunId}`)return;for(const review of data.reviews)collected[review.eventKey]=review;cursor=data.next;retrievedAt=data.retrievedAt;}while(cursor!==null&&cursor!==undefined);
       setReviews(collected);setReviewsRetrievedAt(retrievedAt);setReviewScope(`${activeSiteId}:${analysisRunId}`);
-    })().catch(e=>{if(!controller.signal.aborted)setReviewError(e.message);});
+    })().catch(e=>{if(!controller.signal.aborted&&currentReviewScope.current===`${activeSiteId}:${analysisRunId}`)setReviewError(e.message);});
     return()=>controller.abort();
   },[activeSiteId,analysisRunId]);
   function confidenceFor(issue:PerformanceIssue){return (issue.eventKey&&reviews[issue.eventKey]?.state.confidence)||issue.confidenceDetail||defaultConfidence(issue);}
@@ -470,7 +493,6 @@ export default function Home() {
     type: "",
     category: "",
     confidence: "",
-    suspectedCause: "",
     equipmentName: "",
     severity: "",
     startDateTime: "",
@@ -529,18 +551,18 @@ export default function Home() {
   const activeSite =
     managedSites.find((site) => site.id === activeSiteId) || managedSites[0];
   const issues = useMemo(
-    () => performance?.analysis?.issues || [],
+    () => (performance?.analysis?.issues || []).filter(issue=>issue.type!=="Underperformance"),
     [performance],
   );
-  const recurringIssues=performance?.analysis.recurringIssues||[];
-  function openReview(id:string){const issue=issues.find(i=>i.id===id);if(issue){setReviewTarget(issue);return;}const episode=recurringIssues.find(e=>e.id===id);if(episode){const first=issues.find(i=>episode.members.some(m=>m.id===i.id));if(first)setReviewTarget({...first,...episode});}}
+  function openReview(id:string){const issue=issues.find(i=>i.id===id);if(issue&&isIssueVisible(issue,visibility))setReviewTarget(issue);}
+  const outageOnlyAnalysis=Number(performance?.methodology?.calculationVersion)>=29;
   const reportTimezone = performance?.timezone || performance?.timeZone || performance?.summary?.timezone || performance?.analysis?.timezone || issues[0]?.timezone || "Site local time";
   const freshnessIssues=useMemo(()=>freshnessMatches?issues:[],[issues,freshnessMatches]);
   const periodIssues = useMemo(() => freshnessIssues.flatMap(issue => {
     const clipped = clipIssueToReport(issue, reportRange);
     return clipped ? [clipped] : [];
   }), [freshnessIssues, reportRange]);
-  const visibility=user.issueVisibility;
+  const visibility=useMemo(()=>normalizeIssueVisibility(user.issueVisibility),[user.issueVisibility]);
   const enabledPeriodIssues=useMemo(()=>periodIssues.filter(issue=>isIssueVisible(issue,visibility)),[periodIssues,visibility]);
   const enabledAnalysisIssues=useMemo(()=>freshnessIssues.filter(issue=>isIssueVisible(issue,visibility)),[freshnessIssues,visibility]);
   const hiddenTypeCount=issueVisibilityOptions.filter(option=>!visibility[option.key]).length;
@@ -549,7 +571,7 @@ export default function Home() {
   const hiddenIssues=reportingReady?periodIssues.filter(issue=>!isIssueVisible(issue,visibility)&&matchesAnalystFilter(issue)):[];
   const visibilityHidden={count:hiddenIssues.length,knownLossKwh:hiddenIssues.reduce((sum,issue)=>sum+(issue.lossUnknown?0:issue.estimatedLossKwh||0),0),unknownLossCount:hiddenIssues.filter(issue=>issue.lossUnknown||issue.estimatedLossKwh==null).length};
   const reviewTotals=reviewLossSummary(enabledPeriodIssues,reviews);
-  const reportContext:ReportContext={freshnessFilter,dataFreshness:freshness.assessment,freshnessReady,issueVisibility:visibility,visibilityHidden,recurringIssues:recurringIssues.filter(issue=>freshnessMatches&&isIssueVisible(issue,visibility)),maintenanceWindows:maintenance.windows,maintenanceRetrievedAt:maintenance.retrievedAt,maintenanceError:maintenance.error,methodology:performance?.methodology,analysisId:analysisRunId,reviewFilter,reviews,reviewRetrievedAt:reviewsReady?reviewsRetrievedAt:"",reviewTotals:reportingReady?reviewTotals:undefined,excludedIssues:reportingReady?enabledPeriodIssues.filter(i=>reviewStatus(i)==="Dismissed"):[],filters:{...filters,reportRange,sort,columnOrder:issueColumns.map(c=>c.id),lossThreshold:performance?.analysis.issueLossThresholdKwh,issueVisibility:visibility},issues:reportIssues};
+  const reportContext:ReportContext={freshnessFilter,dataFreshness:freshness.assessment,freshnessReady,issueVisibility:visibility,visibilityHidden,maintenanceWindows:maintenance.windows,maintenanceRetrievedAt:maintenance.retrievedAt,maintenanceError:maintenance.error,methodology:performance?.methodology,analysisId:analysisRunId,reviewFilter,reviews,reviewRetrievedAt:reviewsReady?reviewsRetrievedAt:"",reviewTotals:reportingReady?reviewTotals:undefined,excludedIssues:reportingReady?enabledPeriodIssues.filter(i=>reviewStatus(i)==="Dismissed"):[],filters:{...filters,reportRange,sort,columnOrder:issueColumns.map(c=>c.id),lossThreshold:outageOnlyAnalysis?performance?.analysis.issueLossThresholdKwh:undefined,issueVisibility:visibility},issues:reportIssues};
   const visibleIssues = useMemo(
     () =>
       reportIssues
@@ -566,7 +588,6 @@ export default function Home() {
           if (filters.category && issue.category !== filters.category)
             return false;
           if(filters.confidence){const [key,level]=filters.confidence.split(":");if(confidenceFor(issue)[key as keyof ConfidenceDetail]?.level!==level)return false;}
-          if (filters.suspectedCause && (issue.suspectedCause || "blank") !== filters.suspectedCause) return false;
           if (
             filters.equipmentName &&
             !`${issue.equipmentName} ${issue.equipmentExternalId} ${issue.equipmentType}`
@@ -612,13 +633,8 @@ export default function Home() {
         }),
     [reportIssues, filters, sort],
   );
-  const issueRows=recurringTableRows(recurringIssues,visibleIssues).sort((a,b)=>{
-    const itemA=a.group?recurringAggregate(a.group):a.issue,itemB=b.group?recurringAggregate(b.group):b.issue;
-    const ranks=["Unknown","Low","Moderate","High"],left=sort.key==="confidence"?ranks.indexOf(confidenceFor(itemA).anomaly.level):sortValue(itemA,sort.key),right=sort.key==="confidence"?ranks.indexOf(confidenceFor(itemB).anomaly.level):sortValue(itemB,sort.key);
-    const comparison=typeof left==="number"&&typeof right==="number"?left-right:String(left).localeCompare(String(right));return sort.direction==="asc"?comparison:-comparison;
-  });
-  const pageRows=issueRows.slice(issuePage*100,issuePage*100+100);
-  const pageOccurrenceIds=pageRows.flatMap(row=>row.group?row.group.issues.map(i=>i.id):[row.issue.id]);
+  const pageRows=visibleIssues.slice(issuePage*100,issuePage*100+100);
+  const pageOccurrenceIds=pageRows.map(issue=>issue.id);
   const hasFilters = Object.values(filters).some(Boolean);
   const activeFilterCount = Object.values(filters).filter(
     (value) => String(value).trim() !== "",
@@ -671,6 +687,8 @@ export default function Home() {
   }, [userSettingsRevision]);
   useEffect(() => {
     let cancelled = false;
+    const generation=performanceLoadRef.current.generation;
+    const isCurrent=()=>!cancelled&&performanceLoadRef.current.scope===performanceScope&&performanceLoadRef.current.generation===generation;
     if (!activeSiteId) return;
     const controller = new AbortController();
     let timedOut = false;
@@ -680,7 +698,7 @@ export default function Home() {
     const cacheKey=selectedRunId?`${activeSiteId}|${selectedRunId}`:activeSiteId;
     const cached = requestedAnalysis ? undefined : performanceCacheRef.current.get(cacheKey);
     queueMicrotask(() => {
-      if (cancelled) return;
+      if (!isCurrent()) return;
       setPerformance(cached?.data || null);
       setAnalysisLoadMode(requestedAnalysis ? "analyzing" : "loading");
       setAnalysisState(null);
@@ -696,7 +714,7 @@ export default function Home() {
     };
     resetIdleTimeout();
     const applyProgress = (progress?: AnalysisProgressState) => {
-      if (!progress || cancelled) return;
+      if (!progress || !isCurrent()) return;
       attemptId = progress.attemptId;
       if(progress.updatedAt>lastProgressUpdate){lastProgressUpdate=progress.updatedAt;resetIdleTimeout();}
       setAnalysisLoadMode("analyzing");
@@ -704,7 +722,7 @@ export default function Home() {
     };
     // Poll only persisted progress while a bounded work request is in flight.
     const progressTimer = window.setInterval(async () => {
-      if (!attemptId || polling || cancelled || controller.signal.aborted) return;
+      if (!attemptId || polling || !isCurrent() || controller.signal.aborted) return;
       polling = true;
       try {
         const response = await fetch(`/api/performance-summary?siteId=${encodeURIComponent(activeSiteId)}&progressOnly=1&attemptId=${encodeURIComponent(attemptId)}`,
@@ -724,12 +742,13 @@ export default function Home() {
       return { data, etag: response.headers.get("ETag") || "", bytes: text.length * 2 };
     }
     async function loadPerformance() {
-      while (!cancelled) {
+      while (isCurrent()) {
         const response = await fetch(selectedRunId?`/api/analysis-history?siteId=${encodeURIComponent(activeSiteId)}&runId=${encodeURIComponent(selectedRunId)}`:`/api/performance-summary?siteId=${encodeURIComponent(activeSiteId)}`,
           { signal: controller.signal, cache: "no-store", headers: cached?.etag ? { "If-None-Match": cached.etag } : {} });
-        if (cancelled) throw new Error("Analysis loading was canceled.");
+        if (!isCurrent()) throw new Error("Analysis loading was canceled.");
         if (response.status === 304 && cached) return cached;
         const result = await readResponse(response);
+        if (!isCurrent()) throw new Error("Analysis loading was canceled.");
         applyProgress(result.data.progress);
         setAnalysisWaiting(Boolean(result.data.waiting));
         if (response.status !== 202) return result;
@@ -741,7 +760,7 @@ export default function Home() {
       throw new Error("Analysis loading was canceled.");
     }
     void loadPerformance().then(({ data, etag, bytes }) => {
-      if (cancelled) return;
+      if (!isCurrent()) return;
       const normalizedData = { ...emptyPerformance, ...data,
         analysis: { ...emptyPerformance.analysis, ...data.analysis } };
       const cache = performanceCacheRef.current;
@@ -759,7 +778,7 @@ export default function Home() {
       if (pendingAnalysisSiteRef.current === activeSiteId) pendingAnalysisSiteRef.current = "";
       setPerformance(normalizedData);
     }).catch(error => {
-      if (!cancelled) setPerformance({ ...emptyPerformance,
+      if (isCurrent()) setPerformance({ ...emptyPerformance,
         error: timedOut ? "No analysis progress was recorded for five minutes. Resume from saved progress, or cancel the analysis."
           : error instanceof Error ? error.message : "Unable to load issue analysis" });
     }).finally(() => {
@@ -866,7 +885,6 @@ export default function Home() {
       type: "",
       category: "",
       confidence: "",
-      suspectedCause: "",
       equipmentName: "",
       severity: "",
       startDateTime: "",
@@ -963,10 +981,6 @@ export default function Home() {
             <option value="Communications">Communications</option>
           </select>
         );
-      case "suspectedCause":
-        return <select aria-label="Filter suspected cause" value={filters.suspectedCause} onChange={event => updateFilter("suspectedCause", event.target.value)}>
-          <option value="">All</option><option value="Shading">Shading</option><option value="Snow">Snow</option><option value="blank">Blank</option>
-        </select>;
       case "confidence":
         return (
           <select
@@ -1106,7 +1120,6 @@ export default function Home() {
             <button className="issue-review-button" disabled={!analysisRunId||!issue.eventKey} onClick={()=>setReviewTarget(issues.find(i=>i.id===issue.id)||issue)}>{reviewStatus(issue)} · Review</button>
             {issue.eventKey&&reviews[issue.eventKey]&&<small>{reviews[issue.eventKey].state.classification} · {reviews[issue.eventKey].state.resolution}</small>}
             <small>{issue.description}</small>
-            {!!issue.recurringIssueCount && <small>Equipment threshold total: {formatKwh(issue.recurringLossKwh || 0)} across {issue.recurringIssueCount} events in the full analysis period.</small>}
             {maintenance.windows.filter(w=>maintenanceMatch(issues.find(i=>i.id===issue.id)||issue,w)).map(w=><small className="maintenance-match" key={w.id}>{w.state.title} · {maintenanceMatch(issues.find(i=>i.id===issue.id)||issue,w)==="full"?"Maintenance window covers this finding":"Partial maintenance overlap"}</small>)}
             {issue.reportClipped && <small>Reporting-period portion. Original event: {formatDateTime(issue.originalStart || issue.startDateTime, issue.timezone)} – {formatDateTime(issue.originalEnd || issue.endDateTime, issue.timezone)}.</small>}
             {!!issue.affectedEquipment?.length && <details className="affected-equipment"><summary>{issue.affectedEquipment.length} affected inverters</summary><small>{issue.affectedEquipment.map(item => item.name).join(", ")}</small></details>}
@@ -1120,8 +1133,6 @@ export default function Home() {
             {issue.category}
           </span>
         );
-      case "suspectedCause":
-        return issue.suspectedCause ? <details className="cause-evidence"><summary>{issue.suspectedCause}</summary><small>{issue.causeExplanation}</small></details> : "";
       case "confidence":
         return <div className="confidence-levels">{Object.entries(confidenceFor(issue)).map(([key,c])=><span key={key} title={c.reason}>{key}: <strong>{c.level}</strong></span>)}</div>;
       case "equipmentName":
@@ -1202,8 +1213,6 @@ export default function Home() {
           : ["Issue", "Description", "Affected inverters"];
       case "category":
         return issue ? [issue.category] : ["Category"];
-      case "suspectedCause":
-        return issue ? [issue.suspectedCause || "", issue.causeExplanation || ""] : ["Suspected cause", "Cause evidence"];
       case "confidence":
         return issue ? [confidenceFor(issue).anomaly.level,confidenceFor(issue).cause.level,confidenceFor(issue).loss.level] : ["Observed anomaly confidence","Cause confidence","Loss confidence"];
       case "equipmentName":
@@ -1374,14 +1383,10 @@ export default function Home() {
     {reportingReady&&hiddenTypeCount>0&&<div className="issue-visibility-notice" role="status"><p><strong>{visibilityHidden.count.toLocaleString()} findings hidden · {formatKwh(visibilityHidden.knownLossKwh)} known loss</strong>{visibilityHidden.unknownLossCount>0&&` · ${visibilityHidden.unknownLossCount} with unknown loss`}. Within the reporting period, data freshness and analyst review filters, before table filters. Hidden findings remain in the analysis.</p></div>}
   </div>;
   function selectFindings(ids:string[],checked:boolean){
+    if(selectedRunId||!reviewsReady)return;
     const allowed=new Set(visibleIssues.map(i=>i.id));
     const next=checked?[...new Set([...selectedFindings,...ids.filter(id=>allowed.has(id))])]:selectedFindings.filter(id=>!ids.includes(id));
     if(next.length>500){notify("Select up to 500 findings per action. Your selection was not changed.");return;}setSelectedFindings(next);
-  }
-  function selectInverterGroup(equipmentId:string,ids:string[]){
-    const next=replaceInverterSelection(selectedFindings,visibleIssues,equipmentId,ids);
-    if(!next){notify("Select up to 500 findings per action. Your selection was not changed.");return false;}
-    setSelectedFindings(next);return true;
   }
   function savedBulkReviews(rows:(IssueReview&{eventKey:string})[],retrievedAt=new Date().toISOString()){
     if(currentReviewScope.current!==`${activeSiteId}:${analysisRunId}`)return;
@@ -1564,10 +1569,7 @@ export default function Home() {
                   <span>ANALYSIS SITE</span>
                   <select
                     value={activeSiteId}
-                    onChange={(event) => {
-                      setPerformance(performanceCacheRef.current.get(event.target.value)?.data || null);
-                      setActiveSiteId(event.target.value);
-                    }}
+                    onChange={event=>changeAnalysisSite(event.target.value)}
                   >
                     {managedSites.map((site) => (
                       <option key={site.id} value={site.id}>
@@ -1582,7 +1584,7 @@ export default function Home() {
                 </button>
               </div>
             </header>
-            {(performance?.analysis.thresholdExcludedLossKwh || 0) > 0 && <div className="status-strip analysis-period-note" role="status"><strong>Full saved analysis (all issue types and freshness statuses; context only):</strong> {formatKwh(performance!.analysis.unfilteredTotalLossKwh ?? performance!.analysis.totalLossKwh)}; {formatKwh(performance!.analysis.thresholdExcludedLossKwh!)} excluded by your issue threshold.</div>}
+            {outageOnlyAnalysis&&(performance?.analysis.thresholdExcludedLossKwh || 0) > 0 && <div className="status-strip analysis-period-note" role="status"><strong>Full saved analysis (all issue types and freshness statuses; context only):</strong> {formatKwh(performance!.analysis.unfilteredTotalLossKwh ?? performance!.analysis.totalLossKwh)}; {formatKwh(performance!.analysis.thresholdExcludedLossKwh!)} excluded by your issue threshold.</div>}
 
             <ReportingPeriod range={reportRange} onChange={setReportRange} timezone={reportTimezone} />
             {performance?.hasData && !selectedRunId && performance.lastAttempt && ["canceled", "failed", "interrupted"].includes(performance.lastAttempt.status) && <div className="analysis-selection-note" role="status">
@@ -1592,10 +1594,8 @@ export default function Home() {
               <button className="secondary-btn" disabled={Boolean(analysisAction)} onClick={() => void controlAnalysis("retry")}>Retry analysis</button>
               {analysisControlError && <p role="alert">{analysisControlError}</p>}
             </div>}
-            {visibility.inverterUnderperformance && performance?.hasData && performance.analysis.inverterExpectation && <div className="status-strip analysis-period-note" role="status"><strong>Inverter baseline:</strong> {performance.analysis.inverterExpectation.message}</div>}
-            {visibility.inverterUnderperformance && performance?.hasData && performance.analysis.peerComparison?.referenceQualification && <div className="status-strip analysis-period-note" role="status"><strong>Optional peer evidence:</strong> {performance.analysis.peerComparison.referenceQualification.message}</div>}
             {reviewControls}
-            <ReviewWorkbench showRecurring={visibility.inverterUnderperformance} key={`${activeSiteId}:${analysisRunId}`} siteId={activeSiteId} runId={analysisRunId} visible={visibleIssues} originals={issues} episodes={freshnessMatches?recurringIssues:[]} reviews={reviews} selected={selectedFindings} onSelect={selectFindings} onReplace={selectInverterGroup} filterScope={JSON.stringify([filters,reportRange,reviewFilter,visibility,freshnessFilter])} onClear={()=>setSelectedFindings([])} onUpdated={savedBulkReviews} onReview={openReview} readOnly={!!selectedRunId||!reviewsReady} maintenance={maintenance}/>
+            <ReviewWorkbench key={`${activeSiteId}:${analysisRunId}`} siteId={activeSiteId} runId={analysisRunId} visible={visibleIssues} originals={issues} reviews={reviews} selected={selectedFindings} onSelect={selectFindings} onClear={()=>setSelectedFindings([])} onUpdated={savedBulkReviews} readOnly={!!selectedRunId||!reviewsReady} maintenance={maintenance}/>
             {(reportRange.from || reportRange.through) && reportIssues.some(issue => issue.reportClipped && issue.estimatedLossKwh === null) && <p role="status">Some overlapping issues lack reliable interval loss evidence. Their loss within this reporting period is shown as Unknown; reanalyze the latest upload to refresh the evidence.</p>}
             <div
               className={`status-strip ${performance?.hasData ? "" : "empty"}`}
@@ -1681,12 +1681,12 @@ export default function Home() {
                 </div>
                 <div className="table-actions">
                   <span>
-                    {issueRows.length} review items · {visibleIssues.length} of {enabledAnalysisIssues.length} enabled occurrences
+                    {visibleIssues.length} of {enabledAnalysisIssues.length} enabled findings
                     {activeFilterCount
                       ? ` · ${activeFilterCount} filter${activeFilterCount === 1 ? "" : "s"} active`
                       : ""}
-                    {performance?.analysis.issueLossThresholdKwh != null
-                      ? ` · individual or recurring losses above ${formatKwh(performance.analysis.issueLossThresholdKwh)} shown`
+                    {outageOnlyAnalysis&&performance?.analysis.issueLossThresholdKwh != null
+                      ? ` · individual losses above ${formatKwh(performance.analysis.issueLossThresholdKwh)} shown`
                       : ""}
                   </span>
                   <button
@@ -1749,7 +1749,7 @@ export default function Home() {
                   </strong>
                   <p>
                     {analysisLoadMode === "analyzing"
-                      ? "The latest retained telemetry is being compared with the configured array model and mapped irradiance."
+                      ? "Daylight outages are being checked against retained telemetry and supplied Expected Production."
                       : "Retrieving this site’s stored JSON analysis for the issues, summaries, and timeline views."}
                   </p>
                   <small>{analysisLoadMode === "analyzing" ? "Preparing analysis…" : "Checking for saved results or an active analysis…"}</small>
@@ -1772,37 +1772,20 @@ export default function Home() {
                     Open performance data
                   </button>
                 </div>
-              ) : !performance.analysis.irradianceAvailable &&
-                !issues.length ? (
-                <div className="performance-empty">
-                  <span>☼</span>
-                  <strong>Map irradiance data to analyze losses</strong>
-                  <p>
-                    POA or GHI irradiance is required so low-light periods are
-                    not mistaken for equipment issues. Revenue-meter
-                    communication checks remain active without irradiance.
-                  </p>
-                  <button
-                    className="secondary-btn empty-action"
-                    onClick={() => goTo("uploads")}
-                  >
-                    Open performance data
-                  </button>
-                </div>
               ) : !issues.length ? (
                 <div className="performance-empty">
                   <span>✓</span>
                   <strong>
-                    {performance.analysis.suppressedByLossThreshold
-                      ? "No issues or recurring groups exceed your loss threshold"
-                      : "No material issues detected"}
+                    {outageOnlyAnalysis&&performance.analysis.suppressedByLossThreshold
+                      ? "No issues exceed your loss threshold"
+                      : outageOnlyAnalysis?"No material issues detected":"No outage or data-quality findings in this saved analysis"}
                   </strong>
                   <p>
-                    {performance.analysis.suppressedByLossThreshold
-                      ? `${performance.analysis.suppressedByLossThreshold.toLocaleString()} issue${performance.analysis.suppressedByLossThreshold === 1 ? " was" : "s were"} excluded by the ${formatKwh(performance.analysis.issueLossThresholdKwh || 0)} individual/recurring loss threshold.`
-                      : "No material findings were identified by the available analysis checks. Review reference coverage and data quality before interpreting this as normal performance."}
+                    {outageOnlyAnalysis&&performance.analysis.suppressedByLossThreshold
+                      ? `${performance.analysis.suppressedByLossThreshold.toLocaleString()} issue${performance.analysis.suppressedByLossThreshold === 1 ? " was" : "s were"} excluded by the ${formatKwh(performance.analysis.issueLossThresholdKwh || 0)} individual loss threshold.`
+                      : outageOnlyAnalysis?"No material findings were identified by the available analysis checks. Review reference coverage and data quality before interpreting this as normal performance.":"Retired underperformance findings are not shown. This legacy analysis has not been recalculated."}
                   </p>
-                  {performance.analysis.suppressedByLossThreshold > 0 && (
+                  {outageOnlyAnalysis&&performance.analysis.suppressedByLossThreshold > 0 && (
                     <button
                       className="secondary-btn empty-action"
                       onClick={() => goTo("user")}
@@ -1897,7 +1880,7 @@ export default function Home() {
                       </tr>
                     </thead>
                     <tbody>
-                      {pageRows.map(({issue,group}) => group ? <RecurringTableGroup key={group.id} group={group} columns={issueColumns} renderCell={issueCell} reviews={reviews} onReview={openReview} selected={selectedFindings} onSelect={selectFindings} readOnly={!!selectedRunId||!reviewsReady}/> : (
+                      {pageRows.map(issue => (
                         <tr key={issue.id}>
                           <td className="issue-select-column"><input type="checkbox" aria-label={`Select ${issue.equipmentName} ${issue.type} ${issue.startDateTime}`} disabled={!!selectedRunId||!reviewsReady} checked={selectedFindings.includes(issue.id)} onChange={e=>selectFindings([issue.id],e.target.checked)}/></td>
                           {issueColumns.map((column) => (
@@ -1914,11 +1897,11 @@ export default function Home() {
                   </table>
                 </div>
               )}
-              {issueRows.length>100&&<div className="review-toolbar"><button className="secondary-btn" disabled={!issuePage} onClick={()=>setIssuePage(p=>p-1)}>Previous</button><span>Page {issuePage+1} of {Math.ceil(issueRows.length/100)} · exports include all filtered findings</span><button className="secondary-btn" disabled={(issuePage+1)*100>=issueRows.length} onClick={()=>setIssuePage(p=>p+1)}>Next</button></div>}
+              {visibleIssues.length>100&&<div className="review-toolbar"><button className="secondary-btn" disabled={!issuePage} onClick={()=>setIssuePage(p=>p-1)}>Previous</button><span>Page {issuePage+1} of {Math.ceil(visibleIssues.length/100)} · exports include all filtered findings</span><button className="secondary-btn" disabled={(issuePage+1)*100>=visibleIssues.length} onClick={()=>setIssuePage(p=>p+1)}>Next</button></div>}
               {performance?.hasData && (
                 <footer className="analysis-method">
                   <span>METHOD</span>
-                  <p>{performance.analysis.baselineMethod}</p>
+                  <p>{analysisMethodLabel(performance.methodology,performance.analysis.baselineMethod)}</p>
                 </footer>
               )}
             </section>
@@ -1928,7 +1911,7 @@ export default function Home() {
             key={`${activeSiteId}:${analysisRunId}:${freshnessFilter}`}
             siteId={activeSiteId}
             sites={managedSites}
-            onSiteChange={setActiveSiteId}
+            onSiteChange={changeAnalysisSite}
             reportRange={reportRange}
             timezone={reportTimezone}
             maintenanceRevision={maintenanceRevision}
@@ -1964,7 +1947,7 @@ export default function Home() {
             }}
           />
         ) : view === "manage-analyses" ? (
-          <ManageAnalyses sites={managedSites} siteId={activeSiteId} runId={selectedRunId} revision={`${analysisRunId}:${performanceRevision}`} onSiteChange={siteId=>{setActiveSiteId(siteId);setPerformance(null);}} onChange={selectAnalysis} onFindings={()=>goTo('issues')}/>
+          <ManageAnalyses sites={managedSites} siteId={activeSiteId} runId={selectedRunId} revision={`${analysisRunId}:${performanceRevision}`} onSiteChange={changeAnalysisSite} onChange={selectAnalysis} onDeleted={deletedAnalysis} onFindings={()=>goTo('issues')}/>
         ) : view === "maintenance-uploads" ? (
           <MaintenanceUploads sites={managedSites} notify={notify} onImported={()=>setMaintenanceRevision(value=>value+1)} onTimeline={siteId=>{setActiveSiteId(siteId);goTo('timeline');}}/>
         ) : view === "uploads" ? (
@@ -2090,7 +2073,7 @@ export default function Home() {
                 <div className="form-divider">
                   <span>ISSUE LOGGING</span>
                   <p>
-                    Set the minimum estimated energy loss for an individual issue or recurring inverter underperformance group to appear.
+                    Set the minimum estimated energy loss for an individual issue to appear.
                   </p>
                 </div>
                 <div className="threshold-settings">
@@ -2113,7 +2096,7 @@ export default function Home() {
                       <b>kWh</b>
                     </div>
                     <small>
-                      Individual issues or recurring inverter underperformance groups must exceed this value. Recurring losses are combined by inverter and suspected cause across the full analysis period. Communications and unknown-loss telemetry findings remain visible.
+                      Individual issues must exceed this value. Communications and unknown-loss findings remain visible.
                     </small>
                   </label>
                   <div className="threshold-rule">
@@ -2122,7 +2105,7 @@ export default function Home() {
                       {thresholdLabel(userForm.minimumIssueLossKwh)}
                     </strong>
                     <small>
-                      Every event in a qualifying recurring group remains visible, including events individually below the threshold. Reporting-date filters apply afterward; the group threshold uses the full analysis period.
+                      The threshold applies to each complete event. Reporting-date filters apply afterward.
                     </small>
                   </div>
                 </div>

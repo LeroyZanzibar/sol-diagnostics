@@ -29,6 +29,7 @@ type PersistableIssue = {
   durationMinutes: number;
   durationDays: number;
   lossUnknown?: boolean;
+  expectedUnknown?: boolean;
   productionUnknown?: boolean;
   affectedEquipment?: { id: string; name: string }[];
   estimatedLossKwh: number;
@@ -436,6 +437,7 @@ export async function readPersistedPerformanceIssues(database: IssueDatabase, ru
     expectedEnergyKwh: Number(row.expected_energy_kwh),
     description: row.description,
     lossUnknown: safeJson<{ lossUnknown?: boolean }>(row.evidence, {}).lossUnknown || false,
+    expectedUnknown: safeJson<{ expectedUnknown?: boolean }>(row.evidence, {}).expectedUnknown || false,
     productionUnknown: safeJson<{ productionUnknown?: boolean }>(row.evidence, {}).productionUnknown || false,
     affectedEquipment: safeJson<{ affectedEquipment?: { id: string; name: string }[] }>(row.evidence, {}).affectedEquipment,
     suspectedCause: safeJson<{ suspectedCause?: string }>(row.evidence, {}).suspectedCause || "",

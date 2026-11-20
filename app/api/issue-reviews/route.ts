@@ -2,15 +2,18 @@ import {sharedEvidencePage} from "../../shared-reduction-evidence";
 import { getDatabaseBinding } from "../../../db/binding";
 import { savedAnalysis } from "../analysis-history/service";
 import { reviewContext,saveReview,blankReview,assessReviews,effectiveReviews } from "./service";
+import { isCompletedAnalysisRun } from "../analysis-history/availability";
+
+const headers={'Cache-Control':'private, no-store'};
 
 export async function GET(request:Request){try{
  const q=new URL(request.url).searchParams,siteId=q.get('siteId')||'',runId=q.get('runId')||'';
- const db=getDatabaseBinding();if(!siteId)return Response.json({error:'Choose a site.'},{status:400});
- const headers={'Cache-Control':'private, no-store'};
+ const db=getDatabaseBinding();if(!siteId)return Response.json({error:'Choose a site.'},{status:400,headers});
  if(!q.get('issueId')){
   const p=await savedAnalysis(siteId,runId,true),allKeys=[...new Set<string>([...p.analysis.issues,...(p.analysis.recurringIssues||[])].map((i:any)=>i.eventKey))];
   const cursor=Math.max(0,Math.floor(Number(q.get('cursor')||0)||0)),keys=allKeys.slice(cursor,cursor+1000);
   const reviews=await effectiveReviews(db,siteId,runId,p,keys);
+  if(!await isCompletedAnalysisRun(db,siteId,runId))throw new Error('Saved analysis not found.');
   return Response.json({next:cursor+1000<allKeys.length?cursor+1000:null,reviews,retrievedAt:new Date().toISOString()},{headers});
  }
  const {issue,eventKey,timezone,payload}=await reviewContext(siteId,runId,q.get('issueId')||'');
@@ -25,9 +28,10 @@ export async function GET(request:Request){try{
  const related=await db.prepare("SELECT r.event_key,r.state,(SELECT c.note FROM issue_review_changes c WHERE c.site_id=r.site_id AND c.event_key=r.event_key AND c.note <> '' ORDER BY c.version DESC LIMIT 1) AS note FROM issue_event_reviews r WHERE r.site_id=? AND r.event_key<>? AND json_extract(r.state,'$.issue.equipmentId')=? AND json_extract(r.state,'$.issue.type')=? AND json_extract(r.state,'$.issue.startDateTime')<=? AND json_extract(r.state,'$.issue.endDateTime')>=? ORDER BY r.updated_at DESC LIMIT 10").bind(siteId,eventKey,issue.equipmentId,issue.type,issue.endDateTime,issue.startDateTime).all();
  let review:any={version:0,state:blankReview(issue,issue.evidenceSignature),updatedAt:'',needsReview:false};
  const assessed=await effectiveReviews(db,siteId,runId,payload,[eventKey]);if(assessed.length)review=assessed[0];
- const issueSummary={recurring:issue.isRecurring?{dates:issue.dates,activeMinutes:issue.activeMinutes,sequenceStatus:issue.sequenceStatus,occurrenceCount:issue.members.length}:undefined,hasSharedReduction:!!issue.hasSharedReduction||issue.evidence?.rule==='shared_site_reduction_v1',equipmentName:issue.equipmentName||issue.equipmentId,startDateTime:issue.startDateTime,endDateTime:issue.endDateTime,description:issue.description||'',actualEnergyKwh:issue.productionUnknown?null:issue.actualEnergyKwh,expectedEnergyKwh:issue.expectedEnergyKwh,estimatedLossKwh:issue.lossUnknown?null:issue.estimatedLossKwh,lossUnknown:!!issue.lossUnknown,productionUnknown:!!issue.productionUnknown,suspectedCause:issue.suspectedCause||'',causeExplanation:issue.causeExplanation||''};
+ if(!await isCompletedAnalysisRun(db,siteId,runId))throw new Error('Saved analysis not found.');
+ const issueSummary={recurring:issue.isRecurring?{dates:issue.dates,activeMinutes:issue.activeMinutes,sequenceStatus:issue.sequenceStatus,occurrenceCount:issue.members.length}:undefined,hasSharedReduction:!!issue.hasSharedReduction||issue.evidence?.rule==='shared_site_reduction_v1',equipmentName:issue.equipmentName||issue.equipmentId,startDateTime:issue.startDateTime,endDateTime:issue.endDateTime,description:issue.description||'',actualEnergyKwh:issue.productionUnknown?null:issue.actualEnergyKwh,expectedEnergyKwh:issue.expectedUnknown?null:issue.expectedEnergyKwh,estimatedLossKwh:issue.lossUnknown?null:issue.estimatedLossKwh,lossUnknown:!!issue.lossUnknown,expectedUnknown:!!issue.expectedUnknown,productionUnknown:!!issue.productionUnknown,suspectedCause:issue.suspectedCause||'',causeExplanation:issue.causeExplanation||''};
  return Response.json({timezone,issueEndDateTime:issue.endDateTime,issueSummary,related:related.results.map((r:Record<string,unknown>)=>({...r,state:JSON.parse(String(r.state))})),eventKey,review,needsReview:review.needsReview,audit:audit.results.slice(0,20),next:audit.results.length>20?audit.results[19].version:null},{headers});
-}catch(e){return Response.json({error:e instanceof Error?e.message:'Unable to load review.'},{status:404});}}
+}catch(e){return Response.json({error:e instanceof Error?e.message:'Unable to load review.'},{status:404,headers});}}
 
 export async function POST(request:Request){try{
  const p=await request.json(),{issue,eventKey,payload}=await reviewContext(p.siteId,p.runId,p.issueId),input=p.state;
@@ -42,4 +46,4 @@ export async function POST(request:Request){try{
   ? await effectiveReviews(db,p.siteId,p.runId,payload,[...new Set<string>([eventKey,...issue.members.map((member:any)=>member.eventKey)])])
   : [{eventKey,...review}];
  return Response.json({eventKey,review,reviews,retrievedAt:new Date().toISOString()},{headers:{'Cache-Control':'private, no-store'}});
-}catch(e){return Response.json({error:e instanceof Error?e.message:'Unable to save review.'},{status:409});}}
+}catch(e){return Response.json({error:e instanceof Error?e.message:'Unable to save review.'},{status:409,headers});}}

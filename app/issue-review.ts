@@ -15,14 +15,15 @@ export type ReviewAssessment = { needsReview: boolean; evidenceChanged: boolean;
 export type IssueReview = { inheritedFrom?:{id:string;name:string;eventKey:string;version:number}; version: number; state: ReviewState; updatedAt: string; needsReview?: boolean; assessment?: ReviewAssessment };
 export type SavedIssueReview = { eventKey:string; review:IssueReview; reviews:(IssueReview&{eventKey:string})[]; retrievedAt:string };
 type Issue = { equipmentId:string; type:string; name?:string; category?:string; startDateTime:string; endDateTime:string; confidence?:string; suspectedCause?:string;
-  estimatedLossKwh:number|null; actualEnergyKwh?:number|null; expectedEnergyKwh?:number|null; lossUnknown?:boolean; evidence?:Record<string,unknown>; intervalLosses?:unknown[]; eventKey?:string; evidenceSignature?:string };
+  estimatedLossKwh:number|null; actualEnergyKwh?:number|null; expectedEnergyKwh?:number|null; lossUnknown?:boolean; expectedUnknown?:boolean; evidence?:Record<string,unknown>; intervalLosses?:unknown[]; eventKey?:string; evidenceSignature?:string };
 async function digest(value:unknown){const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(value)));return [...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,"0")).join("");}
 export async function issueEventKey(siteId:string,issue:Issue){return digest([siteId,issue.equipmentId,issue.type,issue.category,issue.startDateTime]);}
 export async function issueEvidenceSignature(issue:Issue){
  const number=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)?Math.round(v*1e6)/1e6:null;
  const ledger=(issue.intervalLosses||issue.evidence?.intervalLosses||[]) as Record<string,unknown>[];
- const intervals=ledger.map(p=>[p.timestamp,number(p.lossKwh),number(p.countedLossKwh??p.lossKwh),number(p.actualKwh),number(p.expectedKwh)]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
- return digest([issue.type,issue.startDateTime,issue.endDateTime,number(issue.estimatedLossKwh),number(issue.actualEnergyKwh),number(issue.expectedEnergyKwh),!!issue.lossUnknown,intervals]);
+ const intervals=ledger.map(p=>[p.timestamp,number(p.lossKwh),number(p.countedLossKwh??p.lossKwh),number(p.actualKwh),p.expectedUnknown?null:number(p.expectedKwh)]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
+ // Preserve existing known-value signatures; an unknown sentinel is not a measured zero.
+ return digest([issue.type,issue.startDateTime,issue.endDateTime,number(issue.estimatedLossKwh),number(issue.actualEnergyKwh),issue.expectedUnknown?null:number(issue.expectedEnergyKwh),!!issue.lossUnknown,intervals]);
 }
 export function defaultConfidence(issue:Issue):ConfidenceDetail{return {
   anomaly:{level:issue.confidence==="confirmed"?"High":"Moderate",reason:issue.confidence==="confirmed"?"The detection rule found corroborating telemetry.":"The detection rule compares observed readings with an estimated production baseline."},
@@ -75,7 +76,7 @@ export function assessReviewEvidence(before:ReviewEvidenceIssue,after:ReviewEvid
  changedField('Event end changed.',before.endDateTime,after.endDateTime);
  changedField('Equipment or finding type changed.',[before.equipmentId,before.type,before.category],[after.equipmentId,after.type,after.category]);
  changedField('Calculation version or array-model configuration changed.',previousBasis,currentBasis);
- changedField('Data availability, detection confidence or suspected cause changed.',[!!before.lossUnknown,!!before.productionUnknown,before.confidence,before.suspectedCause||''],[!!after.lossUnknown,!!after.productionUnknown,after.confidence,after.suspectedCause||'']);
+ changedField('Data availability, detection confidence or suspected cause changed.',[!!before.lossUnknown,!!before.productionUnknown,!!before.expectedUnknown,before.confidence,before.suspectedCause||''],[!!after.lossUnknown,!!after.productionUnknown,!!after.expectedUnknown,after.confidence,after.suspectedCause||'']);
  changedField('Affected equipment changed.',(before.affectedEquipment||[]).map(i=>i.id).sort(),(after.affectedEquipment||[]).map(i=>i.id).sort());
  if(changes.length||!changed)return {needsReview:!!changes.length,evidenceChanged:changed||!!changes.length,changes};
  const result=(message:string):ReviewAssessment=>({needsReview:true,evidenceChanged:true,changes:[message]});
@@ -103,6 +104,7 @@ export function assessReviewEvidence(before:ReviewEvidenceIssue,after:ReviewEvid
   const x=left[i],y=right[i];
   if(!Number.isFinite(Date.parse(x.timestamp))||x.timestamp!==y.timestamp||(i&&x.timestamp===left[i-1].timestamp)||(x.intervalMinutes||before.intervalMinutes||60)!==(y.intervalMinutes||after.intervalMinutes||60))return result('Interval timestamps, coverage or cadence changed.');
   if(JSON.stringify([x.detectionBasis,!!x.peerCorroborated])!==JSON.stringify([y.detectionBasis,!!y.peerCorroborated]))return result('Interval detection basis or corroborating evidence changed.');
+  if(!!x.expectedUnknown!==!!y.expectedUnknown)return result('Interval expected-production availability changed.');
   const xv=energy(x),yv=energy(y);
   for(let k=0;k<4;k++){
    if(!finite(xv[k])||!finite(yv[k])||xv[k]<0||yv[k]<0||!close(xv[k],yv[k]))return result('Interval energy changed materially, or a zero/missing reading changed.');

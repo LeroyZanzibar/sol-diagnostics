@@ -4,14 +4,10 @@ type Inverter = { id: string; acKw: number; dcKw: number; referenceYieldLimit: n
 type CurvePoint = { rate: number; kw: number; slope: number };
 type Point = { timestamp: string; energyKwh: number };
 export const INVERTER_EXPECTATION_METHOD = {
-  version: 1, minimumDeficitPercent: 10, minimumDays: 3, minimumDeficitHours: 3,
-  minimumIrradianceWm2: 200, minimumExpectedAcFraction: .1, maximumLoadingFraction: .95,
-  basis: "Primary inverter baseline derived from site Expected Production at the meter / POI, with no shading allowance. Undo configured delivery losses and solve a common output per kWdc with individual inverter AC and transformer branch ceilings. Measured inverter output is not used to fit the baseline.",
-  persistence: "At least a 10% deficit on three local dates totaling three hours; days and intervals need not be consecutive. Existing outage and onsite-snow rules remain separate.",
-  peers: "Optional corroboration only. Missing peers never suppress primary detection. Corroborated shared fleet reductions are subsequently consolidated at site level, with additional inverter deficits retained.",
-  exclusions: "Underperformance detection excludes irradiance below 200 W/m², expected output below 10% of inverter AC rating, telemetry blocks, and expected or measured output at or above 95% of inverter or transformer capacity. Snow is handled by the existing onsite-snow rule. Missing, invalid, capacity-inconsistent expected data or an incomplete model uses the historical detector, identified as a fallback.",
-  limitation: "Derived allocation assumes comparable array response; orientation, tilt, tracking and inverter-specific efficiency are not yet modeled. Agreement is not independent validation of health, and a deficit does not establish its cause.",
-  lossBasis: "Inverter-terminal expected minus actual energy, constrained by recoverable transformer headroom, converted to delivered energy using configured losses and reconciled once with meter findings. Peer evidence never adds a second loss.",
+  version: 2,
+  basis: "Allocate the supplied site Expected Production across the complete configured module DC/inverter AC population and independent transformer branches, without fitting measured output.",
+  lossBasis: "Constrain inverter-terminal loss to recoverable branch headroom and convert once to delivered meter / POI energy.",
+  unavailable: "Missing, invalid or capacity-inconsistent expectation, incomplete configuration, or missing branch actual coverage leaves outage loss unknown; there is no fallback.",
 };
 
 // Piecewise-linear output curves are built once per model, not once per reading.
@@ -45,6 +41,8 @@ export function inverterExpectationModel(assets: CapacityAsset[]) {
     if (value != null && value !== "" && (!Number.isFinite(Number(value)) || Number(value) < 0 || Number(value) >= 100))
       issues.push("Configured delivery losses must be between zero and less than 100 percent.");
   }
+  if (!capacity.hasTransformers && assets.some(a => a.type === "inverter" && a.parentId !== meters[0]?.id))
+    issues.push("Connect every inverter to the configured meter / POI.");
   const inverters = new Map<string, Inverter>();
   const modules = new Map<string, CapacityAsset[]>();
   for (const a of assets) if (a.type === "module_group" && a.parentId) {
@@ -103,21 +101,16 @@ export function inverterExpectationModel(assets: CapacityAsset[]) {
 export function inverterExpectationContext(summary: { intervalMinutes?: number; expectedProduction?: Point[]; intervalIrradiance?: { timestamp: string; averageWm2: number }[] }, assets: CapacityAsset[], sourceExpected = summary.expectedProduction || []) {
   const model = inverterExpectationModel(assets), hours = (summary.intervalMinutes || 60) / 60;
   const rates = new Map<string, ReturnType<typeof model.solve>>();
-  let cursor = 0;
-  // Only the existing daylight detector uses these values. Walk sorted source
-  // readings instead of retaining another full-year expected-production map.
-  for (const sun of [...(summary.intervalIrradiance || [])].sort((a,b)=>a.timestamp.localeCompare(b.timestamp))) {
-    if (sun.averageWm2 < 50) continue;
-    while (cursor < sourceExpected.length && sourceExpected[cursor].timestamp < sun.timestamp) cursor++;
-    const point = sourceExpected[cursor];
-    rates.set(sun.timestamp, model.solve(point?.timestamp === sun.timestamp ? point.energyKwh : undefined, hours));
-  }
+  const expected = new Map(sourceExpected.map(p => [p.timestamp, p.energyKwh]));
+  const sunlight = new Map((summary.intervalIrradiance || []).map(p => [p.timestamp, p.averageWm2]));
   const expectedData = { available: 0, missing: 0, invalid: 0, capacityConflict: 0, modelIncomplete: 0 };
-  for (const p of summary.intervalIrradiance || []) if (p.averageWm2 >= INVERTER_EXPECTATION_METHOD.minimumIrradianceWm2)
-    expectedData[(rates.get(p.timestamp) || model.solve(undefined, hours)).status]++;
-  const coverage = { comparedInverterIntervals: 0, fallbackInverterIntervals: 0, capacityLimitedInverterIntervals: 0,
-    telemetryBlockedInverterIntervals: 0, lowLightInverterIntervals: 0, snowInverterIntervals: 0, invertersWithRepeatedDeficits: 0 };
-  return { model, hours, rates, expectedData, coverage,
+  for (const timestamp of new Set([...expected.keys(), ...sunlight.keys()])) {
+    const sun = sunlight.get(timestamp), value = expected.get(timestamp);
+    if (!(sun !== undefined ? Number.isFinite(sun) && sun >= 50 : value !== undefined && Number.isFinite(value) && value > 0)) continue;
+    const result = model.solve(value, hours);
+    rates.set(timestamp, result); expectedData[result.status]++;
+  }
+  return { model, hours, rates, expectedData,
     at(id: string, timestamp: string) {
       const i = model.inverters.get(id), result = rates.get(timestamp);
       if (!i || result?.status !== "available") return undefined;
@@ -125,12 +118,8 @@ export function inverterExpectationContext(summary: { intervalMinutes?: number; 
         capacityLimited: result.rate >= i.referenceYieldLimit - 1e-9 };
     },
     methodology() {
-      const status = !coverage.comparedInverterIntervals ? "unavailable" : coverage.fallbackInverterIntervals || expectedData.capacityConflict || expectedData.invalid || expectedData.missing ? "limited" : "available";
-      const message = (status === "unavailable" ? "No eligible model-derived inverter comparisons were available. Review expected data, array configuration and exclusions; historical and outage checks remain active."
-        : "Inverters are compared directly with expectations derived from site Expected Production. Peer references are optional." + (status === "limited" ? " Some intervals used the historical fallback because a usable derived expectation was unavailable." : "")) +
-        (expectedData.capacityConflict ? ` ${expectedData.capacityConflict} daylight expected-production intervals exceed the configured export ceiling and cannot supply an inverter baseline.` : "");
-      return { ...INVERTER_EXPECTATION_METHOD, status, message, modelIssues: model.issues, deliveryFactor: model.deliveryFactor,
-        gridExportCeilingKw: model.gridExportCeilingKw, expectedData, coverage };
+      return { ...INVERTER_EXPECTATION_METHOD, modelIssues: model.issues, deliveryFactor: model.deliveryFactor,
+        gridExportCeilingKw: model.gridExportCeilingKw, expectedData };
     },
   };
 }

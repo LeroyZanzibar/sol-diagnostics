@@ -24,6 +24,14 @@ function fixture({days=8,minutes=60,loss=.2,pattern='persistent',count=4}={}){
  return {summary,assets};
 }
 function plan(f){return peers.compareCapacityPeers(f.summary,f.assets);}
+function assertOutageOnly(result){
+ assert.equal(result.issues.some(i=>i.type==='Underperformance'),false);
+ assert.equal(result.peerComparison,undefined);assert.equal(result.causeAnalysis,undefined);
+ assert.equal(result.recurringIssues.length,0);
+ assert.equal(result.inverterExpectation.coverage,undefined,'repeated-deficit coverage is retired');
+ assert.ok(result.issues.every(i=>!i.suspectedCause&&!i.recurringId));
+}
+const near=(a,b)=>assert.ok(Math.abs(a-b)<1e-6,`${a} != ${b}`);
 
 test('peer groups require both exact nameplate capacities, summing all module groups',()=>{
  const f=fixture();
@@ -49,14 +57,14 @@ test('unknown, invalid and absent DC ratings never use an inferred production ca
  }
 });
 
-test('persistent 20% deficits are detected even when the historical baseline has learned the loss',()=>{
+test('legacy peers still describe persistent 20% deficits, but the active engine creates no underperformance',()=>{
  const f=fixture(),p=plan(f),result=buildAnalysis(f.summary,f.assets);
  assert.equal(p.findings.size,1);assert.equal(p.findings.get('i0').qualifiedDays,8);
- const findings=result.issues.filter(i=>i.equipmentId==='i0'&&i.type==='Underperformance');
- assert.ok(findings.length);assert.equal(findings.reduce((s,i)=>s+i.estimatedLossKwh,0),8*9*12);
- assert.ok(findings.every(i=>i.suspectedCause===''),'persistent deficits are not diagnosed as shading or fuse faults');
- assert.ok(findings.every(i=>i.evidence.peerComparison.acRatedCapacityKw===100&&i.evidence.peerComparison.dcRatedCapacityKw===125));
- assert.ok(findings.flatMap(i=>i.evidence.intervalLosses).every(p=>p.peerCount>=2&&!result.peerComparison.referenceSets[p.peerSetIndex].includes('i0')));
+ const finding=p.findings.get('i0');assert.equal(finding.intervals.size,8*9);
+ assert.equal(finding.group.acKw,100);assert.equal(finding.group.dcKw,125);
+ assert.ok([...finding.intervals.values()].every(pnt=>pnt.peerCount>=2&&!p.referenceSets[pnt.peerSetIndex].includes('i0')));
+ assert.equal(result.analyzedIntervals,8*9);assert.equal(result.analyzedDays,8);
+ assertOutageOnly(result);assert.equal(result.issues.length,0);assert.equal(result.totalLossKwh,0);
 });
 
 test('small deficits, insufficient days, weak peers, clipped output, telemetry blocks and snow do not produce peer findings',()=>{
@@ -77,44 +85,60 @@ test('small deficits, insufficient days, weak peers, clipped output, telemetry b
  assert.equal(peers.compareCapacityPeers(f.summary,f.assets,blocked).findings.has('i0'),false);
 });
 
-test('native five-minute and hourly peer ledgers conserve the same energy',()=>{
+test('native five-minute and hourly measured inverter outages conserve the same nonzero energy',()=>{
  const totals=[];
- for(const minutes of [5,60]){const f=fixture({minutes,days:3});const result=buildAnalysis(f.summary,f.assets);
+ for(const minutes of [5,60]){const f=fixture({minutes,days:3,loss:1});const result=buildAnalysis(f.summary,f.assets);
   const target=result.issues.filter(i=>i.equipmentId==='i0');
+  assert.ok(target.length);assert.ok(target.every(i=>i.type==='Equipment outage'&&!i.lossUnknown));
+  const ledger=target.flatMap(i=>i.evidence.intervalLosses);
+  assert.equal(ledger.length,3*9*60/minutes);assert.equal(new Set(ledger.map(p=>p.timestamp)).size,ledger.length);
+  assert.ok(ledger.every(p=>p.actualKwh===0&&Math.abs(p.expectedKwh-60*minutes/60)<1e-8));
   const loss=target.reduce((s,i)=>s+i.estimatedLossKwh,0);totals.push(loss);
-  assert.ok(Math.abs(loss-3*9*12)<1e-6);
-  assert.ok(Math.abs(result.issues.flatMap(i=>i.evidence.intervalLosses).reduce((s,p)=>s+(p.countedLossKwh??p.lossKwh),0)-result.totalLossKwh)<1e-6);
+  near(loss,3*9*60);near(result.totalLossKwh,loss);
+  near(result.issues.flatMap(i=>i.evidence.intervalLosses).reduce((s,p)=>s+(p.countedLossKwh??p.lossKwh),0),result.totalLossKwh);
+  assertOutageOnly(result);
  }
- assert.ok(Math.abs(totals[0]-totals[1])<1e-6);
+ near(totals[0],totals[1]);
 });
 
-test('repeated intraday peer deficits can be suspected shading, while DC-mismatched peers cannot support it',()=>{
+test('legacy shading compatibility does not reintroduce active cause or recurring findings',()=>{
  const f=fixture({pattern:'morning'}),p=plan(f),result=buildAnalysis(f.summary,f.assets);
- const shade=result.issues.filter(i=>i.suspectedCause==='Shading');
- assert.equal(shade.length,8);assert.equal(shade.reduce((s,i)=>s+i.estimatedLossKwh,0),96);
- assert.ok(shade.every(i=>i.category==='Performance'&&i.type==='Underperformance'));
- assert.ok(shade.every(i=>i.causeExplanation.includes('shortfall against the inverter expectation derived from site Expected Production')));
- const filtered=applyLossThreshold(result,'75');assert.equal(filtered.issues.length,8);assert.equal(filtered.totalLossKwh,96);
- assert.ok(filtered.issues.every(i=>i.recurringIssueCount===8&&i.recurringLossKwh===96));
+ // Explicit historical evidence exercises the retained helper, not buildAnalysis.
+ const timestamps=[...p.findings.get('i0').intervals.keys()];assert.equal(timestamps.length,8);
+ const historical={id:'historical-i0',equipmentId:'i0',equipmentType:'inverter',category:'Performance',type:'Underperformance',
+  startDateTime:timestamps[0],endDateTime:'2026-06-08T10:00:00',estimatedLossKwh:96,actualEnergyKwh:384,expectedEnergyKwh:480,
+  evidence:{intervalLosses:timestamps.map(timestamp=>({timestamp,lossKwh:12,actualKwh:48,expectedKwh:60,detectionBasis:'derived_inverter_expectation_v1'}))}};
+ assert.equal(causes.shadingCandidates(f.summary,[historical],p).size,8);
+ const shade=causes.attributeCauses([historical],f.summary,p);
+ assert.equal(shade.length,1);assert.equal(shade[0].suspectedCause,'Shading');assert.equal(shade[0].estimatedLossKwh,96);
+ assert.match(shade[0].causeExplanation,/shortfall against the inverter expectation derived from site Expected Production/);
+ assertOutageOnly(result);assert.equal(result.issues.length,0);assert.equal(result.totalLossKwh,0);
  f.assets.filter(a=>a.type==='module_group'&&a.parentId!=='i0').forEach(a=>a.quantity=260);
- assert.equal(causes.shadingCandidates(f.summary,shade,plan(f)).size,0);
+ assert.equal(causes.shadingCandidates(f.summary,[historical],plan(f)).size,0);
  assert.equal(p.findings.get('i0').deficitHours,8);
 });
 
-test('the threshold keeps cause and equipment groups distinct, preserves unknown findings and strict boundaries',()=>{
- const issue=(id,equipmentId,loss,cause='')=>({id,equipmentId,equipmentType:'inverter',category:'Performance',type:'Underperformance',estimatedLossKwh:loss,suspectedCause:cause,startDateTime:'2026-06-01T10:00:00',endDateTime:'2026-06-01T11:00:00'});
- const issues=[issue('a','i0',40,'Shading'),issue('b','i0',40,'Shading'),issue('c','i0',20),issue('d','i1',20,'Shading'),{...issue('u','i0',0),lossUnknown:true}];
- const a={issues,totalLossKwh:120};
- const result=applyLossThreshold(a,'75');assert.deepEqual(result.issues.map(i=>i.id),['a','b','u']);assert.equal(result.totalLossKwh,80);assert.equal(result.thresholdExcludedLossKwh,40);
- assert.equal(applyLossThreshold(a,'80').issues.length,1);assert.equal(applyLossThreshold(a,'').issues.length,5);
+test('the threshold treats outages individually without recurrence pooling, preserves unknowns and strict boundaries',()=>{
+ const issue=(id,equipmentId,loss)=>({id,equipmentId,equipmentType:'inverter',category:'Performance',type:'Equipment outage',estimatedLossKwh:loss,startDateTime:'2026-06-01T10:00:00',endDateTime:'2026-06-01T11:00:00'});
+ const issues=[issue('a','i0',40),issue('b','i0',40),issue('c','i0',20),issue('d','i1',80),{...issue('u','i0',0),lossUnknown:true}];
+ const a={issues,totalLossKwh:180};
+ const result=applyLossThreshold(a,'75');assert.deepEqual(result.issues.map(i=>i.id),['d','u']);assert.equal(result.totalLossKwh,80);assert.equal(result.thresholdExcludedLossKwh,100);
+ assert.deepEqual(applyLossThreshold(a,'80').issues.map(i=>i.id),['u']);assert.equal(applyLossThreshold(a,'').issues.length,5);
 });
 
-test('historical and peer detection share a single interval ledger without duplicate losses',()=>{
- const f=fixture({pattern:'morning',loss:.6}),result=buildAnalysis(f.summary,f.assets);
- const target=result.issues.filter(i=>i.equipmentId==='i0');
- const intervals=target.flatMap(i=>i.evidence.intervalLosses);
+test('site and inverter outages share a single interval ledger without duplicate covered losses',()=>{
+ const f=fixture({pattern:'morning',loss:1}),siteTimestamp='2026-06-04T09:00:00';
+ for(const p of f.summary.equipmentProduction)p.intervalProduction.find(p=>p.timestamp===siteTimestamp).energyKwh=0;
+ const result=buildAnalysis(f.summary,f.assets),target=result.issues.filter(i=>i.equipmentId==='i0');
+ const children=target.flatMap(i=>i.evidence.intervalLosses);
+ assert.equal(children.length,7);assert.ok(children.every(p=>p.timestamp!==siteTimestamp&&p.actualKwh===0));
+ const site=result.issues.filter(i=>i.type==='Site outage');assert.equal(site.length,1);assert.equal(site[0].estimatedLossKwh,240);
+ const intervals=result.issues.flatMap(i=>i.evidence.intervalLosses);
+ assert.equal(intervals.length,8);
  assert.equal(new Set(intervals.map(p=>p.timestamp)).size,intervals.length);
- assert.equal(target.reduce((s,i)=>s+i.estimatedLossKwh,0),8*36);
+ assert.equal(target.reduce((s,i)=>s+i.estimatedLossKwh,0),7*60);
+ assert.equal(result.totalLossKwh,7*60+240);near(intervals.reduce((s,p)=>s+(p.countedLossKwh??p.lossKwh),0),result.totalLossKwh);
+ assertOutageOnly(result);
 });
 
 test('two independently qualified references remain usable when eight of ten inverters are impaired',()=>{
@@ -139,9 +163,11 @@ test('a uniformly impaired fleet cannot qualify itself and missing expectations 
   if(kind==='conflict')assert.equal(p.referenceQualification.expectedData.capacityConflict,8*9);
  }
  const f=fixture();f.summary.expectedProduction=[];
- // Independent historical outage detection remains active when peer qualification cannot run.
+ // Measured outages remain active without a historical or peer loss fallback.
  f.summary.equipmentProduction[1].intervalProduction.filter(p=>p.timestamp.startsWith('2026-06-04')).forEach(p=>p.energyKwh=0);
- assert.ok(buildAnalysis(f.summary,f.assets).issues.some(i=>i.equipmentId==='i0'&&i.type==='Equipment outage'));
+ const result=buildAnalysis(f.summary,f.assets),outage=result.issues.find(i=>i.equipmentId==='i0'&&i.type==='Equipment outage');
+ assert.ok(outage);assert.equal(outage.lossUnknown,true);assert.equal(outage.expectedUnknown,true);
+ assert.equal(outage.actualEnergyKwh,0);assert.equal(result.totalLossKwh,0);assertOutageOnly(result);
 });
 
 test('reference qualification is specific to the local hour and month and rechecks each timestamp',()=>{
@@ -195,74 +221,79 @@ test('derived high-loading exclusions apply even when actual underperformance hi
  }
 });
 
-test('primary detection needs no peers and detects a common fleet deficit',()=>{
+test('sustained common nonzero fleet deficits create neither inverter nor shared site findings',()=>{
  for(const count of [1,2,4]){
   const f=fixture({count});
   for(const p of f.summary.equipmentProduction.filter(p=>p.equipmentType==='inverter'))p.intervalProduction.forEach(v=>v.energyKwh=v.energyKwh?48:0);
   f.summary.equipmentProduction[0].intervalProduction.forEach(p=>p.energyKwh=p.energyKwh?48*count:0);
-  const result=buildAnalysis(f.summary,f.assets),inverterFindings=result.issues.filter(i=>i.equipmentType==='inverter');
-  assert.equal(new Set(inverterFindings.map(i=>i.equipmentId)).size,count>=3?0:count);
-  if(count>=3)assert.ok(result.issues.some(i=>i.evidence.rule==='shared_site_reduction_v1'));
-  assert.ok(Math.abs(result.totalLossKwh-count*8*9*12)<1e-7);
-  assert.equal(result.inverterExpectation.coverage.invertersWithRepeatedDeficits,count);
-  assert.equal(result.peerComparison.referenceQualification.qualifiedInverters,0);
-  assert.ok(inverterFindings.every(i=>i.evidence.rule==='derived_inverter_expectation_v1'&&i.suspectedCause===''));
-  assert.ok(inverterFindings.flatMap(i=>i.evidence.intervalLosses).every(p=>p.peerCorroborated===false));
+  const result=buildAnalysis(f.summary,f.assets);
+  assert.equal(result.analyzedIntervals,8*9);assert.equal(result.inverterExpectation.expectedData.available,8*9);
+  assertOutageOnly(result);assert.equal(result.issues.length,0);assert.equal(result.totalLossKwh,0);
  }
 });
 
-test('optional peer output cannot replace the derived loss baseline or create extra loss',()=>{
- const f=fixture();
+test('measured peers cannot replace outage allocation or create extra nonzero-deficit loss',()=>{
+ const f=fixture({loss:1});
  for(const p of f.summary.equipmentProduction.filter(p=>p.equipmentType==='inverter'&&p.equipmentId!=='i0'))p.intervalProduction.forEach(v=>v.energyKwh=v.energyKwh?66:0);
- f.summary.equipmentProduction[0].intervalProduction.forEach(p=>p.energyKwh=p.energyKwh?246:0);
+ f.summary.equipmentProduction[0].intervalProduction.forEach(p=>p.energyKwh=p.energyKwh?198:0);
  const result=buildAnalysis(f.summary,f.assets),ledger=result.issues.filter(i=>i.equipmentId==='i0').flatMap(i=>i.evidence.intervalLosses);
- assert.equal(result.totalLossKwh,8*9*12);
- assert.ok(ledger.every(p=>p.derivedInverterExpectedKwh===60&&p.peerExpectedKwh===66&&p.peerCorroborated&&p.lossKwh===12));
+ assert.equal(result.totalLossKwh,8*9*60);assert.equal(ledger.length,8*9);
+ assert.ok(ledger.every(p=>p.derivedInverterExpectedKwh===60&&p.actualKwh===0&&p.lossKwh===60&&p.peerExpectedKwh===undefined&&p.peerCorroborated===undefined));
+ assertOutageOnly(result);
  const small=fixture({loss:.05});
  for(const p of small.summary.equipmentProduction.filter(p=>p.equipmentType==='inverter'&&p.equipmentId!=='i0'))p.intervalProduction.forEach(v=>v.energyKwh=v.energyKwh?66:0);
  assert.equal(plan(small).findings.size,1,'a peer-only deficit can exist within the primary model tolerance');
- assert.equal(buildAnalysis(small.summary,small.assets).issues.length,0,'optional evidence cannot independently create a finding');
+ const smallResult=buildAnalysis(small.summary,small.assets);assert.equal(smallResult.issues.length,0,'optional evidence cannot independently create a finding');assertOutageOnly(smallResult);
  const boundary=fixture({loss:.1}),boundaryResult=buildAnalysis(boundary.summary,boundary.assets);
- assert.ok(boundaryResult.issues.some(i=>i.equipmentId==='i0'));
- assert.equal(boundaryResult.peerComparison.referenceQualification.records.find(r=>r.equipmentId==='i0').qualified,false,'an inverter at the deficit threshold cannot qualify as a reference');
+ assert.equal(boundaryResult.issues.length,0);assertOutageOnly(boundaryResult);
+ assert.equal(plan(boundary).referenceQualification.records.find(r=>r.equipmentId==='i0').qualified,false,'the legacy helper still excludes a reference at its deficit threshold');
 });
 
-test('different DC ratings allocate different expected outputs without requiring an equal-capacity peer',()=>{
+test('different DC ratings allocate measured outage loss without an equal-capacity peer',()=>{
  const f=fixture({count:3});
  f.assets.find(a=>a.id==='m1').quantity=500;f.assets.find(a=>a.id==='m2').quantity=750;
  f.summary.expectedProduction.forEach(p=>p.energyKwh=p.energyKwh?180:0);
- for(const p of f.summary.equipmentProduction)p.intervalProduction.forEach(v=>v.energyKwh=v.energyKwh?({meter:174,i0:24,i1:60,i2:90}[p.equipmentId]):0);
+ for(const p of f.summary.equipmentProduction)p.intervalProduction.forEach(v=>v.energyKwh=v.energyKwh?({meter:150,i0:0,i1:60,i2:90}[p.equipmentId]):0);
  const result=buildAnalysis(f.summary,f.assets);
- assert.ok(result.issues.some(i=>i.equipmentId==='i0'));assert.equal(result.totalLossKwh,8*9*6);
- assert.equal(result.peerComparison.referenceQualification.comparedInverterIntervals,0);
- assert.ok(result.issues.flatMap(i=>i.evidence.intervalLosses).every(p=>p.derivedInverterExpectedKwh===30));
+ assert.ok(result.issues.some(i=>i.equipmentId==='i0'&&i.type==='Equipment outage'));assert.equal(result.totalLossKwh,8*9*30);
+ const ledger=result.issues.flatMap(i=>i.evidence.intervalLosses);assert.equal(ledger.length,8*9);
+ assert.ok(ledger.every(p=>p.derivedInverterExpectedKwh===30&&p.expectedKwh===30&&p.actualKwh===0));assertOutageOnly(result);
 });
 
-test('derived losses use the meter delivery boundary once, at five-minute and hourly cadence',()=>{
+test('measured outage losses use the meter delivery boundary once, at five-minute and hourly cadence',()=>{
  for(const minutes of [5,60]){
-  const f=fixture({minutes});f.assets[0].acLineLossPercent='2';
+  const f=fixture({minutes,loss:1});f.assets[0].acLineLossPercent='2';
   f.summary.expectedProduction.forEach(p=>p.energyKwh*=.98);
   f.summary.equipmentProduction[0].intervalProduction.forEach(p=>p.energyKwh*=.98);
   const result=buildAnalysis(f.summary,f.assets),ledger=result.issues.flatMap(i=>i.evidence.intervalLosses);
-  assert.ok(Math.abs(result.totalLossKwh-8*9*12*.98)<1e-6);
+  assert.equal(ledger.length,8*9*60/minutes);near(result.totalLossKwh,8*9*60*.98);
   assert.ok(ledger.every(p=>p.lossBoundary==='meter_poi'&&Math.abs(p.lossKwh-p.inverterTerminalLossKwh*.98)<1e-8));
-  assert.ok(result.issues.every(i=>Math.abs(i.lossPercent-20)<1e-8));
+  assert.ok(result.issues.every(i=>i.type==='Equipment outage'&&Math.abs(i.lossPercent-100)<1e-8));
   assert.ok(ledger.every(p=>Math.abs(p.expectedKwh-p.derivedInverterExpectedKwh*.98)<1e-8&&Math.abs(p.actualKwh-(p.derivedInverterExpectedKwh-p.inverterTerminalLossKwh)*.98)<1e-8));
   assert.ok(Math.abs(ledger.reduce((s,p)=>s+p.lossKwh,0)-result.totalLossKwh)<1e-7);
+  assertOutageOnly(result);
  }
 });
 
-test('primary detection respects magnitude, persistence, expected clipping and independent historical fallback',()=>{
+test('nonzero deficits never use historical fallback, while a measured zero retains unknown outage loss',()=>{
  for(const options of [{days:2},{loss:.05},{minutes:5,days:3,pattern:'morning'}]){
   const f=fixture(options);if(options.minutes===5)for(const s of [f.summary.intervalIrradiance,f.summary.expectedProduction,...f.summary.equipmentProduction.map(p=>p.intervalProduction)])
    s.splice(0,s.length,...s.filter(p=>p.timestamp.slice(14,16)==='00'));
-  assert.equal(buildAnalysis(f.summary,f.assets).issues.filter(i=>i.type==='Underperformance').length,0,JSON.stringify(options));
+  const result=buildAnalysis(f.summary,f.assets);assertOutageOnly(result);assert.equal(result.totalLossKwh,0);
+  if(options.minutes===5){
+   assert.ok(result.issues.length,'omitted native intervals remain visible as telemetry gaps');
+   assert.ok(result.issues.every(i=>i.lossUnknown&&i.productionUnknown));
+  }else assert.equal(result.issues.length,0,JSON.stringify(options));
  }
  const f=fixture();f.summary.expectedProduction=[];
  f.summary.equipmentProduction[1].intervalProduction.find(p=>p.timestamp==='2026-06-04T10:00:00').energyKwh=12;
  const result=buildAnalysis(f.summary,f.assets);
- assert.equal(result.inverterExpectation.status,'unavailable');
- assert.ok(result.issues.some(i=>i.equipmentId==='i0'&&i.evidence.rule==='irradiance_adjusted_baseline'));
+ assert.equal(result.inverterExpectation.expectedData.missing,8*9);
+ assertOutageOnly(result);assert.equal(result.issues.length,0);assert.equal(result.totalLossKwh,0);
+ f.summary.equipmentProduction[1].intervalProduction.find(p=>p.timestamp==='2026-06-04T11:00:00').energyKwh=0;
+ const zero=buildAnalysis(f.summary,f.assets),outage=zero.issues.find(i=>i.equipmentId==='i0');
+ assert.ok(outage);assert.equal(outage.type,'Equipment outage');assert.equal(outage.lossUnknown,true);assert.equal(outage.actualEnergyKwh,0);
+ assert.equal(outage.evidence.intervalLosses.length,1);assert.equal(zero.totalLossKwh,0);assertOutageOnly(zero);
  const clipped=fixture();clipped.summary.expectedProduction.forEach(p=>p.energyKwh=p.energyKwh?384:0);
- assert.equal(buildAnalysis(clipped.summary,clipped.assets).inverterExpectation.coverage.invertersWithRepeatedDeficits,0);
+ const highExpected=buildAnalysis(clipped.summary,clipped.assets);assertOutageOnly(highExpected);assert.equal(highExpected.issues.length,0);
 });

@@ -113,3 +113,78 @@ test('summary UI/export use report-clipped amounts and site-local period labels'
   assert.match(row[7], /^2026\/10\/01 0:00/);
   assert.equal(sheets['Reporting period'].rows[2][1], outage.timezone);
 });
+
+const independentEnergy = {
+  id:'unknown-loss',timezone:'UTC',intervalMinutes:60,
+  startDateTime:'2026-09-30T23:00:00.000Z',endDateTime:'2026-10-01T01:00:00.000Z',
+  estimatedLossKwh:null,lossUnknown:true,actualEnergyKwh:7,expectedEnergyKwh:30,
+  productionUnknown:false,expectedUnknown:false,
+  intervalLosses:[
+    {timestamp:'2026-09-30T23:00:00.000Z',intervalMinutes:60,lossKwh:0,lossUnknown:true,actualKwh:3,expectedKwh:10,expectedUnknown:false},
+    {timestamp:'2026-10-01T00:00:00.000Z',intervalMinutes:60,lossKwh:0,lossUnknown:true,actualKwh:4,expectedKwh:20,expectedUnknown:false},
+  ],
+};
+const october = {from:'2026-10-01',through:'2026-10-01'};
+
+test('report clipping preserves independently quantified actual and expected energy when loss is unknown',()=>{
+  const before=JSON.stringify(independentEnergy),clipped=clipIssueToReport(independentEnergy,october);
+  assert.equal(clipped.estimatedLossKwh,null);assert.equal(clipped.lossPercent,null);assert.equal(clipped.lossUnknown,true);
+  assert.equal(clipped.actualEnergyKwh,4);assert.equal(clipped.productionUnknown,false);
+  assert.equal(clipped.expectedEnergyKwh,20);assert.equal(clipped.expectedUnknown,false);
+  assert.equal(clipped.summaryPeriods[0].estimatedLossKwh,null);
+  assert.equal(JSON.stringify(independentEnergy),before);
+});
+
+test('missing reference does not hide measured actual, and missing actual does not hide known reference',()=>{
+  const noReference={...independentEnergy,expectedEnergyKwh:null,expectedUnknown:true,intervalLosses:independentEnergy.intervalLosses.map(p=>({...p,expectedKwh:0,expectedUnknown:true}))};
+  const noActual={...independentEnergy,actualEnergyKwh:null,productionUnknown:true,intervalLosses:independentEnergy.intervalLosses.map(p=>({...p,actualKwh:0}))};
+  const a=clipIssueToReport(noReference,october),b=clipIssueToReport(noActual,october);
+  assert.equal(a.actualEnergyKwh,4);assert.equal(a.productionUnknown,false);assert.equal(a.expectedEnergyKwh,null);assert.equal(a.expectedUnknown,true);
+  assert.equal(b.actualEnergyKwh,null);assert.equal(b.productionUnknown,true);assert.equal(b.expectedEnergyKwh,20);assert.equal(b.expectedUnknown,false);
+});
+
+test('explicit actual and expected zero survive clipping independently of unknown loss',()=>{
+  const issue={...independentEnergy,actualEnergyKwh:0,expectedEnergyKwh:0,intervalLosses:independentEnergy.intervalLosses.map(p=>({...p,actualKwh:0,expectedKwh:0}))};
+  const clipped=clipIssueToReport(issue,october);
+  assert.equal(clipped.actualEnergyKwh,0);assert.equal(clipped.expectedEnergyKwh,0);
+  assert.equal(clipped.productionUnknown,false);assert.equal(clipped.expectedUnknown,false);
+  assert.equal(clipped.estimatedLossKwh,null);assert.equal(clipped.lossPercent,null);
+});
+
+test('unknown-loss clipping refuses incomplete, empty, overlapping or inconsistent energy ledgers even without unknown flags',()=>{
+  const zero={...independentEnergy,actualEnergyKwh:0,expectedEnergyKwh:0,productionUnknown:undefined,expectedUnknown:undefined,
+    intervalLosses:independentEnergy.intervalLosses.map(p=>({...p,actualKwh:0,expectedKwh:0,expectedUnknown:undefined}))};
+  for(const issue of [
+    {...zero,intervalLosses:[]},
+    {...zero,intervalLosses:zero.intervalLosses.slice(1)},
+    {...zero,intervalLosses:[zero.intervalLosses[0],zero.intervalLosses[0]]},
+    {...zero,intervalLosses:[zero.intervalLosses[0],{...zero.intervalLosses[1],timestamp:'2026-09-30T23:30:00.000Z'}]},
+    {...zero,intervalLosses:zero.intervalLosses.map(p=>({...p,intervalMinutes:30}))},
+    {...zero,intervalLosses:zero.intervalLosses.map(p=>({...p,timestamp:'invalid'}))},
+    {...independentEnergy,actualEnergyKwh:999,expectedEnergyKwh:999},
+    {...independentEnergy,actualEnergyKwh:undefined,expectedEnergyKwh:undefined},
+  ]){
+    const clipped=clipIssueToReport(issue,october);
+    assert.equal(clipped.actualEnergyKwh,null);assert.equal(clipped.expectedEnergyKwh,null);
+    assert.equal(clipped.productionUnknown,true);assert.equal(clipped.expectedUnknown,true);
+  }
+});
+
+test('interval missingness and explicit expectation flags cannot be coerced to known zero during clipping',()=>{
+  for(const missing of [null,undefined,NaN]){
+    const issue={...independentEnergy,intervalLosses:independentEnergy.intervalLosses.map(p=>({...p,actualKwh:missing,expectedKwh:missing}))};
+    const clipped=clipIssueToReport(issue,october);
+    assert.equal(clipped.actualEnergyKwh,null);assert.equal(clipped.expectedEnergyKwh,null);
+  }
+  const flagged={...independentEnergy,intervalLosses:independentEnergy.intervalLosses.map(p=>({...p,expectedUnknown:true}))};
+  const clipped=clipIssueToReport(flagged,october);
+  assert.equal(clipped.actualEnergyKwh,4);assert.equal(clipped.expectedEnergyKwh,null);assert.equal(clipped.expectedUnknown,true);
+});
+
+test('independent energy clipping uses retained evidence and prorates only boundary-straddling intervals',()=>{
+  const issue={...independentEnergy,startDateTime:'2026-09-30T23:30:00.000Z',endDateTime:'2026-10-01T00:30:00.000Z',actualEnergyKwh:8,expectedEnergyKwh:20,
+    intervalLosses:undefined,evidence:{intervalLosses:[{timestamp:'2026-09-30T23:30:00.000Z',intervalMinutes:60,lossKwh:0,actualKwh:8,expectedKwh:20}]}};
+  const clipped=clipIssueToReport(issue,october);
+  assert.equal(clipped.actualEnergyKwh,4);assert.equal(clipped.expectedEnergyKwh,10);assert.equal(clipped.estimatedLossKwh,null);
+  assert.equal(clipped.intervalLosses[0].intervalMinutes,30);
+});

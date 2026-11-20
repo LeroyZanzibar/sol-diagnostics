@@ -20,14 +20,14 @@ const request=(method,body)=>new Request('https://example.test/api/user-settings
 const read=async api=>(await(await api.GET()).json()).user;
 const profile={firstName:'Jordan',lastName:'Field',title:'Asset Manager',minimumIssueLossKwh:'900',theme:'default'};
 
-test('all issue types are enabled by default and underperformance visibility is equipment-specific',()=>{
+test('retained issue types are enabled by default and retired underperformance is always excluded',()=>{
  const {defaultIssueVisibility,issueVisibilityOptions,isIssueVisible,issueVisibilityKey,normalizeIssueVisibility}=visibility;
- assert.equal(issueVisibilityOptions.length,9);assert.equal(Object.values(defaultIssueVisibility).every(Boolean),true);
- const cases=[['Site outage','revenue_meter','siteOutage'],['Partial site outage','revenue_meter','partialSiteOutage'],['Equipment outage','inverter','equipmentOutage'],['Underperformance','inverter','inverterUnderperformance'],['Underperformance','revenue_meter','siteUnderperformance'],['Site telemetry outage','revenue_meter','siteTelemetryOutage'],['Equipment telemetry issue','inverter','equipmentTelemetryIssue'],['Data gap','inverter','dataGap'],['Communication issue','revenue_meter','communicationIssue']];
+ assert.equal(issueVisibilityOptions.length,7);assert.equal(Object.values(defaultIssueVisibility).every(Boolean),true);
+ const cases=[['Site outage','revenue_meter','siteOutage'],['Partial site outage','revenue_meter','partialSiteOutage'],['Equipment outage','inverter','equipmentOutage'],['Site telemetry outage','revenue_meter','siteTelemetryOutage'],['Equipment telemetry issue','inverter','equipmentTelemetryIssue'],['Data gap','inverter','dataGap'],['Communication issue','revenue_meter','communicationIssue']];
  for(const [type,equipmentType,key] of cases){const issue={type,equipmentType};assert.equal(issueVisibilityKey(issue),key);assert.equal(isIssueVisible(issue,defaultIssueVisibility),true);assert.equal(isIssueVisible(issue,{...defaultIssueVisibility,[key]:false}),false);}
  const off=normalizeIssueVisibility(Object.fromEntries(issueVisibilityOptions.map(option=>[option.key,false])));
  assert.equal(isIssueVisible({type:'New future detector',equipmentType:'inverter'},off),true);
- assert.equal(isIssueVisible({type:'Underperformance',equipmentType:'revenue_meter'},{...defaultIssueVisibility,inverterUnderperformance:false}),true);
+ for(const equipmentType of ['inverter','revenue_meter'])assert.equal(isIssueVisible({type:'Underperformance',equipmentType},{...defaultIssueVisibility,inverterUnderperformance:true,siteUnderperformance:true}),false);
  for(const invalid of [null,undefined,'bad',[],{inverterUnderperformance:'false'}])assert.deepEqual(json(normalizeIssueVisibility(invalid)),json(defaultIssueVisibility));
 });
 
@@ -39,24 +39,32 @@ test('additive migration preserves an existing profile and legacy visibility def
  assert.deepEqual((await read(api)).issueVisibility,json(visibility.defaultIssueVisibility));
 });
 
+test('persisted retired visibility keys are ignored on read without rewriting the stored legacy profile',async()=>{
+ const {sqlite,api}=fixture({legacy:true});
+ const saved=JSON.stringify({siteUnderperformance:false,inverterUnderperformance:true,equipmentOutage:false,communicationIssue:true});
+ sqlite.prepare("UPDATE user_settings SET issue_visibility=? WHERE id='primary-user'").run(saved);
+ const user=await read(api);assert.equal(user.issueVisibility.equipmentOutage,false);assert.equal(user.issueVisibility.communicationIssue,true);assert.equal('siteUnderperformance' in user.issueVisibility,false);assert.equal('inverterUnderperformance' in user.issueVisibility,false);
+ assert.equal(sqlite.prepare("SELECT issue_visibility FROM user_settings WHERE id='primary-user'").get().issue_visibility,saved);assert.equal(user.firstName,'Taylor');
+});
+
 test('visibility PATCH persists preferences without changing profile, theme or analysis threshold',async()=>{
  const {sqlite,api}=fixture({legacy:true});
- const response=await api.PATCH(request('PATCH',{issueVisibility:{inverterUnderperformance:false,communicationIssue:false}}));
+ const response=await api.PATCH(request('PATCH',{issueVisibility:{inverterUnderperformance:false,siteUnderperformance:true,communicationIssue:false}}));
  assert.equal(response.status,200);assert.equal(response.headers.get('Cache-Control'),'private, no-store');
  const user=(await response.json()).user;
  assert.equal(user.firstName,'Taylor');assert.equal(user.lastName,'Solar');assert.equal(user.title,'Analyst');assert.equal(user.theme,'foundry');assert.equal(user.minimumIssueLossKwh,'250');
- assert.equal(user.issueVisibility.inverterUnderperformance,false);assert.equal(user.issueVisibility.communicationIssue,false);assert.equal(user.issueVisibility.siteUnderperformance,true);assert.equal(user.issueVisibility.equipmentOutage,true);
+ assert.equal(user.issueVisibility.inverterUnderperformance,undefined);assert.equal(user.issueVisibility.communicationIssue,false);assert.equal(user.issueVisibility.siteUnderperformance,undefined);assert.equal(user.issueVisibility.equipmentOutage,true);
  assert.deepEqual(await read(api),user);
  for(const table of ['analysis_runs','performance_issues','performance_issue_occurrences','issue_event_reviews','issue_review_changes'])assert.equal(sqlite.prepare(`SELECT count(*) n FROM ${table}`).get().n,0);
 });
 
 test('profile PUT preserves omitted visibility and accepts validated explicit preferences',async()=>{
  const {api}=fixture();
- await api.PATCH(request('PATCH',{issueVisibility:{inverterUnderperformance:false}}));
+ await api.PATCH(request('PATCH',{issueVisibility:{equipmentOutage:false}}));
  const updated=await api.PUT(request('PUT',profile));assert.equal(updated.status,200);let user=(await updated.json()).user;
- assert.equal(user.firstName,profile.firstName);assert.equal(user.theme,profile.theme);assert.equal(user.issueVisibility.inverterUnderperformance,false);
+ assert.equal(user.firstName,profile.firstName);assert.equal(user.theme,profile.theme);assert.equal(user.issueVisibility.equipmentOutage,false);
  const changed=await api.PUT(request('PUT',{...profile,issueVisibility:{siteTelemetryOutage:false}}));assert.equal(changed.status,200);user=(await changed.json()).user;
- assert.equal(user.issueVisibility.siteTelemetryOutage,false);assert.equal(user.issueVisibility.inverterUnderperformance,true);assert.deepEqual(await read(api),user);
+ assert.equal(user.issueVisibility.siteTelemetryOutage,false);assert.equal(user.issueVisibility.equipmentOutage,true);assert.deepEqual(await read(api),user);
 });
 
 test('visibility can be saved before profile setup, including all hidden and Show all reset',async()=>{
@@ -67,7 +75,7 @@ test('visibility can be saved before profile setup, including all hidden and Sho
 });
 
 test('invalid visibility submissions are rejected without altering saved preferences',async()=>{
- const {api}=fixture({legacy:true});await api.PATCH(request('PATCH',{issueVisibility:{inverterUnderperformance:false}}));const before=await read(api);
+ const {api}=fixture({legacy:true});await api.PATCH(request('PATCH',{issueVisibility:{equipmentOutage:false}}));const before=await read(api);
  for(const value of [null,[],false,'false',{inverterUnderperformance:'false'},{inverterUnderperformance:0},{inventedType:false}]){
   assert.equal((await api.PATCH(request('PATCH',{issueVisibility:value}))).status,400);
   assert.equal((await api.PUT(request('PUT',{...profile,issueVisibility:value}))).status,400);

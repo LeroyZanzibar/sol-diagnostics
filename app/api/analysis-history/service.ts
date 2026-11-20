@@ -2,9 +2,24 @@ import { readCheckpoint } from "../performance-summary/checkpoint-storage";
 import { getBucketBinding, getDatabaseBinding } from "../../../db/binding";
 import { issueEventKey, issueEvidenceSignature, defaultConfidence } from "../../issue-review";
 import { savedAnalysisProvenance, assessAnalysisFreshness } from "../performance-data/analysis";
+import { isCompletedAnalysisRun, publishedAnalysisAvailable } from "./availability";
 export async function savedAnalysis(siteId:string,runId:string,reviewOnly=false){
   const row=await getDatabaseBinding().prepare("SELECT analysis_object_key, status, parser_version, model_revision FROM analysis_runs WHERE id = ? AND site_id = ?").bind(runId,siteId).first<{analysis_object_key:string;status:string;parser_version:number;model_revision:string}>();
   if(!row||row.status!=="completed")throw new Error("Saved analysis not found.");
+  const payload=await readAnalysisEvidence(siteId,runId,row,reviewOnly);
+  // A bucket read can yield while deletion commits. Never return that late read.
+  if(!await isCompletedAnalysisRun(getDatabaseBinding(),siteId,runId,row.analysis_object_key))throw new Error("Saved analysis not found.");
+  return payload;
+}
+
+/** Internal review comparison only. Never use this as a public request target. */
+export async function reviewedAnalysisBaseline(siteId:string,runId:string,reviewOnly=false){
+  const row=await getDatabaseBinding().prepare("SELECT analysis_object_key,status,parser_version,model_revision FROM analysis_runs WHERE id = ? AND site_id = ? AND status IN ('completed','deleted')").bind(runId,siteId).first<{analysis_object_key:string;status:string;parser_version:number;model_revision:string}>();
+  if(!row)throw new Error("Reviewed analysis baseline not found.");
+  return readAnalysisEvidence(siteId,runId,row,reviewOnly);
+}
+
+async function readAnalysisEvidence(siteId:string,runId:string,row:{analysis_object_key:string;parser_version:number;model_revision:string},reviewOnly:boolean){
   const bucket=getBucketBinding();
   const index=reviewOnly&&row.analysis_object_key.endsWith('/result.json')?await bucket.get(row.analysis_object_key.replace(/result\.json$/,'review-index.json')):null;
   const object=index||await bucket.get(row.analysis_object_key);if(!object)throw new Error("The retained analysis file is unavailable.");
@@ -35,14 +50,17 @@ export async function listAnalysisHistory(siteId:string, before = "") {
   for (const row of pointers.results) {
     let pointer: {objectKey?:string;analysisRunId?:string;parserVersion?:number;modelRevision?:string};
     try { pointer=JSON.parse(row.summary); } catch { continue; }
-    if (!pointer?.objectKey) continue;
+    if (!await publishedAnalysisAvailable(db,siteId,row.import_id,pointer)) continue;
     // Resolve legacy pointers without fetching giant analysis JSON objects.
-    const run=await db.prepare(`SELECT id FROM analysis_runs WHERE site_id = ? AND import_id = ? AND analysis_object_key = ?
-      AND status = 'completed' ORDER BY completed_at DESC,id DESC LIMIT 1`).bind(siteId,row.import_id,pointer.objectKey).first<{id:string}>();
-    if (run && (!pointer.analysisRunId || pointer.analysisRunId===run.id)) current.add(run.id);
+    const run=pointer.analysisRunId?{id:pointer.analysisRunId}:await db.prepare(`SELECT id FROM analysis_runs WHERE site_id = ? AND import_id = ? AND analysis_object_key = ?
+      AND status = 'completed' LIMIT 1`).bind(siteId,row.import_id,pointer.objectKey).first<{id:string}>();
+    if (run) current.add(run.id);
   }
   const hashes=new Map<string,string>();
-  const runs=page.results.slice(0,50).map(({analysis_object_key,...row}:HistoryRow)=>{
+  const ids=page.results.slice(0,50).map((row:HistoryRow)=>row.id);
+  const stillCompleted=ids.length?await db.prepare(`SELECT id FROM analysis_runs WHERE site_id = ? AND status = 'completed' AND id IN (${ids.map(()=>'?').join(',')})`).bind(siteId,...ids).all<{id:string}>():{results:[]};
+  const available=new Set(stillCompleted.results.map((row:{id:string})=>row.id));
+  const runs=page.results.slice(0,50).filter((row:HistoryRow)=>available.has(row.id)).map(({analysis_object_key,...row}:HistoryRow)=>{
     const provenance=savedAnalysisProvenance(siteId,row.id);
     // Version 1 puts the primary interval domain first; auxiliary snow
     // dependencies may extend beyond the dates actually analyzed.
@@ -55,5 +73,5 @@ export async function listAnalysisHistory(siteId:string, before = "") {
       data_freshness:assessAnalysisFreshness(siteId,row.id,provenance,hashes),
     };
   });
-  return {runs,next:page.results.length>50 ? JSON.stringify([runs[49].completed_at,runs[49].id]) : null};
+  return {runs,next:page.results.length>50 ? JSON.stringify([page.results[49].completed_at,page.results[49].id]) : null};
 }

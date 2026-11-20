@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.11.20.1 — pending verification and publication
+
+- Focus new analyses on site, partial-site and inverter outages plus distinct telemetry/data-quality findings. Remove the active site/inverter underperformance detectors, historical-deficit baselines, peer/shared reductions, cause attribution and recurrence generation.
+- Use each timestamp's supplied, weather-adjusted site **Expected Production** as the outage-loss reference. Retain capacity/topology-based inverter allocation and recoverable transformer headroom; do not refit or cap the supplied site reference. Unsupported loss estimates remain unknown rather than using historical/peer fallback or fabricated zero loss.
+- Remove underperformance visibility controls and recurring-underperformance sections/grouping from Findings and supported exports. Keep outage review, bulk selection and maintenance context, and replace the long Method explanation with concise, scope-appropriate wording.
+- Add confirmed deletion in **Manage Analyses**. Remove the selected completed analysis from public views and clear its exact current publication without promoting an older result. Preserve source measurements, other analyses, review evidence and shared storage; this is not secure erasure or a disk-space-reclamation feature.
+- Preserve existing stored analysis bytes and fence incompatible unfinished checkpoints. Existing analyses must be explicitly rerun to calculate losses with the new method. Upgrading does not automatically erase analyst reviews, import data or run analyses.
+
+Verification and performance measurements are pending. The source version is provisional until the publication-day check; no release or installed-app success is claimed here.
+
 ## 2026.11.19.4 — published November 19, 2026
 
 - Fix VCOM historical downloads failing with HTTP 400 because outgoing date parameters contain fractional seconds. Send whole-second UTC dates while preserving the exact requested instants.

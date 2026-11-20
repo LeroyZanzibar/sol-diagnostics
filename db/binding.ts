@@ -3,8 +3,13 @@ export type SynchronousDatabaseReader = {
   first<T = Record<string, unknown>>(sql: string, ...values: unknown[]): T | null;
   all<T = Record<string, unknown>>(sql: string, ...values: unknown[]): T[];
 };
+/** Shared SQLite only. The capability expires when the callback returns. */
+export type SynchronousDatabaseWriter = SynchronousDatabaseReader & {
+  run(sql: string, ...values: unknown[]): { changes: number };
+};
 type DatabaseBinding = D1Database & {
   withSynchronousRead?<T>(operation: (read: SynchronousDatabaseReader) => T): T;
+  withSynchronousWrite?<T>(operation: (write: SynchronousDatabaseWriter) => T): T;
 };
 let database: DatabaseBinding | null = null;
 let bucket: R2Bucket | null = null;

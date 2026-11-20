@@ -31,14 +31,14 @@ function comparableSummary(summary) {
 for(const {timezone,date,timestamp} of [
  {timezone:'UTC',date:'2026-06-01',timestamp:'2026-06-01T00:00:00Z'},
  {timezone:'America/New_York',date:'2026-03-08',timestamp:'2026-03-08T05:17:00Z'},
-]) for(const measurement of ['Snow code','Status','Other']) {
- test(`retained ${measurement} snow migration preserves full analysis in ${timezone}`,async t=>{
+]) for(const measurement of ['Snow code','Status','Other']) for(const deficitKwh of [30,60]) {
+ test(`retained ${measurement} snow migration preserves outage-only analysis in ${timezone} with ${deficitKwh} kWh deficit`,async t=>{
   const root=mkdtempSync(join(tmpdir(),'sol-snow-migration-'));
   const db=new LocalDatabase(join(root,'shared.sqlite'),'drizzle');
   const bucket=new LocalBucket(db,join(root,'objects'));
   const manager=new PerformanceStoreManager(join(root,'performance'));
   t.after(()=>{manager.close();db.close();rmSync(root,{recursive:true,force:true});});
-  const fixture=await analysisCsvFixture({timezone,date,measurement:'GHI irradiance',deficitKwh:30,snow:[{timestamp,value:70}]});
+  const fixture=await analysisCsvFixture({timezone,date,measurement:'GHI irradiance',deficitKwh,snow:[{timestamp,value:70}]});
   const record=plain(fixture.record),mapping=JSON.parse(record.mapping);
   mapping.equipment.signals.find(signal=>signal.equipmentId==='snow').measurement=measurement;
   record.mapping=JSON.stringify(mapping);
@@ -55,7 +55,12 @@ for(const {timezone,date,timestamp} of [
   const legacy=await route.buildSummary(record,fixture.equipment);
   assert.ok(legacy.snowDays.includes(date));
   const legacyAnalysis=route.buildAnalysis(plain(legacy),fixture.equipment);
-  assert.ok(legacyAnalysis.issues.some(issue=>issue.suspectedCause==='Snow'));
+  // Retain snow observations through migration without reviving automated cause
+  // attribution. Nonzero deficits are not outages; measured zeros still are.
+  assert.ok(legacyAnalysis.issues.every(issue=>!issue.suspectedCause&&!/underperformance/i.test(issue.type)));
+  const outages=legacyAnalysis.issues.filter(issue=>issue.type==='Equipment outage'&&issue.equipmentId==='inv0');
+  assert.equal(outages.length,deficitKwh===60?6:0);
+  if(deficitKwh===60)assert.ok(Math.abs(outages.reduce((sum,issue)=>sum+issue.estimatedLossKwh,0)-6*60)<1e-7);
 
   const preview=await service.previewLegacyPerformance('site');
   assert.equal(store.describe().revision,0);
