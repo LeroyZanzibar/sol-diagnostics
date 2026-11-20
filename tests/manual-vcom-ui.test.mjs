@@ -109,6 +109,34 @@ test('manual start uses exact inclusive dates/request identity, stops for review
   assert.equal(calls.filter(c=>c[1].method==='POST').length,1);assert.ok(calls.some(c=>String(c[0]).includes('jobId=synthetic-job')));assert.doesNotMatch(JSON.stringify(calls),/performance-summary|reanalyze|scheduler/);
 });
 
+test('manual start on ordinary HTTP creates a secure UUID and verifies the queued job',async()=>{
+  for(const fill of [0,255]) {
+    const calls=[],queued={...job,status:'queued',stageId:null,preview:null};let randomCalls=0;
+    const browserCrypto={getRandomValues(bytes){assert.equal(this,browserCrypto);assert.equal(bytes.length,16);randomCalls++;bytes.fill(fill);return bytes;}};
+    const h=ui({workspace:{settings,jobs:[]},selectedJobId:null},{crypto:browserCrypto,fetch:async(url,options={})=>{calls.push([url,options]);if(options.method==='POST')queued.requestId=parse(options).requestId;return Response.json({settings,jobs:[queued],job:queued},{status:options.method==='POST'?202:200});}});
+    const start=button(h.render(props),'Download range');assert.equal(start.props.disabled,false);
+    await start.props.onClick();
+    assert.equal(randomCalls,1);assert.equal(calls.filter(c=>c[1].method==='POST').length,1);
+    assert.match(queued.requestId,/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.equal(queued.requestId,fill===0?'00000000-0000-4000-8000-000000000000':'ffffffff-ffff-4fff-bfff-ffffffffffff');
+    assert.equal(h.state.error,'');assert.equal(h.state.uncertain,null);assert.equal(h.state.selectedJobId,job.id);
+    assert.match(html(h.render(props)),/Download requested|Queued/);
+    assert.deepEqual(parse(calls[0][1]),{action:'start',siteId:settings.siteId,expectedGeneration:3,requestId:queued.requestId,fromDate:'2026-10-01',throughDate:'2026-10-02'});
+    assert.ok(calls.some(c=>String(c[0]).includes('jobId=synthetic-job')));assert.doesNotMatch(JSON.stringify(calls),/"action":"apply"|performance-summary|reanalyze|scheduler/);
+  }
+});
+
+test('request-ID failure is visible and sends no request or uncertain operation',async()=>{
+  for(const browserCrypto of [undefined,{}, {getRandomValues(){throw Error('Synthetic random-source failure');}}, {randomUUID(){throw Error('Synthetic native UUID failure');}}]) {
+    const calls=[],h=ui({workspace:{settings,jobs:[]},selectedJobId:null,message:'Old success message'},{crypto:browserCrypto,fetch:async(...args)=>{calls.push(args);throw Error('Must not send a request');}});
+    const start=button(h.render(props),'Download range');assert.equal(start.props.disabled,false);
+    await assert.doesNotReject(async()=>{await start.props.onClick();});
+    assert.equal(calls.length,0);assert.equal(h.state.busy,'');assert.equal(h.state.uncertain,null);assert.equal(h.state.message,'');
+    const tree=h.render(props);assert.match(html(tree),/role="alert"[^>]*>[^<]*request ID/i);assert.match(h.state.error,/No request was sent/);
+    assert.equal(button(tree,'Download range').props.disabled,false);
+  }
+});
+
 test('API review has quality and all overlap counts; disabled Apply has an actual approval guard',async()=>{
   const calls=[],h=ui({}, {fetch:async(...args)=>{calls.push(args);return Response.json(workspace);}});
   let tree=h.render(props);for(const word of ['Added','Overlapping','Changed','Identical','Blank','Partial simulation','unscaled'])assert.match(html(tree),new RegExp(word));

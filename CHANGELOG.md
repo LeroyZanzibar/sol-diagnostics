@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.11.19.3 — pending publication
+
+- Fix **Download range** silently failing when Sol Diagnostics is opened over ordinary HTTP, including Umbrel's local-network URL. Generate secure request identifiers with `crypto.getRandomValues` when `crypto.randomUUID` is unavailable.
+- Show a visible error if a request identifier cannot be created, explicitly confirming that no request was sent. Preserve duplicate-action guards, exact-request verification, manual preview/Apply and existing saved data.
+- No provider, normalization, storage, schema, dependency, scheduling or analysis changes.
+
+Diagnosis verification: 190/190 focused UI/API/provider/store tests and the production build passed. Real-browser checks on non-loopback HTTP reproduced the enabled button's uncaught error with zero requests before the fix, then verified one synthetic start request and queued confirmation after the fix. This browser fixture uses the actual React component with offline transport; no live VCOM download was started. Final release/build and native-image evidence will be recorded after publication.
+
 ## 2026.11.19.2 — published November 19, 2026
 
 - Allow each discovered VCOM field to be included or explicitly excluded. Save exclusions across reload/discovery and enforce them in request planning and normalization; excluded fields never add canonical readings. Existing imported history is not deleted. All-excluded configurations may be saved, but downloads require at least one included field.

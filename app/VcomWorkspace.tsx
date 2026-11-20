@@ -22,6 +22,16 @@ const savedCredentialPlaceholder = "••••••••";
 const countLabels = [["added", "Added"], ["overlapping", "Overlapping"], ["changed", "Changed"], ["identical", "Identical"], ["blankPreserved", "Blank/null preserved"]] as const;
 const statusLabels: Record<VcomManualJob["status"], string> = { queued: "Queued", downloading: "Downloading", staging: "Preparing preview", awaiting_approval: "Awaiting approval", committed: "Applied", failed: "Failed", canceled: "Canceled" };
 
+function downloadRequestId() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  // Umbrel's ordinary HTTP origins do not expose randomUUID.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function calendarDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -356,7 +366,14 @@ export default function VcomWorkspace(props: Props) {
   }
   function start() {
     if (startDisabled || !settings || operationBusy.current) return;
-    return mutate({ action: "start", siteId, expectedGeneration: settings.generation, requestId: crypto.randomUUID(), fromDate, throughDate });
+    let requestId: string;
+    try { requestId = downloadRequestId(); }
+    catch {
+      setMessage("");
+      setError("Unable to create a secure download request ID. No request was sent. Reload the page or try a different browser.");
+      return;
+    }
+    return mutate({ action: "start", siteId, expectedGeneration: settings.generation, requestId, fromDate, throughDate });
   }
   function apply() {
     if (applyDisabled || !selectedJob || !preview || operationBusy.current) return;
