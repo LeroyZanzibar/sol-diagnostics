@@ -1,12 +1,14 @@
 # Changelog
 
-## 2026.11.19.4 — release pending
+## 2026.11.19.4 — published November 19, 2026
 
 - Fix VCOM historical downloads failing with HTTP 400 because outgoing date parameters contain fractional seconds. Send whole-second UTC dates while preserving the exact requested instants.
 - Keep persisted download plans, request identifiers, hashes, completed responses, timezone boundaries and normalization unchanged. Existing jobs do not need their stored plans rewritten.
 - Preserve explicit preview/Apply, overlap approval, saved credentials, mappings and all retained data. No schema, dependency, scheduling or analysis changes; this update does not automatically retry a failed download or import data.
 
-Diagnosis verification: three bounded read-only simulation checks isolated the timestamp representation; the millisecond form was rejected while equivalent whole-second forms returned matching responses. The local production build and all 202 manual-VCOM tests passed, including regressions across ordinary and daylight-saving dates and every measurement request kind. Independent specification and quality/integration reviews approved the narrow hotfix. These checks do not claim a full live download; full-release verification and publication remain pending.
+Diagnosis verification: three bounded read-only simulation checks isolated the timestamp representation; the millisecond form was rejected while equivalent whole-second forms returned matching responses. The diagnosis-stage production build and all 202 manual-VCOM tests passed, including regressions across ordinary and daylight-saving dates and every measurement request kind. Independent specification and quality/integration reviews approved the narrow hotfix. These checks do not claim a full live download.
+
+Published as `v2026.11.19.4` from source commit `02f93d106f8f529a013f37d455f890e6ef3187ad`. The immutable multi-platform image digest is `sha256:ce96705983d80dc93f03978d307a58d5e40213c5d067c6816c269052fc237ee6`. Final local and tagged-release builds passed 743/743 tests; native AMD64/ARM64 hardened persistence checks and independent anonymous native pulls passed. Both uploaded source/checksum assets were anonymously downloaded and byte-verified. Independent specification and whole-versioned-hotfix quality/integration reviews approved the exact source. See [the GitHub release](https://github.com/LeroyZanzibar/sol-diagnostics/releases/tag/v2026.11.19.4) for downloads. This publication-only documentation does not move the source tag or rebuild its images. Installed-app deployment remains a separate backed-up operation; no live VCOM retry or import is initiated by this release.
 
 ## 2026.11.19.3 — published November 19, 2026
 
