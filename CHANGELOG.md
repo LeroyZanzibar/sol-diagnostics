@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.11.20.1 — pending verification and publication
+## 2026.11.20.1 — published November 20, 2026
 
 - Focus new analyses on site, partial-site and inverter outages plus distinct telemetry/data-quality findings. Remove the active site/inverter underperformance detectors, historical-deficit baselines, peer/shared reductions, cause attribution and recurrence generation.
 - Use each timestamp's supplied, weather-adjusted site **Expected Production** as the outage-loss reference. Retain capacity/topology-based inverter allocation and recoverable transformer headroom; do not refit or cap the supplied site reference. Unsupported loss estimates remain unknown rather than using historical/peer fallback or fabricated zero loss.
@@ -8,7 +8,9 @@
 - Add confirmed deletion in **Manage Analyses**. Remove the selected completed analysis from public views and clear its exact current publication without promoting an older result. Preserve source measurements, other analyses, review evidence and shared storage; this is not secure erasure or a disk-space-reclamation feature.
 - Preserve existing stored analysis bytes and fence incompatible unfinished checkpoints. Existing analyses must be explicitly rerun to calculate losses with the new method. Upgrading does not automatically erase analyst reviews, import data or run analyses.
 
-Verification and performance measurements are pending. The source version is provisional until the publication-day check; no release or installed-app success is claimed here.
+Published as `v2026.11.20.1` from source commit `25dec4f003f5e8e74254481359e1cad5c531ecc8`. The immutable multi-platform image digest is `sha256:e71dbdc05c629e9f57ca5e3f03b36adc04d4292e018d9a55e1b96a0d0377ec31`. Final local and tagged-release builds passed 874/874 tests; native AMD64/ARM64 hardened persistence checks and independent anonymous native pulls passed. Both uploaded source/checksum assets were anonymously downloaded and byte-verified. Independent whole-feature specification and quality/integration reviews approved the exact source. Production-HTTP and desktop/mobile browser/export coverage passed, with unchanged browser evidence retained after the final narrow backend fix. Standalone TypeScript retains exactly six reproduced baseline diagnostics, with no new diagnostics.
+
+A controlled local analytical benchmark improved from about 2.10 seconds to 0.72 seconds on the same populated fixture; this is not a measured production latency guarantee. See [the GitHub release](https://github.com/LeroyZanzibar/sol-diagnostics/releases/tag/v2026.11.20.1) for downloads and exact CI evidence. This publication-only documentation does not move the source tag or rebuild its images. Installed-app deployment and any explicitly authorized one-time review reset remain separate backed-up operations; the release does not reset reviews or rerun existing analyses automatically.
 
 ## 2026.11.19.4 — published November 19, 2026
 
