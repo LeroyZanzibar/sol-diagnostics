@@ -165,7 +165,7 @@ const comparableSummary = summary => {
 };
 
 test('GHI actual CSV ingestion and SQLite canonical analysis retain all irradiance and real findings',async t=>{
-  const f=await analysisCsvFixture();
+  const f=await analysisCsvFixture({deficitKwh:60});
   const directory=mkdtempSync(join(tmpdir(),'analysis-ghi-'));
   const manager=new PerformanceStoreManager(directory);t.after(()=>{manager.close();rmSync(directory,{recursive:true,force:true});});
   const store=manager.site('site'),h=helpers(store),metadata={source:'csv',fileName:'synthetic-ghi.csv',timezone:f.record.timezone,intervalMinutes:60,modelRevision:'model'};
@@ -175,8 +175,8 @@ test('GHI actual CSV ingestion and SQLite canonical analysis retain all irradian
   const raw=engine(store,f.source),canonical=engine(store),record=h.performanceAnalysisInput('site');
   const original=await raw.buildSummary(f.record,f.equipment),saved=await canonical.buildSummary(record,f.equipment);
   const legacyAnalysis=raw.buildAnalysis(plain(original),f.equipment),canonicalAnalysis=canonical.buildAnalysis(plain(saved),f.equipment);
-  assert.equal(legacyAnalysis.issues.filter(i=>i.type==='Underperformance').length,6);
-  assert.equal(legacyAnalysis.totalLossKwh,72);
+  assert.equal(legacyAnalysis.issues.filter(i=>i.type==='Equipment outage').length,6);
+  assert.equal(legacyAnalysis.totalLossKwh,360);
   assert.deepEqual(plain(canonicalAnalysis),plain(legacyAnalysis));
   assert.deepEqual(comparableSummary(saved),comparableSummary(original));
   assert.equal(saved.intervalIrradiance.length,54);
@@ -272,14 +272,13 @@ for(const c of [
   {timezone:'Asia/Kathmandu',date:'2026-06-01',before:'2026-06-01T00:00:00+05:45',after:'2026-06-06T23:59:00+05:45'},
   {timezone:'America/New_York',date:'2026-03-08',before:'2026-03-08T00:00:00-05:00',after:'2026-03-13T23:59:00-04:00'},
   {timezone:'America/New_York',date:'2026-10-27',before:'2026-10-27T00:00:00-04:00',after:'2026-11-01T23:59:00-05:00'},
-])test(`boundary-day snow changes actual findings and retains CSV/canonical parity: ${c.timezone} ${c.date}`,async()=>{
-  // The unchanged snow detector requires a larger deficit than the ordinary
-  // derived-expectation rule; use one that remains detectable on a snow day.
-  const options={...c,measurement:'POA irradiance',deficitKwh:30};
+])test(`boundary-day snow preserves outage findings and retains CSV/canonical timestamp parity: ${c.timezone} ${c.date}`,async()=>{
+  // Weather observations retain their source instants but cannot adjust supplied expected outage loss.
+  const options={...c,measurement:'POA irradiance',deficitKwh:60};
   const f=await analysisCsvFixture(options),store=versionedStore(f.readings,c.timezone),h=helpers(store),record=h.performanceAnalysisInput('site');
   const p=h.captureAnalysisProvenance('before-snow',record,f.equipment),canonical=engine(store),beforeSummary=await canonical.buildSummary(record,f.equipment),before=canonical.buildAnalysis(plain(beforeSummary),f.equipment);
-  assert.equal(before.issues.filter(i=>i.type==='Underperformance').length,6);assert.equal(before.totalLossKwh,6*options.deficitKwh);
-  assert.equal(before.recurringIssues.find(i=>i.equipmentId==='inv0').members.length,6);
+  assert.equal(before.issues.filter(i=>i.type==='Equipment outage').length,6);assert.equal(before.totalLossKwh,6*options.deficitKwh);
+  assert.equal(before.recurringIssues.length,0);
   for(const observation of [c.before,c.after]) {
     const changed=await analysisCsvFixture({...options,snow:[{timestamp:observation,value:70}]});
     store.replace(changed.readings);
@@ -288,9 +287,9 @@ for(const c of [
     assert.deepEqual(comparableSummary(b),comparableSummary(a));
     assert.deepEqual(plain(b.timestamps),plain(beforeSummary.timestamps),'snow observations never establish production intervals');
     const rerun=canonical.buildAnalysis(plain(b),f.equipment);assert.deepEqual(plain(rerun),plain(raw.buildAnalysis(plain(a),changed.equipment)));
-    assert.ok(rerun.issues.some(i=>i.suspectedCause==='Snow'));
-    assert.equal(rerun.recurringIssues.find(i=>i.equipmentId==='inv0').members.length,5,'the snow occurrence leaves the ordinary recurring group');
-    assert.notDeepEqual(plain(rerun.issues),plain(before.issues));
+    assert.ok(rerun.issues.every(i=>!i.suspectedCause));
+    assert.equal(rerun.recurringIssues.length,0);
+    assert.deepEqual(plain(rerun.issues),plain(before.issues));
     assert.equal(rerun.totalLossKwh,before.totalLossKwh);
     const snowRows=[...store.rows()].filter(r=>r.channel.equipmentId==='snow'&&r.value===70);
     assert.deepEqual(snowRows.map(r=>r.timestamp),[new Date(observation).toISOString()],'observation instants are not shifted with interval-end production');

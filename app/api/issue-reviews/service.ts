@@ -1,5 +1,5 @@
-import { getDatabaseBinding } from "../../../db/binding";
-import { savedAnalysis } from "../analysis-history/service";
+import { getDatabaseBinding, type SynchronousDatabaseWriter } from "../../../db/binding";
+import { savedAnalysis, reviewedAnalysisBaseline } from "../analysis-history/service";
 import { blankReview, validateReview, assessReviewEvidence, type ReviewState, type IssueReview } from "../../issue-review";
 export async function reviewContext(siteId:string,runId:string,issueId:string){const p=await savedAnalysis(siteId,runId,true);const issue=[...p.analysis.issues,...(p.analysis.recurringIssues||[])].find((i:Record<string,any>)=>i.id===issueId);if(!issue)throw new Error("Issue not found in this saved analysis.");return {issue,eventKey:issue.eventKey as string,timezone:issue.timezone||p.timeZone||p.summary?.timezone||p.methodology?.timezone||"UTC",payload:p};}
 
@@ -23,7 +23,7 @@ export async function assessReviews(siteId:string,runId:string,payload:Record<st
  for(const [previousRun,group] of pending){
   try{
    if(!previousRun)throw new Error('Missing reviewed analysis');
-   const old=previousRun===runId?payload:await savedAnalysis(siteId,previousRun,true);
+   const old=previousRun===runId?payload:await reviewedAnalysisBaseline(siteId,previousRun,true);
    const oldIndex=new Map<string,any>(old.analysis.issues.map((i:any)=>[i.eventKey,i]));
    const detailed:ReviewRecord[]=[];
    for(const record of group){
@@ -37,7 +37,7 @@ export async function assessReviews(siteId:string,runId:string,payload:Record<st
     // Load retained ledgers only for changed evidence eligible for tolerance.
     // Reuse one current read and one prior read per run, never one read per event.
     if(!currentDetails){const p=await savedAnalysis(siteId,runId);currentDetails=new Map(p.analysis.issues.filter((i:any)=>current.has(i.eventKey)).map((i:any)=>[i.eventKey,{...i,intervalMinutes:i.intervalMinutes||p.analysis.analysisIntervalMinutes||p.summary?.intervalMinutes}]));}
-    const p=previousRun===runId?null:await savedAnalysis(siteId,previousRun);
+    const p=previousRun===runId?null:await reviewedAnalysisBaseline(siteId,previousRun);
     const wanted=new Set(detailed.map(r=>r.eventKey));
     const previousDetails=p?new Map<string,any>(p.analysis.issues.filter((i:any)=>wanted.has(i.eventKey)).map((i:any)=>[i.eventKey,{...i,intervalMinutes:i.intervalMinutes||p.analysis.analysisIntervalMinutes||p.summary?.intervalMinutes}])):currentDetails;
     for(const record of detailed){const before=previousDetails.get(record.eventKey),after=currentDetails.get(record.eventKey);if(!before||!after)throw new Error('Missing event ledger');attach(record,assessReviewEvidence(before,after,old.reviewCalculationBasis,payload.reviewCalculationBasis));}
@@ -48,17 +48,26 @@ export async function assessReviews(siteId:string,runId:string,payload:Record<st
  }
  return result;
 }
+type ReviewWrite = { sql: string; values: unknown[] };
+/** Admit the request target and write its decision/audit under the SAME writer lock. */
+export function writeReviewBatch(db:ReturnType<typeof getDatabaseBinding>,siteId:string,runId:string,writes:ReviewWrite[]){
+  if(!db.withSynchronousWrite)throw new Error("Atomic review storage is unavailable.");
+  db.withSynchronousWrite((tx:SynchronousDatabaseWriter)=>{
+    if(!tx.first("SELECT id FROM analysis_runs WHERE id = ? AND site_id = ? AND status = 'completed'",runId,siteId))throw new Error("Saved analysis is no longer available for review.");
+    for(const {sql,values} of writes)tx.run(sql,...values);
+  });
+}
 export async function saveReview(db:ReturnType<typeof getDatabaseBinding>,siteId:string,eventKey:string,runId:string,baseVersion:number,state:ReviewState,note:string,actor:string){
   validateReview(state,note);if(!Number.isInteger(baseVersion)||baseVersion<0)throw new Error("Invalid review version.");
   const now=new Date().toISOString(),changeId=crypto.randomUUID(),json=JSON.stringify({...state,changeId}),version=baseVersion+1;
-  await db.batch([
-    db.prepare(`INSERT INTO issue_event_reviews (id,site_id,event_key,version,state,updated_at)
+  writeReviewBatch(db,siteId,runId,[
+    {sql:`INSERT INTO issue_event_reviews (id,site_id,event_key,version,state,updated_at)
       SELECT ?,?,?,?,?,? WHERE ? = 0 OR EXISTS (SELECT 1 FROM issue_event_reviews WHERE site_id = ? AND event_key = ? AND version = ?)
-      ON CONFLICT(site_id,event_key) DO UPDATE SET version=excluded.version,state=excluded.state,updated_at=excluded.updated_at WHERE issue_event_reviews.version = ?`)
-      .bind(crypto.randomUUID(),siteId,eventKey,version,json,now,baseVersion,siteId,eventKey,baseVersion,baseVersion),
-    db.prepare(`INSERT INTO issue_review_changes (id,site_id,event_key,run_id,version,state,note,actor,created_at)
-      SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM issue_event_reviews WHERE site_id = ? AND event_key = ? AND version = ? AND state = ?)`)
-      .bind(changeId,siteId,eventKey,runId,version,json,note.trim(),actor,now,siteId,eventKey,version,json),
+      ON CONFLICT(site_id,event_key) DO UPDATE SET version=excluded.version,state=excluded.state,updated_at=excluded.updated_at WHERE issue_event_reviews.version = ?`,
+      values:[crypto.randomUUID(),siteId,eventKey,version,json,now,baseVersion,siteId,eventKey,baseVersion,baseVersion]},
+    {sql:`INSERT INTO issue_review_changes (id,site_id,event_key,run_id,version,state,note,actor,created_at)
+      SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM issue_event_reviews WHERE site_id = ? AND event_key = ? AND version = ? AND state = ?)`,
+      values:[changeId,siteId,eventKey,runId,version,json,note.trim(),actor,now,siteId,eventKey,version,json]},
   ]);
   const row=await db.prepare("SELECT version,state,updated_at FROM issue_event_reviews WHERE site_id = ? AND event_key = ?").bind(siteId,eventKey).first<{version:number;state:string;updated_at:string}>();
   if(!row||JSON.parse(row.state).changeId!==changeId)throw new Error("Another analyst updated this event. Reload its review before saving your changes.");
@@ -81,7 +90,7 @@ export async function effectiveReviews(db:ReturnType<typeof getDatabaseBinding>,
  for(const parent of new Map([...parents.values()].map(e=>[e.eventKey,e])).values()){
   const review=byKey.get(parent.eventKey);if(!review)continue;
   const baselineRun=review.state.evidenceRunId||review.runId;
-  if(!baselineRuns.has(baselineRun)){try{baselineRuns.set(baselineRun,await savedAnalysis(siteId,baselineRun,true));}catch{baselineRuns.set(baselineRun,null);}}
+  if(!baselineRuns.has(baselineRun)){try{baselineRuns.set(baselineRun,await reviewedAnalysisBaseline(siteId,baselineRun,true));}catch{baselineRuns.set(baselineRun,null);}}
   const baseline=baselineRuns.get(baselineRun)?.analysis.recurringIssues?.find((e:any)=>e.eventKey===parent.eventKey);
   membership.set(parent.eventKey,new Map((baseline?.members||review.state.recurringMembers||[]).map((m:any)=>[m.eventKey,m])));
  }

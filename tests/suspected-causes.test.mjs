@@ -79,24 +79,35 @@ test('midnight-crossing intervals partition energy by local date and preserve mo
 });
 
 function shadeFixture() {
-  const summary={intervalMinutes:60,snowDays:[],causeContext:{latitude:'40',longitude:'-75',timeZone:'America/New_York',assumptions:expectedAssumptions({})},expectedProduction:[],intervalIrradiance:[],equipmentProduction:[]};
-  for(let i=0;i<4;i++) summary.equipmentProduction.push({equipmentId:`inv${i}`,equipmentType:'inverter',capacityKw:100,intervalProduction:[]});
+  const summary={intervalMinutes:60,timezone:'America/New_York',snowDays:[],causeContext:{latitude:'40',longitude:'-75',timeZone:'America/New_York',assumptions:expectedAssumptions({})},expectedProduction:[],intervalIrradiance:[],equipmentProduction:[]};
+  for(let i=0;i<4;i++) summary.equipmentProduction.push({equipmentId:`inv${i}`,equipmentName:`Inverter ${i}`,externalId:`inv${i}`,equipmentType:'inverter',capacityKw:100,intervalProduction:[],dailyProduction:[]});
   const affected=[];
-  for(let day=1;day<=8;day++) for(let hour=8;hour<=16;hour++) {
+  for(let day=1;day<=8;day++) for(let hour=0;hour<24;hour++) {
     const timestamp=`2026-06-${String(day).padStart(2,'0')}T${String(hour).padStart(2,'0')}:00:00`;
-    summary.intervalIrradiance.push({timestamp,averageWm2:600,insolationKwhM2:.6});
-    summary.expectedProduction.push({timestamp,energyKwh:240});
-    for(let i=0;i<4;i++) summary.equipmentProduction[i].intervalProduction.push({timestamp,energyKwh:i===0&&hour===9?20:60});
+    const daylight=hour>=8&&hour<=16;
+    summary.intervalIrradiance.push({timestamp,averageWm2:daylight?600:0,insolationKwhM2:daylight?.6:0});
+    summary.expectedProduction.push({timestamp,energyKwh:daylight?240:0});
+    for(let i=0;i<4;i++) summary.equipmentProduction[i].intervalProduction.push({timestamp,energyKwh:daylight?(i===0&&hour===9?20:60):0});
     if(hour===9) affected.push(timestamp);
   }
-  const assets = summary.equipmentProduction.flatMap(p => [{id:p.equipmentId,type:"inverter",acRatedCapacityKw:"100"},
+  const assets = summary.equipmentProduction.flatMap(p => [{id:p.equipmentId,name:p.equipmentName,externalId:p.externalId,type:"inverter",parentId:'meter',acRatedCapacityKw:"100"},
     {id:p.equipmentId+"-modules",type:"module_group",parentId:p.equipmentId,moduleRatedCapacityW:"400",quantity:250}]);
-  assets.push({id:'meter',type:'revenue_meter'});
+  assets.push({id:'meter',name:'Meter',externalId:'meter',type:'revenue_meter'});
+  summary.equipmentProduction.push({equipmentId:'meter',equipmentName:'Meter',externalId:'meter',equipmentType:'revenue_meter',capacityKw:400,dailyProduction:[],
+    intervalProduction:summary.equipmentProduction[0].intervalProduction.map((p,index)=>({timestamp:p.timestamp,
+      energyKwh:summary.equipmentProduction.reduce((sum,series)=>sum+series.intervalProduction[index].energyKwh,0)}))});
   return {summary,issues:[issue(affected)],assets};
 }
-test('shading needs repeat sun-position losses, recovery and three healthy peers; snow takes priority',()=>{
+test('direct legacy shading needs connected topology, repeat losses, recovery and three healthy peers; snow takes priority',()=>{
   const {summary,issues,assets}=shadeFixture();
   const peers=causes.compareCapacityPeers(summary,assets);
+  assert.equal(peers.referenceQualification.modelIssues.length,0);
+  assert.equal(peers.findings.get('inv0').intervals.size,8);
+  const disconnected=assets.map(a=>a.type==='inverter'?{...a,parentId:null}:a);
+  const unavailable=causes.compareCapacityPeers(summary,disconnected);
+  assert.equal(unavailable.referenceQualification.status,'unavailable');
+  assert.ok(unavailable.referenceQualification.modelIssues.some(s=>s.includes('Connect every inverter')));
+  assert.equal(shadingCandidates(summary,issues,unavailable).size,0);
   const candidates=shadingCandidates(summary,issues,peers);
   assert.equal(candidates.size,8);
   assert.equal(attributeCauses(issues,summary,peers)[0].suspectedCause,'Shading');
@@ -109,6 +120,20 @@ test('shading needs repeat sun-position losses, recovery and three healthy peers
   assert.equal(shadingCandidates(summary,short,peers).size,0);
   const snow=attributeCauses(issues,{...summary,snowSensorConfigured:true,snowDays:['2026-06-01']},peers);
   assert.equal(snow[0].suspectedCause,'Snow');
+});
+
+test('active analysis does not attribute shading or snow to ordinary repeated nonzero deficits',()=>{
+  for(const snow of [false,true]){
+    const {summary,assets}=shadeFixture();
+    summary.snowSensorConfigured=snow;
+    summary.snowDays=snow?Array.from({length:8},(_,i)=>`2026-06-${String(i+1).padStart(2,'0')}`):[];
+    summary.causeContext.assumptions=expectedAssumptions({expectedShading:'included',expectedSnow:'included'});
+    const expectedBefore=JSON.stringify(summary.expectedProduction),result=route.buildAnalysis(summary,assets);
+    assert.equal(result.analyzedIntervals,8*9);assert.equal(result.analyzedDays,8);
+    assert.equal(result.issues.length,0);assert.equal(result.totalLossKwh,0);
+    assert.equal(result.peerComparison,undefined);assert.equal(result.causeAnalysis,undefined);assert.equal(result.recurringIssues.length,0);
+    assert.equal(JSON.stringify(summary.expectedProduction),expectedBefore,'cause allowances must not refit the supplied reference');
+  }
 });
 
 test('included, not-included and unknown allowances change interpretation without subtracting losses again',()=>{

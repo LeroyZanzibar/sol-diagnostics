@@ -42,9 +42,29 @@ export class LocalDatabase {
     }catch(error){this.sqlite.close();throw error;}
   }
   prepare(sql){return new LocalStatement(this,sql,[]);}
+  withSynchronousWrite(operation){
+    if(typeof operation!=='function'||Object.prototype.toString.call(operation)==='[object AsyncFunction]')throw Error('A synchronous write callback is required.');
+    if(this.synchronousReadActive||this.synchronousWriteActive)throw Error('A synchronous database guard is already active.');
+    this.sqlite.exec('BEGIN IMMEDIATE');
+    this.synchronousWriteActive=true;
+    let active=true;
+    const statement=sql=>{if(!active)throw Error('The synchronous writer is no longer active.');return this.sqlite.prepare(sql);};
+    const write=Object.freeze({
+      first:(sql,...values)=>statement(sql).get(...values)??null,
+      all:(sql,...values)=>statement(sql).all(...values),
+      run:(sql,...values)=>({changes:Number(statement(sql).run(...values).changes)}),
+    });
+    try{
+      const result=operation(write);
+      if(result&&typeof result.then==='function')throw Error('The write callback must be synchronous, not a Promise.');
+      this.sqlite.exec('COMMIT');
+      return result;
+    }catch(error){this.sqlite.exec('ROLLBACK');throw error;}
+    finally{active=false;this.synchronousWriteActive=false;}
+  }
   withSynchronousRead(operation){
     if(typeof operation!=='function'||Object.prototype.toString.call(operation)==='[object AsyncFunction]')throw Error('A synchronous read callback is required.');
-    if(this.synchronousReadActive)throw Error('A synchronous read guard is already active.');
+    if(this.synchronousReadActive||this.synchronousWriteActive)throw Error('A synchronous database guard is already active.');
     const queryOnly=this.sqlite.prepare('PRAGMA query_only').get().query_only;
     // Reserve the shared DB writer lock before reading. Model/settings writes
     // from other connections wait; query_only also forbids reentrant writes on
@@ -66,17 +86,19 @@ export class LocalDatabase {
   }
   async batch(statements){
     // No await inside the transaction: another request cannot join a partial batch.
+    if(this.synchronousWriteActive)throw Error('Use the active synchronous writer.');
     this.sqlite.exec('BEGIN IMMEDIATE');
     try{const results=statements.map(s=>{if(s.db!==this)throw Error('Mixed database batch');return s.execute('all');});this.sqlite.exec('COMMIT');return results;}
     catch(error){this.sqlite.exec('ROLLBACK');throw error;}
   }
-  async exec(sql){this.sqlite.exec(sql);return {count:1,duration:0};}
+  async exec(sql){if(this.synchronousWriteActive)throw Error('Use the active synchronous writer.');this.sqlite.exec(sql);return {count:1,duration:0};}
   close(){this.sqlite.close();}
 }
 class LocalStatement {
   constructor(db,sql,values){Object.assign(this,{db,sql,values});}
   bind(...values){return new LocalStatement(this.db,this.sql,values.map(v=>v===undefined?null:typeof v==='boolean'?Number(v):v instanceof ArrayBuffer?new Uint8Array(v):v));}
   execute(mode){
+    if(this.db.synchronousWriteActive)throw Error('Use the active synchronous writer.');
     const start=performance.now(),stmt=this.db.sqlite.prepare(this.sql);
     if(mode==='raw'){stmt.setReturnArrays(true);return stmt.all(...this.values);}
     const columns=stmt.columns();

@@ -5,7 +5,8 @@ import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { drizzle } from "drizzle-orm/d1";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc, asc, inArray, sql } from "drizzle-orm";
+import { webcrypto } from "node:crypto";
 import * as sqliteCore from "drizzle-orm/sqlite-core";
 import { LocalDatabase, LocalBucket } from "../selfhost/storage.mjs";
 import { PerformanceStoreManager } from "../selfhost/performance-store.mjs";
@@ -31,7 +32,11 @@ function database() {
     async first() { return sqlite.prepare(sql).get(...values) || null; },
     async all() { return { results: sqlite.prepare(sql).all(...values) }; },
   });
-  return { sqlite, prepare: statement, async batch(items) {
+  return { sqlite, prepare: statement, withSynchronousWrite(operation) {
+    sqlite.exec('BEGIN IMMEDIATE');
+    try { const result=operation({first:(sql,...args)=>sqlite.prepare(sql).get(...args)||null,all:(sql,...args)=>sqlite.prepare(sql).all(...args),run:(sql,...args)=>sqlite.prepare(sql).run(...args)});sqlite.exec('COMMIT');return result; }
+    catch(error){sqlite.exec('ROLLBACK');throw error;}
+  }, async batch(items) {
     sqlite.exec("BEGIN");
     try { const results = []; for (const item of items) results.push(await item.run()); sqlite.exec("COMMIT"); return results; }
     catch (error) { sqlite.exec("ROLLBACK"); throw error; }
@@ -156,25 +161,35 @@ async function canonicalFixture(t) {
     {id:'modules',name:'Modules',type:'module_group',parentId:'inv',externalId:'modules',moduleRatedCapacityW:'400',quantity:250,aliases:'[]'}];
   const rows=[];
   for(const hour of [10,11,12,13])for(const [id,measurement,value,unit] of [['meter','Energy',hour===11?0:40,'kWh'],['inv','Energy',hour===11?0:40,'kWh'],['meter','POA irradiance',600,'W/m2'],['@site','Expected Production',40,'kWh']])rows.push({timestamp:`2026-06-01T${hour}:00:00.000Z`,channel:{id:JSON.stringify([id,measurement]),equipmentId:id,measurement,unit},value});
-  let store=versionedStore(rows),adapters={},commit;
+  let store=versionedStore(rows),adapters={},commit,reopen;
   if(t) {
     const root=mkdtempSync(join(tmpdir(),'publication-'));
-    const db=new LocalDatabase(join(root,'shared.sqlite'),'drizzle'),bucket=new LocalBucket(db,join(root,'objects'));
-    const manager=new PerformanceStoreManager(join(root,'performance'));
-    t.after(()=>{manager.close();db.close();rmSync(root,{recursive:true,force:true});});
-    const schema=loadSource('db/schema.ts',[],{sql,...sqliteCore}),orm=drizzle(db);
+    const schema=loadSource('db/schema.ts',[],{sql,...sqliteCore});
+    let db,bucket,manager,orm;
+    const open=()=>{
+      db=new LocalDatabase(join(root,'shared.sqlite'),'drizzle');bucket=new LocalBucket(db,join(root,'objects'));
+      manager=new PerformanceStoreManager(join(root,'performance'));store=manager.site('site');orm=drizzle(db);
+      adapters={db,bucket,bindings:{...schema,eq,desc,getDb:()=>orm}};
+    };
+    const close=()=>{manager.close();db.close();};
+    open();
+    t.after(()=>{close();rmSync(root,{recursive:true,force:true});});
     await orm.insert(schema.siteSettings).values({id:'site',name:'Synthetic publication test'});
     await orm.insert(schema.equipmentAssets).values(equipment.map(asset=>({...asset,siteId:'site'})));
-    store=manager.site('site');
     commit=async readings=>{
       const preview=await store.stage({source:'csv',fileName:'synthetic.csv',timezone:'UTC',intervalMinutes:60,modelRevision:'fixture'},readings);
       return store.commit(preview.stageId,{previewToken:preview.previewToken,approveOverlap:true,modelRevision:'fixture',actor:'test'});
     };
     await commit(rows);
-    adapters={db,bucket,bindings:{...schema,eq,desc,getDb:()=>orm}};
+    reopen=async()=>{
+      close();open();
+      const assets=await orm.select().from(schema.equipmentAssets).where(eq(schema.equipmentAssets.siteId,'site'));
+      const data=loadSource('app/api/performance-data/analysis.ts',[],performanceBindings(store)),record=data.performanceAnalysisInput('site');
+      return {...await analysisApi('',assets,record,null,store,adapters),store,data,record,equipment:assets,rows,commit,reopen};
+    };
   }
   const data=loadSource('app/api/performance-data/analysis.ts',[],performanceBindings(store)),record=data.performanceAnalysisInput('site');
-  return {...await analysisApi('',equipment,record,null,store,adapters),store,data,record,equipment,rows,commit};
+  return {...await analysisApi('',equipment,record,null,store,adapters),store,data,record,equipment,rows,commit,reopen};
 }
 async function finish(f) {
   let result;
@@ -204,7 +219,7 @@ async function terminalize(f,attemptId,status) {
 }
 function publicationClients(f) {
   const review=loadSource('app/issue-review.ts');
-  const bindings={...f.data,...review,...checkpointStorage,getDatabaseBinding:()=>f.db,getBucketBinding:()=>f.bucket};
+  const bindings={...modelCapacityBindings(),...f.data,...review,...checkpointStorage,getDatabaseBinding:()=>f.db,getBucketBinding:()=>f.bucket};
   const saved=loadSource('app/api/analysis-history/service.ts',[],bindings);
   const service=loadSource('app/api/issue-reviews/service.ts',[],{...bindings,...saved});
   const reviews=loadSource('app/api/issue-reviews/route.ts',[],{...bindings,...saved,...service,blankReview:review.blankReview});
@@ -435,7 +450,7 @@ test('freshness, history browsing and reanalysis never rewrite completed evidenc
   f.store.replace(f.rows.map(r=>r.channel.equipmentId==='inv'&&r.timestamp.includes('13:00')?{...r,value:30}:r));
   const freshness=loadSource('app/api/analysis-freshness/route.ts',[],{...f.data,getDatabaseBinding:()=>f.db});
   assert.equal((await(await freshness.GET(new Request(`https://test/api/analysis-freshness?siteId=site&runId=${runId}`))).json()).status,'older');
-  const saved=loadSource('app/api/analysis-history/service.ts',[],{...f.data,...review,...checkpointStorage,getDatabaseBinding:()=>f.db,getBucketBinding:()=>f.bucket});
+  const saved=loadSource('app/api/analysis-history/service.ts',[],{...modelCapacityBindings(),...f.data,...review,...checkpointStorage,getDatabaseBinding:()=>f.db,getBucketBinding:()=>f.bucket});
   const history=loadSource('app/api/analysis-history/route.ts',[],{...f.data,...saved,...checkpointStorage});
   const loaded=await(await history.GET(new Request(`https://test/api/analysis-history?siteId=site&runId=${runId}`))).json();
   assert.equal(loaded.dataFreshness.status,'older');assert.equal(loaded.analysis.issues[0].eventKey,issue.eventKey);assert.equal(loaded.analysis.issues[0].evidenceSignature,issue.evidenceSignature);
@@ -516,7 +531,7 @@ test("separate attempts for one upload persist safely and replay without duplica
   assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM performance_issues").get().n, 1);
 });
 
-test("snow import runs through staged detection, hierarchy, persistence, and cached display with assumptions snapshot", async () => {
+test("snow imports retain source context but produce no causal or positive-output deficit findings", async () => {
   const equipment = [
     {id:'meter',name:'Meter',type:'revenue_meter',parentId:null,externalId:'meter',aliases:'[]'},
     {id:'inv',name:'Inverter',type:'inverter',parentId:'meter',externalId:'inv',acRatedCapacityKw:'100',aliases:'[]'},
@@ -532,25 +547,18 @@ test("snow import runs through staged detection, hierarchy, persistence, and cac
   let result;
   for(let i=0;i<12;i++) {const response=await fixture.request();result=await response.json();assert.ok(response.ok,JSON.stringify(result));if(response.status!==202)break;}
   assert.ok(result.hasData);
-  assert.equal(result.analysis.causeAnalysis.snowDays[0],'2026-01-02');
-  assert.equal(result.analysis.expectedProductionAssumptions.snow,'not_included');
-  assert.equal(result.analysis.expectedProductionAssumptions.shading,'not_included');
-  const snowIssues=result.analysis.issues.filter(issue=>issue.suspectedCause==='Snow');
-  assert.equal(snowIssues.length,1,JSON.stringify(result.analysis.issues));
-  assert.equal(snowIssues[0].equipmentId,'inv');
-  assert.equal(snowIssues[0].estimatedLossKwh,20);
-  assert.equal(result.analysis.totalLossKwh,20);
-  assert.equal(snowIssues[0].startDateTime,'2026-01-02T15:00:00.000Z');
-  assert.equal(snowIssues[0].timezone,'America/New_York');
-  const stored=await(await fixture.request()).json();
-  assert.equal(stored.cacheStatus,'stored');
-  assert.equal(stored.analysis.issues[0].suspectedCause,'Snow');
+  assert.equal(result.analysis.causeAnalysis,undefined);
+  assert.equal(result.analysis.issues.some(i=>i.suspectedCause==='Snow'||i.type==='Underperformance'),false);
+  assert.equal(result.analysis.totalLossKwh,0);
+  const stored=await(await fixture.request()).json();assert.equal(stored.cacheStatus,'stored');
+  assert.deepEqual(stored.analysis,result.analysis);
   const persistence=loadSource('app/api/performance-summary/persistence.ts',[],errors);
   const run=fixture.db.sqlite.prepare('SELECT id FROM analysis_runs').get();
   const rows=await persistence.readPersistedPerformanceIssues(fixture.db,run.id);
-  assert.equal(rows[0].suspectedCause,'Snow');
-  assert.equal(rows[0].evidence.expectedProductionAssumptions.snow,'not_included');
-  assert.match(rows[0].causeExplanation,/recorded 70/);
+  assert.ok(rows.every(i=>!i.suspectedCause));assert.equal(fixture.objects.get(record.objectKey).text,csv);
+  const retained=await storedData(fixture.objects.get(`analysis/site/jobs/${run.id}/input.json`));
+  assert.equal(retained.record.timezone,'America/New_York');assert.ok(retained.equipment.some(a=>a.id==='snow'));
+
 });
 
 test('all-blank analysis persists unknown loss, remains visible above thresholds, and survives reload', async()=>{
@@ -571,7 +579,7 @@ test('all-blank analysis persists unknown loss, remains visible above thresholds
   const latest=await(await fixture.request()).json();assert.equal(latest.analysis.issues[0].estimatedLossKwh,null);
 });
 
-test('staged transformer analysis retains branch settings and capped-expectation methodology',async()=>{
+test('staged transformer analysis retains branch settings without capping site expected energy',async()=>{
   const equipment=[
     {id:'meter',type:'revenue_meter'},
     {id:'tx',type:'transformer',parentId:'meter',nameplateKva:'150',pvCeilingOverrideEnabled:true,pvCeilingOverrideKw:'175'},
@@ -587,10 +595,11 @@ test('staged transformer analysis retains branch settings and capped-expectation
   const csv=['time,meter,i0,i1,sun,expected',...[10,11,12,13].map(h=>`2026-06-01T${h}:00:00Z,0,0,0,600,200`)].join('\n');
   const f=await analysisApi(csv,equipment,record);let result;
   for(let i=0;i<12;i++){const r=await f.request();result=await r.json();assert.ok(r.ok,JSON.stringify(result));if(r.status!==202)break;}
-  assert.equal(result.analysis.totalLossKwh,700);
-  assert.equal(result.methodology.calculationVersion,28);
+  assert.equal(result.analysis.totalLossKwh,800);
+  assert.equal(result.methodology.calculationVersion,29);
   assert.equal(result.methodology.transformerLimits.gridExportCeilingKw,175);
-  assert.equal(result.methodology.transformerLimits.excludedExpectedKwh,100);
+  assert.equal(result.methodology.transformerLimits.capacityConflictIntervals,4);
+  assert.equal(result.methodology.transformerLimits.excludedExpectedKwh,undefined);
   assert.equal(result.methodology.equipmentModel.find(a=>a.id==='tx').nameplateKva,'150');
   const saved=await (await f.request()).json();assert.equal(saved.cacheStatus,'stored');
   assert.equal(saved.methodology.transformerLimits.branches[0].overrideEnabled,true);
@@ -633,7 +642,7 @@ async function saveFixture(count, legacy = false) {
   fixture.objects.delete(`${root}/save-manifest.json`);
   if (legacy) fixture.objects.delete(`${root}/save.json`);
   else fixture.objects.set(`${root}/save.json`, { text: JSON.stringify(
-    loadSource("app/api/performance-summary/analysis-storage.ts").issueSaveIndex(expected, `${root}/result.json`)) });
+    {parserVersion:source.parserVersion,methodId:source.methodId,issues:loadSource("app/api/performance-summary/analysis-storage.ts").issueSaveIndex(expected, `${root}/result.json`)}) });
   fixture.db.sqlite.prepare("UPDATE analysis_jobs SET total = ?").run(count);
   fixture.io.gets.length = 0; fixture.io.puts.length = 0;
   return { ...fixture, root, job, source, expected };
@@ -748,7 +757,7 @@ test("previously completed analyses still load their separate evidence files", a
   assert.deepEqual(detail.issue.evidence.intervalLosses, fixture.expected[0].evidence.intervalLosses);
 });
 
-test('capacity-matched peer findings and recurring thresholds survive staged saving and evidence reload', async () => {
+test('positive inverter deficits create no peer or recurring findings in staged saved analysis', async () => {
   const equipment=[{id:'meter',name:'Meter',type:'revenue_meter',externalId:'meter',aliases:'[]'}];
   for(let i=0;i<4;i++)equipment.push({id:`inv${i}`,name:`Inv ${i}`,type:'inverter',parentId:'meter',externalId:`inv${i}`,acRatedCapacityKw:'100',aliases:'[]'},
     {id:`modules${i}`,name:'Modules',type:'module_group',parentId:`inv${i}`,externalId:`modules${i}`,moduleRatedCapacityW:'500',quantity:250,aliases:'[]'});
@@ -760,27 +769,17 @@ test('capacity-matched peer findings and recurring thresholds survive staged sav
   fixture.db.sqlite.prepare("INSERT INTO user_settings (id,minimum_issue_loss_kwh) VALUES ('primary-user','50')").run();
   let result;
   for(let i=0;i<12;i++){const response=await fixture.request();result=await response.json();assert.ok(response.ok,JSON.stringify(result));if(response.status!==202)break;}
-  const findings=result.analysis.issues.filter(i=>i.equipmentId==='inv0'&&i.type==='Underperformance');
-  assert.equal(findings.length,6);assert.equal(result.analysis.totalLossKwh,72);
-  assert.ok(findings.every(i=>i.recurringLossKwh===72&&i.recurringIssueCount===6));
-  assert.equal(result.analysis.recurringIssues.length,1);
-  const episode=result.analysis.recurringIssues[0];assert.equal(episode.members.length,6);assert.equal(episode.activeMinutes,360);assert.equal(episode.estimatedLossKwh,72);assert.ok(episode.eventKey&&episode.evidenceSignature);assert.ok(findings.every(i=>i.recurringId===episode.id));
-  const reviewIndex=await storedData([...fixture.objects].find(([key])=>key.endsWith('/review-index.json'))[1]);assert.deepEqual(reviewIndex.analysis.recurringIssues,[episode]);assert.equal(fixture.db.sqlite.prepare('SELECT count(*) n FROM performance_issue_occurrences').get().n,result.analysis.issues.length);
-  assert.equal(result.methodology.calculationVersion,28);
-  assert.equal(result.methodology.peerComparison.minimumDeficitPercent,10);
-  assert.equal(result.methodology.inverterExpectation.version,1);
-  assert.equal(result.methodology.inverterExpectation.coverage.invertersWithRepeatedDeficits,1);
-  const detail=await(await fixture.api.GET(new Request(`https://test/api/performance-summary?siteId=site&issueId=${encodeURIComponent(findings[0].id)}`))).json();
-  const ledger=detail.issue.evidence.intervalLosses;
-  assert.equal(detail.issue.evidence.peerComparison.dcRatedCapacityKw,125);
-  assert.ok(ledger.every(p=>detail.issue.evidence.peerReferenceSets[p.peerSetIndex].length===3));
-  assert.ok(Object.values(detail.issue.evidence.peerReferenceSets).every(ids=>!ids.includes('inv0')));
-  assert.ok(ledger.every(p=>p.detectionBasis==='derived_inverter_expectation_v1'&&p.derivedInverterExpectedKwh===60&&p.peerCorroborated));
-  assert.equal(detail.issue.evidence.peerReferenceQualification.records.length,3);
-  const cached=await(await fixture.request()).json();assert.equal(cached.cacheStatus,'stored');assert.equal(cached.analysis.totalLossKwh,72);
+  assert.equal(result.analysis.issues.filter(i=>i.category==='Performance').length,0);
+  assert.equal(result.analysis.totalLossKwh,0);assert.deepEqual(result.analysis.recurringIssues,[]);
+  assert.equal(result.methodology.calculationVersion,29);assert.equal(result.methodology.peerComparison,undefined);
+  assert.equal(result.methodology.inverterExpectation.version,2);assert.equal(result.methodology.inverterExpectation.coverage,undefined);
+  const index=await storedData([...fixture.objects].find(([key])=>key.endsWith('/review-index.json'))[1]);
+  assert.deepEqual(index.analysis.recurringIssues,[]);assert.equal(fixture.db.sqlite.prepare('SELECT count(*) n FROM performance_issue_occurrences').get().n,result.analysis.issues.length);
+  const cached=await(await fixture.request()).json();assert.equal(cached.cacheStatus,'stored');assert.equal(cached.analysis.totalLossKwh,0);
+
 });
 
-test('shared site evidence survives staged publication without inflating database or review indexes',async()=>{
+test('shared positive deficits create no site underperformance or shared evidence during publication',async()=>{
  const equipment=[{id:'meter',name:'Meter',type:'revenue_meter',externalId:'meter',aliases:'[]'}];
  for(let i=0;i<4;i++)equipment.push({id:`inv${i}`,name:`Inv ${i}`,type:'inverter',parentId:'meter',externalId:`inv${i}`,acRatedCapacityKw:'100',aliases:'[]'},
   {id:`modules${i}`,name:'Modules',externalId:`modules${i}`,type:'module_group',parentId:`inv${i}`,moduleRatedCapacityW:'500',quantity:250,aliases:'[]'});
@@ -790,20 +789,16 @@ test('shared site evidence survives staged publication without inflating databas
   ...['meter','inv0','inv1','inv2','inv3'].map(id=>({column:id,equipmentId:id,measurement:'Energy'})),{column:'sun',equipmentId:'meter',measurement:'POA irradiance'}]}})};
  const f=await analysisApi(rows.join('\n'),equipment,record);let result;
  for(let i=0;i<12;i++){const response=await f.request();result=await response.json();assert.ok(response.ok,JSON.stringify(result));if(response.status!==202)break;}
- assert.equal(result.analysis.totalLossKwh,27*66);
- assert.ok(result.analysis.issues.filter(i=>i.equipmentType==='inverter').every(i=>i.equipmentId==='inv0'));
- assert.equal(result.methodology.sharedReduction.minimumEligibleCapacityPercent,90);
+ assert.equal(result.analysis.totalLossKwh,0);assert.equal(result.analysis.issues.filter(i=>i.category==='Performance').length,0);
+ assert.equal(result.methodology.sharedReduction,undefined);
  const stored=await storedData([...f.objects].find(([key])=>key.endsWith('/result.json'))[1]);
- const site=stored.analysis.issues.find(i=>i.evidence.rule==='shared_site_reduction_v1');assert.equal(site.sharedSourceEvents.length,4);
- const {sharedEvidencePage}=loadSource('app/shared-reduction-evidence.ts');
- const evidence=sharedEvidencePage(site);assert.equal(evidence.rows.length,4);assert.equal(evidence.rows.reduce((s,p)=>s+p.sharedLossKwh,0),site.estimatedLossKwh);
+ assert.equal(stored.analysis.issues.some(i=>i.evidence.rule==='shared_site_reduction_v1'),false);
  const index=await storedData([...f.objects].find(([key])=>key.endsWith('/review-index.json'))[1]);
- assert.ok(index.analysis.issues.every(i=>!i.intervalLosses&&!i.sharedSourceEvents&&!i.evidence?.sharedSourceEvents));
- assert.ok(index.analysis.issues.some(i=>i.hasSharedReduction));
+ assert.ok(index.analysis.issues.every(i=>!i.intervalLosses&&!i.sharedSourceEvents&&!i.hasSharedReduction));
  for(const row of f.db.sqlite.prepare('SELECT evidence FROM performance_issue_occurrences').all()){
   assert.ok(!row.evidence.includes('sharedContributors'));assert.ok(!row.evidence.includes('sharedSourceEvents'));
  }
- assert.ok(result.analysis.issues.every(i=>!i.sharedSourceEvents&&i.intervalLosses.every(p=>!p.sharedContributors)));
+
 });
 
 test('indexed history feeds the existing analysis with identical production, expected values and blank readings',async()=>{
@@ -830,12 +825,12 @@ test('equipment batches resume an interrupted attempt and preserve the full calc
  {id:`mod${i}`,name:`Modules ${i}`,externalId:`mod${i}`,type:'module_group',parentId:`inv${i}`,moduleRatedCapacityW:'500',quantity:250,aliases:'[]'});
  const ids=Array.from({length:20},(_,i)=>`inv${i}`),rows=[['time','meter',...ids,'sun','expected'].join(',')];
  for(let day=1;day<=4;day++)for(let hour=8;hour<=16;hour++){
-  const values=ids.map((_,i)=>i===0?30:60);rows.push([`2026-06-0${day}T${hour.toString().padStart(2,'0')}:00:00`,values.reduce((a,b)=>a+b,0),...values,600,1200].join(','));
+  const values=ids.map((_,i)=>i===0?0:60);rows.push([`2026-06-0${day}T${hour.toString().padStart(2,'0')}:00:00`,values.reduce((a,b)=>a+b,0),...values,600,1200].join(','));
  }
  const record={id:'batch-import',siteId:'site',objectKey:'upload.csv',rowCount:36,timezone:'UTC',validation:JSON.stringify({intervalMinutes:60}),mapping:JSON.stringify({roles:{timestamp:'time',expectedProduction:'expected'},equipment:{signals:[...['meter',...ids].map(id=>({column:id,equipmentId:id,measurement:'Energy'})),{column:'sun',equipmentId:'meter',measurement:'POA irradiance'}]}})};
  const f=await analysisApi(rows.join('\n'),equipment,record);
  const summary=f.api.alignWithArrayModel(await f.api.buildSummary(record,equipment),equipment);summary.causeContext={latitude:'',longitude:'',timeZone:'UTC',assumptions:causes.expectedAssumptions({})};
- const expected=JSON.parse(JSON.stringify(f.api.buildAnalysis(summary,equipment)));
+ const expected=JSON.parse(JSON.stringify(f.api.buildAnalysis(summary,equipment)));assert.ok(expected.issues.some(i=>i.type==='Equipment outage'&&i.equipmentId==='inv0'));
  for(let i=0;i<3;i++)assert.equal((await f.request()).status,202);
  const job=f.db.sqlite.prepare('SELECT * FROM analysis_jobs').get();assert.equal(job.stage,'equipment');assert.equal(job.completed,16);
  f.db.sqlite.prepare("UPDATE analysis_jobs SET status='interrupted',completed=19").run();
@@ -853,4 +848,381 @@ test('streamed checkpoint storage round-trips nested ledgers and legacy JSON',as
  assert.ok(stored.text.length<JSON.stringify(input).length);assert.deepEqual(await storedData(stored),JSON.parse(JSON.stringify(input)));
  assert.deepEqual(await storedData({text:JSON.stringify(input)}),JSON.parse(JSON.stringify(input)));
  assert.deepEqual(await checkpointStorage.analysisJsonResponse(input).json(),JSON.parse(JSON.stringify(input)));
+});
+
+
+for(const checkpoint of ['input','summary','equipment','save','save-page','finalize'])test(`outage-only rejects incompatible ${checkpoint} checkpoint before analytical writes`,async()=>{
+ const equipment=[{id:'meter',name:'Meter',type:'revenue_meter',externalId:'meter',aliases:'[]'},
+  {id:'inv',name:'Inverter',type:'inverter',parentId:'meter',externalId:'inv',acRatedCapacityKw:'100',aliases:'[]'},
+  {id:'modules',name:'Modules',externalId:'modules',type:'module_group',parentId:'inv',moduleRatedCapacityW:'500',quantity:200,aliases:'[]'}];
+ const record={id:'incompatible',siteId:'site',objectKey:'upload.csv',rowCount:4,timezone:'UTC',validation:JSON.stringify({intervalMinutes:60}),mapping:JSON.stringify({roles:{timestamp:'time',expectedProduction:'expected'},equipment:{signals:[
+  ...['meter','inv'].map(id=>({column:id,equipmentId:id,measurement:'Energy'})),{column:'sun',equipmentId:'meter',measurement:'POA irradiance'}]}})};
+ const f=await analysisApi('time,meter,inv,sun,expected\n2026-06-01T10:00Z,50,50,600,50\n2026-06-01T11:00Z,0,0,600,50\n2026-06-01T12:00Z,0,0,600,50\n2026-06-01T13:00Z,50,50,600,50',equipment,record);
+ await f.request();
+ const job=f.db.sqlite.prepare('SELECT * FROM analysis_jobs').get(),root=`analysis/site/jobs/${job.attempt_id}`;
+ if(checkpoint!=='input')await f.request();
+ if(['equipment','save','save-page','finalize'].includes(checkpoint))await f.request();
+ if(['save','save-page','finalize'].includes(checkpoint))await f.request();
+ if(checkpoint==='finalize')await f.request();
+ const name={input:'input',summary:'summary',equipment:'equipment-final',save:'save-manifest','save-page':'save-0',finalize:'analysis'}[checkpoint];
+ const value=await storedData(f.objects.get(`${root}/${name}.json`));value.parserVersion=28;value.methodId='historical-underperformance';
+ f.objects.set(`${root}/${name}.json`,{text:JSON.stringify(value)});
+ const before=f.db.sqlite.prepare('SELECT * FROM performance_issue_occurrences').all(),puts=f.io.puts.length;
+ const response=await f.api.GET(new Request(`https://test/api/performance-summary?siteId=site&attemptId=${job.attempt_id}`)),data=await response.json();
+ assert.equal(response.status,409,JSON.stringify(data));assert.equal(data.analysisRequired,true);assert.equal(data.code,'incompatible_analysis_checkpoint');
+ assert.deepEqual(f.db.sqlite.prepare('SELECT * FROM performance_issue_occurrences').all(),before);
+ assert.equal(f.db.sqlite.prepare('SELECT count(*) n FROM performance_summaries').get().n,0);
+ assert.equal(f.io.puts.length,puts);
+ const retry=await f.api.POST(new Request('https://test/api/performance-summary',{method:'POST',body:JSON.stringify({siteId:'site',attemptId:job.attempt_id,action:'retry'})}));
+ if(checkpoint==='input')assert.equal(retry.status,409);
+});
+
+
+test('deleted publication cannot be resurrected through summary/display/ETag/status/explicit-attempt caches',async t=>{
+ const f=await canonicalFixture(t),result=await finish(f),runId=result.issueDatabase.analysisRunId;
+ const initial=await browse(f),etag=initial.headers.get('etag');await initial.json();
+ const before=await retainedSnapshot(f,runId);
+ // Reproduce retained payloads and a stale completed job after authoritative soft deletion.
+ f.db.sqlite.prepare("UPDATE analysis_runs SET status='deleted' WHERE id=?").run(runId);
+ for(const query of ['', '&statusOnly=1', `&attemptId=${runId}`, `&progressOnly=1&attemptId=${runId}`,`&issueId=${encodeURIComponent(result.analysis.issues[0].id)}`]){
+  const response=await f.api.GET(new Request(`https://test/api/performance-summary?siteId=site${query}`,{headers:etag?{'if-none-match':etag}:{}}));
+  assert.notEqual(response.status,304);const data=await response.json();assert.notEqual(data.hasData,true,JSON.stringify(data));
+  if(query.includes('attemptId='))assert.equal(response.status,404,JSON.stringify(data));
+  else assert.equal(data.analysisRequired,true,JSON.stringify(data));
+ }
+ f.db.sqlite.prepare('DELETE FROM performance_summaries WHERE site_id=?').run('site');
+ // An orphan current.json is not an authoritative publication either.
+ const saved=await f.bucket.get(`analysis/site/jobs/${runId}/result.json`);
+ await f.bucket.put('analysis/site/current.json',await saved.arrayBuffer(),{customMetadata:{siteId:'site',importId:result.import.id,parserVersion:'29',modelRevision:result.methodology.modelRevision}});
+ assert.equal((await(await browse(f)).json()).analysisRequired,true);
+ const after=await retainedSnapshot(f,runId);assert.deepEqual(after.result,before.result);assert.deepEqual(after.occurrences,before.occurrences);
+});
+
+
+test('outage-only manual analysis completes actual durable save/publication and reopens every stage without retired work',async t=>{
+ const directory=mkdtempSync(join(tmpdir(),'outage-manual-'));
+ let db,bucket,manager,store,orm,fixture;
+ const schema=loadSource('db/schema.ts',[],{sql,...sqliteCore});
+ const equipment=[{id:'meter',name:'Meter',externalId:'meter',type:'revenue_meter',siteId:'site',aliases:'[]',acLineLossPercent:'2',transformerLossPercent:'1'},
+  ...[0,1].map(i=>({id:`tx${i}`,name:`Transformer ${i+1}`,externalId:`tx${i}`,type:'transformer',siteId:'site',parentId:'meter',nameplateKva:'900',aliases:'[]'})),
+  ...Array.from({length:20},(_,i)=>[{id:`inv${i}`,name:`Inverter ${i+1}`,externalId:`inv${i}`,type:'inverter',siteId:'site',parentId:`tx${Math.floor(i/10)}`,acRatedCapacityKw:'100',aliases:'[]'},
+    {id:`modules${i}`,name:`Modules ${i+1}`,externalId:`modules${i}`,type:'module_group',siteId:'site',parentId:`inv${i}`,moduleRatedCapacityW:'500',quantity:200,aliases:'[]'}]).flat()];
+ const retired=['compareCapacityPeers','sharedReductionIntervals','allocateSharedReductions','attributeCauses','splitRecurringGaps','buildRecurringIssues','transformerPeerExclusions'];
+ const calls=Object.fromEntries(retired.map(name=>[name,0]));
+ const traps=Object.fromEntries(retired.map(name=>[name,()=>{calls[name]++;throw Error(`Retired work called: ${name}`);} ]));
+ const close=()=>{manager?.close();db?.close();manager=db=null;};
+ t.after(()=>{close();rmSync(directory,{recursive:true,force:true});});
+ const open=async()=>{
+  db=new LocalDatabase(join(directory,'shared.sqlite'),'drizzle');bucket=new LocalBucket(db,join(directory,'objects'));
+  manager=new PerformanceStoreManager(join(directory,'performance'));store=manager.site('site');orm=drizzle(db);
+  const data=loadSource('app/api/performance-data/analysis.ts',[],performanceBindings(store));
+  const assets=await orm.select().from(schema.equipmentAssets).where(eq(schema.equipmentAssets.siteId,'site'));
+  fixture=await analysisApi('',assets,data.performanceAnalysisInput('site'),null,store,{db,bucket,bindings:{...schema,eq,desc,getDb:()=>orm,...traps}});
+  return {data,assets};
+ };
+ // Initialize only through the production migrations and ordinary canonical stage/commit.
+ db=new LocalDatabase(join(directory,'shared.sqlite'),'drizzle');bucket=new LocalBucket(db,join(directory,'objects'));orm=drizzle(db);
+ await orm.insert(schema.siteSettings).values({id:'site',name:'Outage manual fixture'});
+ await orm.insert(schema.equipmentAssets).values(equipment);
+ manager=new PerformanceStoreManager(join(directory,'performance'));store=manager.site('site');
+ const readings=[];
+ for(let h=10;h<=16;h++){
+  const timestamp=`2026-06-01T${h}:00:00.000Z`,values=Array.from({length:20},(_,i)=>[14,15].includes(h)||(i===0&&h>=11&&h<=13)||(i===1&&[11,12].includes(h))?0:(i===2&&h===16?30:60));
+  const actual=values.reduce((s,v)=>s+v,0)*.9702;
+  const add=(id,measurement,value,unit='kWh')=>readings.push({timestamp,channel:{id:JSON.stringify([id,measurement]),equipmentId:id,measurement,unit},value});
+  add('meter','Energy',actual);values.forEach((v,i)=>add(`inv${i}`,'Energy',h===13&&i===3?null:v));
+  add('meter','POA irradiance',600,'W/m2');add('@site','Expected Production',h===12?-1:h===15?null:h===14?1400:1200*.9702);
+ }
+ const staged=await store.stage({source:'csv',fileName:'populated-outage.csv',timezone:'UTC',intervalMinutes:60,modelRevision:'manual-model'},readings);
+ const receipt=store.commit(staged.stageId,{previewToken:staged.previewToken,approveOverlap:true,modelRevision:'manual-model',actor:'test'});
+ close();let {data,assets}=await open();const record=data.performanceAnalysisInput('site');
+ const summary=fixture.api.alignWithArrayModel(await fixture.api.buildSummary(record,assets),assets);
+ summary.causeContext={latitude:'',longitude:'',timeZone:'UTC',assumptions:causes.expectedAssumptions({})};
+ const expected=JSON.parse(JSON.stringify(fixture.api.buildAnalysis(summary,assets)));
+ const started=await fixture.api.POST(new Request('https://test/api/performance-summary',{method:'POST',body:JSON.stringify({siteId:'site',action:'reanalyze'})}));
+ assert.equal(started.status,202);const runId=(await started.json()).progress.attemptId;
+ let result,completed=false,reopens=0;const stages=[];
+ for(let i=0;i<16;i++){
+  close();await open();reopens++;
+  const job=db.sqlite.prepare('SELECT stage,completed FROM analysis_jobs WHERE attempt_id=?').get(runId);stages.push([job.stage,job.completed]);
+  const response=await fixture.api.GET(new Request('https://test/api/performance-summary?siteId=site'));result=await response.json();
+  assert.ok(response.ok,JSON.stringify(result));assert.notEqual(result.progress?.status,'failed',JSON.stringify(result));
+  if(response.status!==202){completed=true;break;}
+ }
+ assert.equal(completed,true,JSON.stringify(stages));assert.equal(result.hasData,true);assert.equal(result.issueDatabase.analysisRunId,runId);
+ assert.ok(stages.some(([stage,offset])=>stage==='equipment'&&offset===16));assert.ok(stages.some(([stage])=>stage==='save'));assert.ok(stages.some(([stage])=>stage==='finalize'));
+ assert.deepEqual(Object.values(calls),retired.map(()=>0));
+ const pointer=JSON.parse(db.sqlite.prepare('SELECT summary FROM performance_summaries WHERE site_id=?').get('site').summary);
+ assert.equal(pointer.analysisRunId,runId);assert.equal(db.sqlite.prepare('SELECT status FROM analysis_runs WHERE id=?').get(runId).status,'completed');
+ const raw=Buffer.from(await(await bucket.get(pointer.objectKey)).arrayBuffer());
+ const saved=await checkpointStorage.readCheckpoint(await bucket.get(pointer.objectKey));
+ const projection=issues=>issues.map(i=>({id:i.id,type:i.type,equipmentId:i.equipmentId,start:i.startDateTime,end:i.endDateTime,
+  loss:i.estimatedLossKwh,actual:i.actualEnergyKwh,expected:i.expectedEnergyKwh,lossUnknown:i.lossUnknown,expectedUnknown:i.expectedUnknown,
+  ledger:i.intervalLosses||i.evidence.intervalLosses}));
+ assert.deepEqual(JSON.parse(JSON.stringify(projection(saved.analysis.issues))),projection(expected.issues));
+ assert.equal(saved.analysis.totalLossKwh,expected.totalLossKwh);assert.equal(saved.parserVersion,29);assert.equal(saved.methodId,'outage-only-v2');
+ assert.equal(saved.methodology.inputProvenance.revision,receipt.revision);
+ const persistence=loadSource('app/api/performance-summary/persistence.ts',[],errors);
+ const persisted=await persistence.readPersistedPerformanceIssues(db,runId);
+ assert.equal(persisted.length,saved.analysis.issues.length);
+ for(const issue of persisted.filter(i=>i.lossUnknown)){
+  assert.equal(issue.evidence.lossUnknown,true);
+  assert.equal(db.sqlite.prepare('SELECT estimated_loss_kwh FROM performance_issue_occurrences WHERE analysis_run_id=? AND source_issue_id=?').get(runId,issue.id).estimated_loss_kwh,null);
+ }
+ db.sqlite.prepare("INSERT INTO user_settings(id,minimum_issue_loss_kwh) VALUES('primary-user','99999') ON CONFLICT(id) DO UPDATE SET minimum_issue_loss_kwh=excluded.minimum_issue_loss_kwh").run();
+ close();await open();reopens++;
+ const reopened=await(await fixture.api.GET(new Request('https://test/api/performance-summary?siteId=site'))).json();
+ assert.ok(reopened.analysis.issues.some(i=>i.type==='Site outage'&&i.lossUnknown&&i.actualEnergyKwh===0));
+ assert.ok(reopened.analysis.issues.some(i=>i.type==='Equipment outage'&&i.lossUnknown));
+ assert.ok(reopened.analysis.issues.every(i=>i.lossUnknown||i.category==='Communications'));
+ for(const issue of reopened.analysis.issues.filter(i=>i.lossUnknown)){
+  assert.equal(issue.estimatedLossKwh,null);assert.equal(issue.lossPercent,null);
+  if(issue.expectedUnknown)assert.equal(issue.expectedEnergyKwh,null);
+  const detail=await(await fixture.api.GET(new Request(`https://test/api/performance-summary?siteId=site&issueId=${encodeURIComponent(issue.id)}`))).json();
+  assert.equal(detail.issue.evidence.lossUnknown,true);assert.equal(detail.issue.estimatedLossKwh,null);
+ }
+ assert.deepEqual(Buffer.from(await(await bucket.get(pointer.objectKey)).arrayBuffer()),raw);
+ assert.equal([...store.rows()].length,readings.length);assert.equal(store.describe().revision,receipt.revision);
+ t.diagnostic(JSON.stringify({manualSavedAndReopened:true,reopens,stages,readings:readings.length,issues:saved.analysis.issues.length,
+  unknownIssues:saved.analysis.issues.filter(i=>i.lossUnknown).length,quantifiedLossKwh:saved.analysis.totalLossKwh,retiredWorkCalls:calls}));
+});
+
+for(const missingSibling of [false,true])test(`inverter delivery survives manual save/reopen with ${missingSibling?'missing':'known'} sibling actual`,async t=>{
+  let f=await canonicalFixture(t);
+  const schema=loadSource('db/schema.ts',[],{sql,...sqliteCore}),capacity=modelCapacityBindings();
+  const equipmentApi=loadSource('app/api/equipment/route.ts',[],{...schema,...capacity,eq,asc,inArray,getDb:()=>drizzle(f.db),getDatabaseBinding:()=>f.db,Error,TypeError});
+  const assets=[{id:'meter',name:'Meter',externalId:'meter',type:'revenue_meter',acLineLossPercent:'2',transformerLossPercent:'1'},
+    {id:'tx',name:'Transformer',externalId:'tx',type:'transformer',parentId:'meter',nameplateKva:'200'},
+    ...['inv','invB'].flatMap((id,index)=>[{id,name:`Inverter ${index+1}`,externalId:id,type:'inverter',parentId:'tx',acRatedCapacityKw:'100'},
+      {id:`modules-${id}`,name:`Modules ${index+1}`,externalId:`modules-${id}`,type:'module_group',parentId:id,moduleRatedCapacityW:'400',quantity:250}])];
+  const save=await equipmentApi.PUT(new Request('https://test/api/equipment',{method:'PUT',body:JSON.stringify({siteId:'site',equipment:assets,verified:true})}));
+  const saved=await save.json();assert.equal(save.status,200,JSON.stringify(saved));assert.equal(saved.verified,true);
+  f=await f.reopen();
+  const readback=await equipmentApi.GET(new Request('https://test/api/equipment?siteId=site'));
+  const modelReadback=await readback.json();assert.equal(readback.status,200);assert.equal(modelReadback.verified,true);assert.deepEqual(modelReadback.equipment,saved.equipment);
+  const model=capacity.inverterExpectationModel(f.equipment);
+  assert.equal(model.ready,true);assert.equal(capacity.arrayCapacityModel(f.equipment).complete,true);assert.equal(model.deliveryFactor,.9702);
+  const rows=[];
+  for(const hour of [10,11,12,13])for(const [id,measurement,value,unit] of [
+    ['meter','Energy',(hour===11?40:80)*.9702,'kWh'],['inv','Energy',hour===11?0:40,'kWh'],
+    ['invB','Energy',hour===11&&missingSibling?null:40,'kWh'],['meter','POA irradiance',600,'W/m2'],['@site','Expected Production',80,'kWh'],
+  ])rows.push({timestamp:`2026-06-01T${hour}:00:00.000Z`,channel:{id:JSON.stringify([id,measurement]),equipmentId:id,measurement,unit},value});
+  await f.commit(rows);f=await f.reopen();
+  const canonicalBefore=JSON.stringify([...f.store.rows()]);
+  const started=await control(f,'reanalyze'),start=await started.json();assert.equal(started.status,202,JSON.stringify(start));
+  const runId=start.progress.attemptId,stages=[];let result;
+  for(let i=0;i<16;i++){
+    f=await f.reopen();stages.push(f.db.sqlite.prepare('SELECT stage FROM analysis_jobs WHERE attempt_id=?').get(runId).stage);
+    const response=await browse(f);result=await response.json();assert.ok(response.ok,JSON.stringify(result));
+    assert.notEqual(result.progress?.status,'failed',JSON.stringify(result));if(response.status!==202)break;
+  }
+  assert.equal(result.hasData,true,JSON.stringify(result));assert.equal(result.issueDatabase.analysisRunId,runId);
+  for(const stage of ['read','equipment','reconcile','save','finalize'])assert.ok(stages.includes(stage),JSON.stringify(stages));
+  assert.equal(f.db.sqlite.prepare('SELECT status FROM analysis_runs WHERE id=?').get(runId).status,'completed');
+  const pointer=JSON.parse(f.db.sqlite.prepare("SELECT summary FROM performance_summaries WHERE site_id='site'").get().summary);
+  assert.equal(pointer.analysisRunId,runId);
+  const raw=Buffer.from(await(await f.bucket.get(pointer.objectKey)).arrayBuffer());
+  f=await f.reopen();
+  const currentResponse=await browse(f),current=await currentResponse.json();assert.equal(currentResponse.status,200);assert.deepEqual(current.analysis,result.analysis);
+  const stored=await checkpointStorage.readCheckpoint(await f.bucket.get(pointer.objectKey));
+  const {saved:historyService}=publicationClients(f);
+  const historyApi=loadSource('app/api/analysis-history/route.ts',[],{...modelCapacityBindings(),...f.data,...historyService,...checkpointStorage});
+  const historyResponse=await historyApi.GET(new Request(`https://test/api/analysis-history?siteId=site&runId=${runId}`));
+  const historical=await historyResponse.json();assert.equal(historyResponse.status,200,JSON.stringify(historical));
+  const target=payload=>payload.analysis.issues.find(i=>i.equipmentId==='inv'&&i.type==='Equipment outage');
+  const issue=target(current),retained=target(stored),past=target(historical);assert.ok(issue);assert.ok(retained);assert.ok(past);
+  // This is a delivered allocation of the supplied 80 kWh, not the terminal
+  // 40 / .9702 value, regardless of whether branch loss can be quantified.
+  for(const projection of [issue,retained,past]){
+    assert.equal(projection.id,issue.id);assert.equal(projection.expectedUnknown,false);assert.equal(projection.productionUnknown,false);
+    assert.equal(projection.lossUnknown,missingSibling);assert.equal(projection.actualEnergyKwh,0);
+    assert.ok(Math.abs(projection.expectedEnergyKwh-40)<1e-8,`expected 40 delivered kWh, got ${projection.expectedEnergyKwh}`);
+  }
+  for(const projection of [issue,past]){
+    assert.equal(projection.estimatedLossKwh,missingSibling?null:40);assert.equal(projection.lossPercent,missingSibling?null:100);
+  }
+  assert.equal(retained.estimatedLossKwh,missingSibling?0:40);assert.equal(current.analysis.totalLossKwh,missingSibling?0:40);
+  const interval=retained.intervalLosses[0];
+  assert.equal(interval.actualKwh,0);assert.ok(Math.abs(interval.expectedKwh-40)<1e-8);
+  assert.ok(Math.abs(interval.derivedInverterExpectedKwh-40/.9702)<1e-8,'terminal allocation evidence is retained');
+  assert.equal(retained.evidence.siteDeliveryFactor,.9702);
+  if(missingSibling){assert.equal(interval.lossUnknown,true);assert.equal(interval.lossKwh,0);assert.equal(interval.lossUnavailableReason,'branch_actual_coverage');}
+  else {assert.equal(interval.lossBoundary,'meter_poi');assert.ok(Math.abs(interval.inverterTerminalLossKwh-40/.9702)<1e-8);}
+  assert.equal(f.db.sqlite.prepare('SELECT estimated_loss_kwh FROM performance_issue_occurrences WHERE analysis_run_id=? AND source_issue_id=?').get(runId,issue.id).estimated_loss_kwh,missingSibling?null:40);
+  const summary=await f.api.buildSummary(f.record,f.equipment);
+  assert.deepEqual(JSON.parse(JSON.stringify(summary.expectedProduction)),[10,11,12,13].map(hour=>({timestamp:`2026-06-01T${hour}:00:00.000Z`,energyKwh:80})));
+  assert.equal(JSON.stringify([...f.store.rows()]),canonicalBefore,'analysis and reads never rewrite the supplied site reference');
+  assert.deepEqual(Buffer.from(await(await f.bucket.get(pointer.objectKey)).arrayBuffer()),raw,'reads preserve completed result bytes');
+  t.diagnostic(JSON.stringify({missingSibling,stages,expectedKwh:issue.expectedEnergyKwh,actualKwh:issue.actualEnergyKwh,lossKwh:issue.estimatedLossKwh,storedExpectedKwh:retained.expectedEnergyKwh,historicalExpectedKwh:past.expectedEnergyKwh}));
+});
+
+for(const scenario of ['complete-transformer','missing-module-dc','missing-transformer-rating','legacy-missing-module-dc'])test(`accepted allocation draft: ${scenario} saves and reopens measured outages`,async t=>{
+  let f=await canonicalFixture(t);
+  const schema=loadSource('db/schema.ts',[],{sql,...sqliteCore}),capacity=modelCapacityBindings();
+  const equipmentApi=loadSource('app/api/equipment/route.ts',[],{...schema,...capacity,eq,asc,inArray,getDb:()=>drizzle(f.db),getDatabaseBinding:()=>f.db,Error,TypeError});
+  const assets=[{id:'meter',name:'Meter',externalId:'meter',type:'revenue_meter'},
+    {id:'tx',name:'Transformer',externalId:'tx',type:'transformer',parentId:'meter',nameplateKva:'200'},
+    ...['inv','invB'].flatMap((id,index)=>[{id,name:`Inverter ${index+1}`,externalId:id,type:'inverter',parentId:'tx',acRatedCapacityKw:'100'},
+      {id:`modules-${id}`,name:`Modules ${index+1}`,externalId:`modules-${id}`,type:'module_group',parentId:id,moduleRatedCapacityW:'400',quantity:250}])];
+  if(scenario.includes('missing-module-dc'))assets.find(a=>a.id==='modules-inv').moduleRatedCapacityW='';
+  if(scenario==='missing-transformer-rating')assets.find(a=>a.id==='tx').nameplateKva='';
+  if(scenario.startsWith('legacy')){
+    assets.splice(assets.findIndex(a=>a.id==='tx'),1);
+    assets.filter(a=>a.type==='inverter').forEach(a=>{a.parentId='meter';});
+  }
+  const save=await equipmentApi.PUT(new Request('https://test/api/equipment',{method:'PUT',body:JSON.stringify({siteId:'site',equipment:assets,verified:false})}));
+  const saved=await save.json();assert.equal(save.status,200,JSON.stringify(saved));assert.equal(saved.verified,false);
+  f=await f.reopen();
+  const readback=await equipmentApi.GET(new Request('https://test/api/equipment?siteId=site'));
+  assert.equal(readback.status,200);assert.deepEqual((await readback.json()).equipment,saved.equipment);
+  const quantified=scenario==='complete-transformer';
+  assert.equal(capacity.inverterExpectationModel(f.equipment).ready,quantified);
+  const rows=[];
+  // The separate full-site outage proves that a known site reference is not
+  // lost merely because the preceding inverter outage cannot be allocated.
+  for(const hour of [10,11,12,13,14])for(const [id,measurement,value,unit] of [
+    ['meter','Energy',hour===14?0:hour===11?40:80,'kWh'],['inv','Energy',[11,14].includes(hour)?0:40,'kWh'],
+    ['invB','Energy',hour===14?0:40,'kWh'],['meter','POA irradiance',600,'W/m2'],['@site','Expected Production',80,'kWh'],
+  ])rows.push({timestamp:`2026-06-01T${hour}:00:00.000Z`,channel:{id:JSON.stringify([id,measurement]),equipmentId:id,measurement,unit},value});
+  await f.commit(rows);f=await f.reopen();
+  const started=await control(f,'reanalyze'),start=await started.json();assert.equal(started.status,202,JSON.stringify(start));
+  const runId=start.progress.attemptId,stages=[];let result;
+  for(let i=0;i<16;i++){
+    f=await f.reopen();
+    stages.push(f.db.sqlite.prepare('SELECT stage FROM analysis_jobs WHERE attempt_id=?').get(runId).stage);
+    const response=await browse(f);result=await response.json();assert.ok(response.ok,JSON.stringify(result));
+    assert.notEqual(result.progress?.status,'failed',JSON.stringify(result));
+    if(response.status!==202)break;
+  }
+  assert.equal(result.hasData,true,JSON.stringify(result));assert.equal(result.issueDatabase.analysisRunId,runId);
+  for(const stage of ['read','equipment','reconcile','save','finalize'])assert.ok(stages.includes(stage),JSON.stringify(stages));
+  const before=await retainedSnapshot(f,runId);
+  assert.equal(before.run.status,'completed');assert.equal(JSON.parse(before.pointer[0].summary).analysisRunId,runId);
+  f=await f.reopen();
+  const reopened=await(await browse(f)).json();assert.deepEqual(reopened.analysis,result.analysis);
+  const inverter=reopened.analysis.issues.find(i=>i.equipmentId==='inv'&&i.type==='Equipment outage');
+  const site=reopened.analysis.issues.find(i=>i.type==='Site outage');assert.ok(inverter);assert.ok(site);
+  assert.equal(inverter.actualEnergyKwh,0);assert.equal(inverter.productionUnknown,false);
+  assert.equal(inverter.expectedUnknown,!quantified);assert.equal(inverter.lossUnknown,!quantified);
+  assert.equal(inverter.expectedEnergyKwh,quantified?40:null);assert.equal(inverter.estimatedLossKwh,quantified?40:null);
+  assert.equal(site.actualEnergyKwh,0);assert.equal(site.productionUnknown,false);assert.equal(site.expectedUnknown,false);
+  assert.equal(site.expectedEnergyKwh,80);assert.equal(site.estimatedLossKwh,80);assert.equal(site.lossUnknown,false);
+  assert.equal(reopened.analysis.totalLossKwh,quantified?120:80,'site/child loss is counted once');
+  assert.equal(reopened.analysis.issues.length,2);
+  const detail=await(await browse(f,`&issueId=${encodeURIComponent(inverter.id)}`)).json();
+  assert.equal(detail.issue.actualEnergyKwh,0);assert.equal(detail.issue.expectedEnergyKwh,quantified?40:null);
+  assert.equal(detail.issue.estimatedLossKwh,quantified?40:null);assert.equal(detail.issue.evidence.lossUnknown,!quantified);
+  assert.equal(f.db.sqlite.prepare('SELECT estimated_loss_kwh FROM performance_issue_occurrences WHERE analysis_run_id=? AND source_issue_id=?').get(runId,inverter.id).estimated_loss_kwh,quantified?40:null);
+  assert.deepEqual(await retainedSnapshot(f,runId),before,'reopening and details preserve saved evidence and publication');
+  assert.equal([...f.store.rows()].length,rows.length);
+  t.diagnostic(JSON.stringify({scenario,equipmentSaveStatus:save.status,stages,inverterLoss:inverter.estimatedLossKwh,inverterActual:inverter.actualEnergyKwh,siteExpected:site.expectedEnergyKwh}));
+});
+
+async function retainedCsvFixture(t,bindings={}) {
+  const root=mkdtempSync(join(tmpdir(),'retained-csv-'));
+  const db=new LocalDatabase(join(root,'shared.sqlite'),'drizzle'),bucket=new LocalBucket(db,join(root,'objects'));
+  t.after(()=>{db.close();rmSync(root,{recursive:true,force:true});});
+  const equipment=[{id:'meter',name:'Meter',type:'revenue_meter',externalId:'meter',aliases:'[]'},
+    {id:'inv',name:'Inverter',type:'inverter',parentId:'meter',externalId:'inv',acRatedCapacityKw:'100',aliases:'[]'},
+    {id:'modules',name:'Modules',type:'module_group',parentId:'inv',externalId:'modules',moduleRatedCapacityW:'500',quantity:200,aliases:'[]'}];
+  const csv='time,meter,inv,sun,expected\n2026-06-01T10:00Z,50,50,600,50\n2026-06-01T11:00Z,0,0,600,50\n2026-06-01T12:00Z,0,0,600,50\n2026-06-01T13:00Z,50,50,600,50';
+  const record={id:'csv-response-race',siteId:'site',objectKey:'upload.csv',fileName:'synthetic.csv',fileSize:Buffer.byteLength(csv),rowCount:4,validRows:4,detectedTypes:'[]',timezone:'UTC',
+    validation:JSON.stringify({intervalMinutes:60}),mapping:JSON.stringify({roles:{timestamp:'time',expectedProduction:'expected'},equipment:{signals:[
+      ...['meter','inv'].map(id=>({column:id,equipmentId:id,measurement:'Energy'})),{column:'sun',equipmentId:'meter',measurement:'POA irradiance'}]}})};
+  const schema=loadSource('db/schema.ts',[],{sql,...sqliteCore}),orm=drizzle(db);
+  await orm.insert(schema.siteSettings).values({id:'site',name:'Retained CSV response fixture'});
+  await orm.insert(schema.equipmentAssets).values(equipment.map(a=>({...a,siteId:'site'})));
+  await orm.insert(schema.telemetryImports).values(record);await bucket.put(record.objectKey,csv);
+  return analysisApi(csv,equipment,record,null,null,{db,bucket,bindings:{...schema,eq,desc,getDb:()=>orm,...bindings}});
+}
+
+function responseGate() {
+  let enter,release;
+  const reached=new Promise(resolve=>{enter=resolve;}),wait=new Promise(resolve=>{release=resolve;});
+  return {reached,release,async hold(){enter();await wait;}};
+}
+async function awaitResponseGate(gate,pending) {
+  let timer;
+  try {
+    await Promise.race([gate.reached,pending.then(response=>assert.fail(`Request returned ${response.status} before the response-preparation hold`)),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Response-preparation hold was not reached')),5000);})]);
+  } finally {clearTimeout(timer);}
+}
+async function deleteCompletedPublication(f,runId) {
+  const deletion=loadSource('app/api/analysis-history/deletion.ts',[],{Error,TypeError,getDatabaseBinding:()=>f.db});
+  const receipt=await deletion.deleteSavedAnalysis('site',runId);
+  assert.deepEqual(JSON.parse(JSON.stringify(receipt)),{deleted:true,siteId:'site',runId,currentCleared:true});
+  assert.equal(f.db.sqlite.prepare('SELECT status FROM analysis_runs WHERE id=?').get(runId).status,'deleted');
+  assert.equal(f.db.sqlite.prepare('SELECT count(*) n FROM performance_summaries WHERE site_id=?').get('site').n,0);
+  assert.equal(f.db.sqlite.prepare('SELECT count(*) n FROM analysis_jobs WHERE attempt_id=?').get(runId).n,0);
+  return receipt;
+}
+async function assertDeletedResponse(response,explicit) {
+  assert.equal(response.status,explicit?404:200);
+  assert.match(response.headers.get('cache-control'),/private, no-store/);
+  assert.equal(response.headers.get('etag'),null,'a deleted run must not authorize cached reuse');
+  const data=await response.json();assert.notEqual(data.hasData,true,JSON.stringify(data));
+  assert.equal(data.issue,undefined);assert.equal(data.issueDatabase,undefined);
+  if(explicit)assert.equal(data.error,'Analysis attempt not found.');
+  else assert.equal(data.analysisRequired,true,JSON.stringify(data));
+}
+
+for(const boundary of ['eligible-304','display-write','status-head','legacy-evidence','final-etag','result-read'])for(const explicit of [false,true])test(`late deletion fences ${boundary} ${explicit?'explicit attempt':'current publication'}`,async t=>{
+  const held=responseGate();let armed=false,tagCalls=0,heldInput='',pending,settled=false;
+  const crypto={randomUUID:webcrypto.randomUUID.bind(webcrypto),subtle:{digest:async(algorithm,bytes)=>{
+    const result=await webcrypto.subtle.digest(algorithm,bytes),input=new TextDecoder().decode(bytes);
+    if(armed&&['eligible-304','final-etag'].includes(boundary)&&input.includes('display-v6-outage-only')){
+      tagCalls++;
+      if(tagCalls===(boundary==='final-etag'?2:1)){armed=false;heldInput=input;await held.hold();}
+    }
+    return result;
+  }}};
+  const f=boundary==='display-write'?await canonicalFixture(t):await retainedCsvFixture(t,{crypto});
+  const completed=await finish(f),runId=completed.issueDatabase.analysisRunId,root=`analysis/site/jobs/${runId}`;
+  assert.ok(completed.analysis.issues.length>0);assert.equal(completed.hasData,true);
+  const resultKey=`${root}/result.json`,evidenceKey=`${root}/legacy-evidence.json`;
+  const get=f.bucket.get.bind(f.bucket),put=f.bucket.put.bind(f.bucket),head=f.bucket.head.bind(f.bucket);
+  if(boundary==='legacy-evidence'){
+    // Compatibility fixture: retain the real completed calculation, but encode
+    // its detail in the older per-issue evidence layout before taking snapshots.
+    const object=await get(resultKey),payload=await checkpointStorage.readCheckpoint(object);
+    const issue=payload.analysis.issues[0];await put(evidenceKey,JSON.stringify({...issue.evidence,intervalLosses:issue.intervalLosses}));
+    issue.evidence={evidenceKey};await checkpointStorage.writeCheckpoint(f.bucket,resultKey,payload,{customMetadata:object.customMetadata});
+    await f.bucket.delete('analysis/site/display.json');
+  }
+  const query=(explicit?`&attemptId=${runId}`:'')+(boundary==='status-head'?'&statusOnly=1':boundary==='legacy-evidence'?`&issueId=${encodeURIComponent(completed.analysis.issues[0].id)}`:'');
+  const initial=await browse(f),etag=initial.headers.get('etag');await initial.json();
+  if(boundary!=='display-write'){
+    assert.ok(etag);
+    const control=await f.api.GET(new Request(`https://test/api/performance-summary?siteId=site${explicit?`&attemptId=${runId}`:''}`,{headers:{'If-None-Match':etag}}));
+    assert.equal(control.status,304,'the unchanged real CSV publication is genuinely ETag eligible');
+    assert.match(control.headers.get('cache-control'),/private, no-cache/);
+  }
+  if(['display-write','result-read'].includes(boundary))await f.bucket.delete('analysis/site/display.json');
+  const before=await retainedSnapshot(f,runId);
+  f.bucket.head=async(key,...args)=>{const result=await head(key,...args);if(armed&&boundary==='status-head'&&key===resultKey){armed=false;await held.hold();}return result;};
+  f.bucket.get=async(key,...args)=>{const result=await get(key,...args);if(armed&&((boundary==='legacy-evidence'&&key===evidenceKey)||(boundary==='result-read'&&key===resultKey))){armed=false;await held.hold();}return result;};
+  f.bucket.put=async(key,...args)=>{if(armed&&boundary==='display-write'&&key==='analysis/site/display.json'){armed=false;await held.hold();}return put(key,...args);};
+  try {
+    armed=true;
+    pending=f.api.GET(new Request(`https://test/api/performance-summary?siteId=site${query}`,{headers:boundary==='eligible-304'?{'If-None-Match':etag}:{}}));
+    pending.then(()=>{settled=true;},()=>{settled=true;});
+    await awaitResponseGate(held,pending);assert.equal(settled,false,'the public request is actually held in flight');
+    if(['eligible-304','final-etag'].includes(boundary))assert.ok(heldInput.includes('display-v6-outage-only'));
+    const receipt=await deleteCompletedPublication(f,runId);
+    assert.equal(settled,false,'deletion committed before response preparation resumes');
+    held.release();
+    const late=await pending;await assertDeletedResponse(late,explicit);
+    const fresh=await f.api.GET(new Request(`https://test/api/performance-summary?siteId=site${query}`,{headers:etag?{'If-None-Match':etag}:{}}));
+    await assertDeletedResponse(fresh,explicit);
+    await assertDeletedResponse(await browse(f,`&progressOnly=1&attemptId=${runId}`),true);
+    const after=await retainedSnapshot(f,runId);
+    assert.deepEqual(after.result,before.result);assert.deepEqual(after.index,before.index);
+    assert.equal(after.run.status,'deleted');assert.equal(after.pointer.length,0);assert.equal(after.occurrences.length,0);
+    t.diagnostic(JSON.stringify({boundary,explicit,heldInFlight:true,deletion:receipt,lateStatus:late.status,freshStatus:fresh.status,tagCalls}));
+  } finally {
+    armed=false;held.release();
+    if(pending)await pending.catch(()=>{});
+    f.bucket.get=get;f.bucket.put=put;f.bucket.head=head;
+  }
 });

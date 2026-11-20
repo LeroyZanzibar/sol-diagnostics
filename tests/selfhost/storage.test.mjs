@@ -68,3 +68,32 @@ test('synchronous shared snapshot refuses async callbacks, releases failed guard
  await db.prepare("INSERT INTO site_settings(id,name) VALUES ('after','After failures')").run();
  assert.equal(db.withSynchronousRead(read=>read.first("SELECT name FROM site_settings WHERE id='after'").name),'After failures');
 });
+
+test('synchronous shared writer commits admission and changes atomically, blocks competing writers, and revokes handles',async t=>{
+ const {db,root}=fixture(t),other=new LocalDatabase(join(root,'db.sqlite'),resolve('drizzle'));t.after(()=>other.close());other.sqlite.exec('PRAGMA busy_timeout=1');
+ let handle,ran=false,queued,reentrant;
+ const receipt=db.withSynchronousWrite(tx=>{
+  handle=tx;assert.equal(tx.first("SELECT id FROM site_settings WHERE id='site'"),null);
+  assert.equal(tx.run('INSERT INTO site_settings(id,name) VALUES (?,?)','site','Committed').changes,1);
+  assert.equal(tx.all('SELECT id FROM site_settings').length,1);
+  assert.throws(()=>other.sqlite.exec('BEGIN IMMEDIATE'),/locked/);
+  assert.throws(()=>db.withSynchronousRead(()=>1),/active/);
+  assert.throws(()=>db.withSynchronousWrite(()=>1),/active/);
+  reentrant=db.prepare("UPDATE site_settings SET name='Reentrant'").run();
+  queued=Promise.resolve().then(()=>{ran=true;return other.prepare("UPDATE site_settings SET name='Next writer'").run();});
+  assert.equal(ran,false);return {id:'site'};
+ });
+ assert.deepEqual(receipt,{id:'site'});assert.equal(ran,false);assert.throws(()=>handle.first('SELECT 1'),/no longer active/);
+ await assert.rejects(reentrant,/active synchronous writer/);await queued;assert.equal((await db.prepare("SELECT name FROM site_settings WHERE id='site'").first()).name,'Next writer');
+});
+
+test('synchronous shared writer rejects async callbacks and rolls back throws or thenable results',async t=>{
+ const {db}=fixture(t);let entered=false,handle;
+ assert.throws(()=>db.withSynchronousWrite(async()=>{entered=true;}),/synchronous/);assert.equal(entered,false);
+ assert.throws(()=>db.withSynchronousWrite(tx=>{handle=tx;tx.run("INSERT INTO site_settings(id,name) VALUES ('site','Rolled back')");throw Error('injected');}),/injected/);
+ assert.equal(await db.prepare('SELECT id FROM site_settings').first(),null);assert.throws(()=>handle.run("DELETE FROM site_settings"),/no longer active/);
+ assert.throws(()=>db.withSynchronousWrite(tx=>{tx.run("INSERT INTO site_settings(id,name) VALUES ('site','Rolled back too')");return Promise.resolve(1);}),/synchronous/);
+ assert.equal(await db.prepare('SELECT id FROM site_settings').first(),null);
+ db.withSynchronousWrite(tx=>tx.run("INSERT INTO site_settings(id,name) VALUES ('site','After rollback')"));
+ assert.equal((await db.prepare('SELECT name FROM site_settings').first()).name,'After rollback');
+});

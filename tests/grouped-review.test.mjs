@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {DatabaseSync} from 'node:sqlite';
-import {readFileSync,readdirSync} from 'node:fs';
+import {reviewDatabase} from './analysis-deletion-fixture.mjs';
 import * as XLSX from 'xlsx';
-import {loadSource} from './source-module.mjs';
+import {loadSource as sourceModule} from './source-module.mjs';
+const availability={...sourceModule('app/api/analysis-history/availability.ts',[],{Error}),...sourceModule('app/issue-visibility.ts'),...sourceModule('app/data-freshness.ts')};
+const loadSource=(path,names=[],bindings={})=>sourceModule(path,names,{Error,TypeError,...availability,...(bindings.savedAnalysis?{reviewedAnalysisBaseline:bindings.savedAnalysis}:{}),...bindings});
 const time=loadSource('app/telemetry-time.ts'),review=loadSource('app/issue-review.ts'),group=loadSource('app/review-groups.ts',[],time);
-function database(){const sqlite=new DatabaseSync(':memory:');for(const f of readdirSync('drizzle').filter(f=>f.endsWith('.sql')).sort())sqlite.exec(readFileSync(`drizzle/${f}`,'utf8'));let reads=0,maxBatch=0;const prepare=(sql,v=[])=>({bind(...values){return prepare(sql,values)},async run(){return {meta:{changes:sqlite.prepare(sql).run(...v).changes}}},async first(){reads++;return sqlite.prepare(sql).get(...v)||null},async all(){reads++;return {results:sqlite.prepare(sql).all(...v)}}});return {sqlite,prepare,get reads(){return reads},get maxBatch(){return maxBatch},async batch(items){maxBatch=Math.max(maxBatch,items.length);sqlite.exec('BEGIN');try{for(const item of items)await item.run();sqlite.exec('COMMIT');}catch(e){sqlite.exec('ROLLBACK');throw e;}}};}
+const database=()=>reviewDatabase(['run','old']);
 const issue=(id,day=1,patch={})=>({id,eventKey:`key-${id}`,evidenceSignature:`sig-${id}`,equipmentId:'inv',equipmentName:'Inverter A',equipmentType:'inverter',type:'Underperformance',category:'Performance',name:'Underperformance',timezone:'America/New_York',startDateTime:`2026-06-${String(day).padStart(2,'0')}T12:00:00.000Z`,endDateTime:`2026-06-${String(day).padStart(2,'0')}T14:00:00.000Z`,estimatedLossKwh:10,actualEnergyKwh:90,expectedEnergyKwh:100,intervalLosses:[{timestamp:`2026-06-${String(day).padStart(2,'0')}T12:00:00.000Z`,lossKwh:10,actualKwh:90,expectedKwh:100}],...patch});
 const basis={calculationVersion:25,modelRevision:'model'};
 function bulkApi(db,issues,old=issues){const savedAnalysis=async(site,run)=>{if(site!=='site'||!['run','old'].includes(run))throw new Error('Analysis not found');return {reviewCalculationBasis:basis,analysis:{issues:structuredClone(run==='old'?old:issues)}}};const service=loadSource('app/api/issue-reviews/service.ts',[],{...review,savedAnalysis});return {...service,...loadSource('app/api/issue-reviews/bulk/route.ts',[],{...review,...service,blankReview:review.blankReview,savedAnalysis,getDatabaseBinding:()=>db})};}
@@ -20,7 +21,7 @@ test('recurring groups preserve separate dates, equipment identity, unknown loss
 test('bulk confirmation and classification touch only explicit findings, append audit notes and retry without duplication',async()=>{
  const db=database(),items=[issue('a'),issue('b',2),issue('untouched',4)],copy=structuredClone(items),api=bulkApi(db,items);
  const body=input(items.slice(0,2),{confirm:true,classification:'Fuse Failure',note:'Same confirmed fuse fault on these dates.'});
- let response=await post(api,body),data=await response.json();assert.equal(response.status,200);assert.equal(data.results.length,2);assert.ok(data.results.every(r=>r.review.state.status==='Confirmed'&&r.review.state.classification==='Fuse Failure'));assert.equal(db.reads,3);assert.equal(db.maxBatch,4);
+ let response=await post(api,body),data=await response.json();assert.equal(response.status,200);assert.equal(data.results.length,2);assert.ok(data.results.every(r=>r.review.state.status==='Confirmed'&&r.review.state.classification==='Fuse Failure'));assert.equal(db.reads,4,'Includes completed-run admission under the writer lock');assert.equal(db.maxBatch,4);
  assert.equal(db.sqlite.prepare('SELECT count(*) n FROM issue_event_reviews').get().n,2);assert.equal(db.sqlite.prepare('SELECT count(*) n FROM issue_review_changes').get().n,2);
  response=await post(api,body);data=await response.json();assert.ok(data.results.every(r=>r.replayed));assert.equal(db.sqlite.prepare('SELECT count(*) n FROM issue_review_changes').get().n,2);assert.deepEqual(items,copy);assert.equal(db.sqlite.prepare('SELECT count(*) n FROM performance_issue_occurrences').get().n,0);
 });

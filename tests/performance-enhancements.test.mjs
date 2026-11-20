@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { loadSource, makeAnalysisFixture , modelCapacityBindings} from "./source-module.mjs";
 
 const checkpointStorage = loadSource("app/api/performance-summary/checkpoint-storage.ts");
@@ -14,15 +15,11 @@ const analysis = loadSource(routePath, ["buildAnalysis", "arrayModelRevision"], 
 const csv = loadSource("app/telemetry-csv.ts", [], {...modelCapacityBindings(),...(loadSource("app/telemetry-time.ts"))});
 
 test("analysis regression covers gaps, outages, attribution and imported weather-adjusted expectations", () => {
-  // Snapshots include cross-checked telemetry events and clipped child intervals.
-  // Scenario tests verify classifications; these also enforce loss conservation.
-  // Parser 28 groups recurring findings within five calendar days without changing loss.
-  // Snapshots include the new attribution methodology. Meter/outage and
-  // missing-reading scenarios are also checked independently in scenario tests.
+  // Outage-only result snapshots follow independently asserted scenario and ledger-conservation tests.
   const cases = [
-    [[3, 2, 0], "a028126768082d7a677e7f3fa59b94cd8c208a9aa71adc418bf53beaf5b3043b",1588.8],
-    [[50, 4, 0], "c824064d78259013338789057e0ef490948f42aa36c0b5d0962fe66c1a26e923",31961.492352],
-    [[90, 8, 3], "55f3f99c66c9a6fe45f162b9d25c41d3765e3dc8a9db6943297fec7cca8d6644",107160.88384492967],
+    [[3, 2, 0], "5d5b51af17990c539eae4c6939b13a22fc23ca79bc45692913ac15002dd9f12d", 1588.8],
+    [[50, 4, 0], "fb2787e0c6438a9bd8f15ba23521547de41af09f169258c0c4f29f829ed28346", 22183.200000000004],
+    [[90, 8, 3], "d64c38477895747c2008a5558936a4f798fd74dea2023f7679cfc1b24e80cc18", 72912],
   ];
   for (const [args, expected, total] of cases) {
     const fixture = makeAnalysisFixture(...args);
@@ -32,25 +29,34 @@ test("analysis regression covers gaps, outages, attribution and imported weather
     assert.ok(Math.abs(counted - result.totalLossKwh) < 1e-6);
     assert.ok(result.issues.filter(issue => issue.lossUnknown).every(issue => issue.estimatedLossKwh === 0));
     assert.ok(Math.abs(result.totalLossKwh-total)<1e-7);
+    assert.equal(result.issues.some(issue=>issue.type==='Underperformance'),false);
+    assert.equal(result.recurringIssues.length,0);
     assert.equal(createHash("sha256").update(JSON.stringify(result)).digest("hex"), expected);
   }
 });
 
-async function storedApi(parserVersion = 28) {
+async function storedApi(parserVersion = 29) {
   const { summary, equipment } = makeAnalysisFixture(20, 3);
   const revision = await analysis.arrayModelRevision(equipment);
   const record = { id: "import-1", siteId: "site-1", createdAt: "2026-01-01", timezone: "UTC", validation: "{}" };
   const payload = { siteId: "site-1", importId: record.id, parserVersion, modelRevision: revision, timeZone: "UTC",
     issueDatabase: { analysisRunId: "run-1", persistedIssueCount: 10 },
     summary: { dailyProduction: [{ date: "2026-01-01", energyKwh: 500 }], totalEnergyKwh: 500 },
-    analysis: analysis.buildAnalysis(summary, equipment) };
+    methodology: {calculationVersion:parserVersion}, analysis: analysis.buildAnalysis(summary, equipment) };
   let threshold = "", job = null;
   const reads = [], writes = [];
   const objects = new Map();
   objects.set("analysis/site-1/current.json", { text: JSON.stringify(payload), etag: "full-1", customMetadata: {
     siteId: "site-1", importId: record.id, parserVersion: String(parserVersion), modelRevision: revision,
   } });
-  const tables = { sites: [{ id: "site-1" }], imports: [record], equipment, pointers: [] };
+  const tables = { sites: [{ id: "site-1" }], imports: [record], equipment, pointers: [{importId:record.id,siteId:record.siteId,
+    summary:JSON.stringify({parserVersion,modelRevision:revision,objectKey:'analysis/site-1/current.json',analysisRunId:'run-1'})}] };
+  const sqlite=new DatabaseSync(':memory:');
+  sqlite.exec("CREATE TABLE analysis_runs(id TEXT,site_id TEXT,import_id TEXT,status TEXT,analysis_object_key TEXT)");
+  sqlite.prepare('INSERT INTO analysis_runs VALUES(?,?,?,?,?)').run('run-1','site-1',record.id,'completed','analysis/site-1/current.json');
+  const database={prepare(query){const statement=(values=[])=>({bind(...next){return statement(next);},
+    async first(){return query.includes('analysis_jobs')?job:query.includes('user_settings')?{minimum_issue_loss_kwh:threshold}:sqlite.prepare(query).get(...values)||null;},
+    async all(){return {results:sqlite.prepare(query).all(...values)};}});return statement();}};
   const db = { select() {
     let table;
     const query = { from(value) { table = value; return query; }, where() { return query; }, orderBy() { return query; },
@@ -61,7 +67,7 @@ async function storedApi(parserVersion = 28) {
     ...checkpointStorage, ...causes, monthlyLosses: loadSource("app/issue-periods.ts", [], time).monthlyLosses,
     siteSettings: "sites", telemetryImports: "imports", equipmentAssets: "equipment", performanceSummaries: "pointers",
     currentAnalysisInput:async()=>record, eq() {}, desc() {}, getDb: () => db,
-    getDatabaseBinding: () => ({ prepare: sql => ({ bind: () => ({ first: async () => sql.includes('analysis_jobs') ? job : ({ minimum_issue_loss_kwh: threshold }) }) }) }),
+    getDatabaseBinding: () => database,
     getBucketBinding: () => ({
       head: async key => objects.get(key) || null,
       get: async key => {
@@ -79,7 +85,7 @@ async function storedApi(parserVersion = 28) {
   const request = (query = "", etag = "") => api.GET(new Request(`https://example.test/api/performance-summary?siteId=site-1${query}`, {
     headers: etag ? { "If-None-Match": etag } : {},
   }));
-  return { request, payload, record, equipment, objects, reads, writes, setThreshold(value) { threshold = value; }, setJob(value) { job = value; } };
+  return { request, payload, record, equipment, objects, reads, writes, sqlite, pointers:tables.pointers, setThreshold(value) { threshold = value; }, setJob(value) { job = value; } };
 }
 
 test('terminal rerun metadata bypasses a prior result ETag without contaminating the retained compact snapshot',async()=>{
@@ -116,7 +122,7 @@ test("compact results preserve totals, retain evidence on demand, and avoid full
     assert.ok(Math.abs(total - (issue.estimatedLossKwh ?? 0)) < 1e-6);
   }
   assert.deepEqual(api.writes, ["analysis/site-1/display.json"]);
-  assert.equal(api.objects.get("analysis/site-1/display.json").customMetadata.displayVersion, "4");
+  assert.equal(api.objects.get("analysis/site-1/display.json").customMetadata.displayVersion, "5");
   assert.ok(JSON.parse(api.objects.get("analysis/site-1/current.json").text).analysis.issues[0].evidence);
   api.reads.length = 0;
   await api.request();
@@ -131,16 +137,14 @@ test("compact results preserve totals, retain evidence on demand, and avoid full
   assert.equal((await api.request("&issueId=nonexistent")).status, 404);
 });
 
-test("older cached analyses require explicit analysis instead of browse-triggered recalculation", async () => {
- for (const version of [19, 24]) {
-  const api = await storedApi(version);
-  const status = await (await api.request("&statusOnly=1")).json();
-  assert.equal(status.cacheStatus, "stale");
-  const response = await api.request();
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).analysisRequired, true);
-  assert.ok(!api.reads.includes("analysis/site-1/current.json"));
-  assert.equal(api.writes.length, 0);
+test("completed older snapshots remain readable without relabeling their method or modifying authoritative bytes", async () => {
+ for (const version of [19, 24, 28]) {
+  const api = await storedApi(version),before=api.objects.get('analysis/site-1/current.json').text;
+  const status = await (await api.request("&statusOnly=1")).json();assert.equal(status.cacheStatus,"stale");
+  const response = await api.request();assert.equal(response.status,200);
+  const result=await response.json();assert.equal(result.hasData,true);assert.equal(result.methodology.calculationVersion,version);
+  assert.equal(result.issueDatabase.analysisRunId,'run-1');assert.equal(api.objects.get('analysis/site-1/current.json').text,before);
+  assert.ok(api.writes.every(key=>key.endsWith('/display.json')));
  }
 });
 
@@ -157,7 +161,7 @@ test("an older compact display is regenerated with interval reporting evidence",
   const data = await (await api.request()).json();
   assert.ok(api.reads.includes("analysis/site-1/current.json"));
   assert.ok(data.analysis.issues.every(issue => Array.isArray(issue.intervalLosses) && issue.timezone === "UTC"));
-  assert.equal(api.objects.get("analysis/site-1/display.json").customMetadata.displayVersion, "4");
+  assert.equal(api.objects.get("analysis/site-1/display.json").customMetadata.displayVersion, "5");
 });
 
 test("threshold, import, model and source changes invalidate conditional results", async () => {
@@ -167,12 +171,14 @@ test("threshold, import, model and source changes invalidate conditional results
   const filtered = await api.request("", tag);
   assert.equal(filtered.status, 200);
   assert.notEqual(filtered.headers.get("ETag"), tag);
-  assert.ok((await filtered.json()).analysis.issues.every(issue => issue.category === "Communications"));
+  assert.ok((await filtered.json()).analysis.issues.every(issue => issue.category === "Communications" || issue.lossUnknown));
   api.record.id = "import-2";
-  assert.equal((await (await api.request("", tag)).json()).analysisRequired, true);
+  const changedImport=await api.request("",tag);assert.equal(changedImport.status,200);
+  assert.equal((await changedImport.json()).issueDatabase.analysisRunId,'run-1');
   api.record.id = "import-1";
   api.equipment[1].acRatedCapacityKw = "110";
-  assert.equal((await (await api.request("", tag)).json()).analysisRequired, true);
+  const changedModel=await api.request("",tag);assert.equal(changedModel.status,200);
+  assert.equal((await changedModel.json()).methodology.calculationVersion,29);
   api.equipment[1].acRatedCapacityKw = "100";
   api.objects.get("analysis/site-1/current.json").etag = "full-2";
   api.reads.length = 0;
@@ -254,4 +260,21 @@ test("failed uploads settle in-flight requests before cleanup and do not retry c
   await assert.rejects(upload.uploadCsvParts(new File([new Uint8Array(4 * 1024 * 1024)], "data.csv"), "upload-id", () => {}), /Invalid chunk/);
   assert.equal(active, 0);
   assert.equal(calls, 3);
+});
+
+
+test('eligible legacy early 304 is fenced by completed-run authority before cached data or status is served',async()=>{
+ for(const alteration of ['deleted','missing-pointer','wrong-import','ambiguous-legacy']){
+  const api=await storedApi(),first=await api.request(),etag=first.headers.get('etag');assert.ok(etag);await first.json();
+  assert.equal((await api.request('',etag)).status,304,'control genuinely exercises the early conditional branch');
+  if(alteration==='deleted')api.sqlite.prepare("UPDATE analysis_runs SET status='deleted'").run();
+  if(alteration==='missing-pointer')api.pointers.length=0;
+  if(alteration==='wrong-import'){const pointer=JSON.parse(api.pointers[0].summary);pointer.analysisRunId='other';api.pointers[0].summary=JSON.stringify(pointer);api.sqlite.prepare('INSERT INTO analysis_runs VALUES(?,?,?,?,?)').run('other','site-1','foreign-import','completed',pointer.objectKey);}
+  if(alteration==='ambiguous-legacy'){const pointer=JSON.parse(api.pointers[0].summary);delete pointer.analysisRunId;api.pointers[0].summary=JSON.stringify(pointer);api.sqlite.prepare('INSERT INTO analysis_runs VALUES(?,?,?,?,?)').run('alias','site-1','foreign-import','deleted',pointer.objectKey);}
+  api.reads.length=0;
+  const response=await api.request('',etag);assert.equal(response.status,200);assert.equal((await response.json()).analysisRequired,true,alteration);
+  assert.equal(response.headers.get('etag'),null);assert.deepEqual(api.reads,[],'rejected authority cannot load a derivative or orphan current.json');
+  assert.equal((await(await api.request('&statusOnly=1')).json()).cacheStatus,'stale');
+  assert.equal((await(await api.request('&issueId=anything')).json()).analysisRequired,true);
+ }
 });

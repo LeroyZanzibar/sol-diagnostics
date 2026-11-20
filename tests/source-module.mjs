@@ -3,8 +3,8 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { webcrypto } from "node:crypto";
 
-export function loadSource(path, names = [], bindings = {}) {
-  const original = readFileSync(path, "utf8");
+export function loadSource(path, names = [], bindings = {}, transform = source => source) {
+  const original = transform(readFileSync(path, "utf8"), path);
   const parsed = ts.createSourceFile(path, original, ts.ScriptTarget.Latest, true);
   const source = parsed.statements.filter(node => !ts.isImportDeclaration(node)).map(node => node.getFullText(parsed)).join("\n");
   const output = ts.transpileModule(source + `\nglobalThis.testExports = { ${names.join(",")} };`, {
@@ -26,7 +26,7 @@ export function modelCapacityBindings() {
   if (!capacityBindings) {
     const model=loadSource("app/array-capacity.ts");
     const time=loadSource("app/telemetry-time.ts"),periods=loadSource("app/issue-periods.ts",[],time);
-    capacityBindings={...model,...loadSource("app/recurring-issues.ts",[],{...time,...periods}),...loadSource("app/api/performance-summary/transformer-limits.ts",[],model),
+    capacityBindings={...loadSource("app/api/analysis-history/availability.ts"),...model,...loadSource("app/recurring-issues.ts",[],{...time,...periods}),...loadSource("app/api/performance-summary/transformer-limits.ts",[],model),
       ...loadSource("app/api/performance-summary/inverter-expectation.ts",[],model),
       ...loadSource("app/api/performance-summary/shared-underperformance.ts")};
   }

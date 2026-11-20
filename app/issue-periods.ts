@@ -23,10 +23,10 @@ export function calendarDayMoment(day: string, timezone = "UTC", zoned = true): 
   return low;
 }
 const wallMoment = (value: string, timezone: string, zoned: boolean) => calendarDayMoment(value.slice(0, 10), timezone, zoned);
-export type IntervalLoss = { timestamp: string; lossKwh: number; countedLossKwh?: number; intervalMinutes?: number; actualKwh?: number; expectedKwh?: number };
+export type IntervalLoss = { timestamp: string; lossKwh: number; countedLossKwh?: number; intervalMinutes?: number; actualKwh?: number; expectedKwh?: number; lossUnknown?: boolean; expectedUnknown?: boolean; productionUnknown?: boolean };
 export type PeriodLoss = { startDateTime: string; endDateTime: string; estimatedLossKwh: number | null };
 export type ReportRange = { from: string; through: string };
-type SourceIssue = { id: string; startDateTime: string; endDateTime: string; estimatedLossKwh: number | null; lossUnknown?: boolean; timezone?: string; intervalMinutes?: number; intervalLosses?: IntervalLoss[]; evidence?: Record<string, unknown> };
+type SourceIssue = { id: string; startDateTime: string; endDateTime: string; estimatedLossKwh: number | null; actualEnergyKwh?: number | null; expectedEnergyKwh?: number | null; lossUnknown?: boolean; expectedUnknown?: boolean; productionUnknown?: boolean; timezone?: string; intervalMinutes?: number; intervalLosses?: IntervalLoss[]; evidence?: Record<string, unknown> };
 const ledger = (issue: SourceIssue): IntervalLoss[] => issue.intervalLosses || (Array.isArray(issue.evidence?.intervalLosses) ? issue.evidence.intervalLosses as IntervalLoss[] : []);
 const intervalLength = (item: IntervalLoss, intervalMinutes: number) => item.intervalMinutes || intervalMinutes;
 const countedLoss = (item: IntervalLoss) => item.countedLossKwh ?? item.lossKwh;
@@ -35,6 +35,20 @@ function validLedger(issue: SourceIssue, intervalMinutes: number) {
   if (!items.length || items.some(item => !Number.isFinite(localMoment(item.timestamp)) || !Number.isFinite(countedLoss(item)) || countedLoss(item) < 0 || !(intervalLength(item, intervalMinutes) > 0))) return false;
   const total = items.reduce((sum, item) => sum + countedLoss(item), 0);
   return issue.estimatedLossKwh !== null && Math.abs(total - issue.estimatedLossKwh) <= Math.max(0.01, issue.estimatedLossKwh * 1e-8);
+}
+// Without quantified loss there is no loss-total check to establish ledger
+// completeness. Independently clipping energy needs full, nonoverlapping event
+// coverage as well as reconciliation to its own recorded energy total.
+function completeIntervalCoverage(issue: SourceIssue, intervalMinutes: number) {
+  const items = [...ledger(issue)].sort((a, b) => localMoment(a.timestamp) - localMoment(b.timestamp));
+  let cursor = localMoment(issue.startDateTime);
+  if (!items.length || !Number.isFinite(cursor)) return false;
+  for (const item of items) {
+    const left = localMoment(item.timestamp), length = intervalLength(item, intervalMinutes), right = left + length * 60000;
+    if (left !== cursor || !(length > 0) || !Number.isFinite(right)) return false;
+    cursor = right;
+  }
+  return cursor === localMoment(issue.endDateTime);
 }
 const nextDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
 export function reportRangeValid(range: ReportRange) { return !range.from || !range.through || range.from <= range.through; }
@@ -52,24 +66,37 @@ export function clipIssueToReport<T extends SourceIssue>(issue: T, range: Report
   if (start === originalStart && end === originalEnd) return issue;
   const minutes = issue.intervalMinutes || 0;
   const reliable = !issue.lossUnknown && validLedger(issue, minutes);
-  const clipped = ledger(issue).flatMap(item => {
+  const items = ledger(issue);
+  const energyCoverage = reliable || completeIntervalCoverage(issue, minutes);
+  const clipped = items.flatMap(item => {
     const left = localMoment(item.timestamp), right = left + intervalLength(item, minutes) * 60000;
     const overlapStart = Math.max(left, from), overlapEnd = Math.min(right, through);
     if (!(overlapEnd > overlapStart)) return [];
     const share = (overlapEnd - overlapStart) / (right - left);
     return [{ ...item, timestamp: stamp(overlapStart, zoned), intervalMinutes: (overlapEnd - overlapStart) / 60000,
       lossKwh: item.lossKwh * share, countedLossKwh: countedLoss(item) * share,
-      actualKwh: item.actualKwh === undefined ? undefined : item.actualKwh * share,
-      expectedKwh: item.expectedKwh === undefined ? undefined : item.expectedKwh * share }];
+      actualKwh: item.actualKwh == null ? item.actualKwh : item.actualKwh * share,
+      expectedKwh: item.expectedKwh == null ? item.expectedKwh : item.expectedKwh * share }];
   });
   const loss = issue.estimatedLossKwh === 0 && !issue.lossUnknown ? 0 : reliable ? clipped.reduce((sum, item) => sum + countedLoss(item), 0) : null;
-  const actual = reliable && clipped.every(item => Number.isFinite(item.actualKwh)) ? clipped.reduce((sum, item) => sum + (item.actualKwh || 0), 0) : null;
-  const expected = reliable && clipped.every(item => Number.isFinite(item.expectedKwh)) ? clipped.reduce((sum, item) => sum + (item.expectedKwh || 0), 0) : null;
+  const energy = (key: "actualKwh" | "expectedKwh", unknown: boolean | undefined, total: number | null | undefined) => {
+    const known = (item: IntervalLoss) => Number.isFinite(item[key]) && !(key === "actualKwh" ? item.productionUnknown : item.expectedUnknown);
+    if (unknown || !energyCoverage || !clipped.length || !clipped.every(known)) return null;
+    if (!reliable) {
+      if (typeof total !== "number" || !Number.isFinite(total) || !items.every(known)) return null;
+      const sum = items.reduce((value, item) => value + item[key]!, 0);
+      if (Math.abs(sum - total) > Math.max(0.01, Math.abs(total) * 1e-8)) return null;
+    }
+    return clipped.reduce((sum, item) => sum + item[key]!, 0);
+  };
+  const actual = energy("actualKwh", issue.productionUnknown, issue.actualEnergyKwh);
+  const expected = energy("expectedKwh", issue.expectedUnknown, issue.expectedEnergyKwh);
   const result = { ...issue, startDateTime: stamp(start, zoned), endDateTime: stamp(end, zoned),
     originalStart: issue.startDateTime, originalEnd: issue.endDateTime,
     reportClipped: true, durationMinutes: (end - start) / 60000,
     estimatedLossKwh: loss, lossUnknown: loss === null,
-    actualEnergyKwh: actual, expectedEnergyKwh: expected,
+    actualEnergyKwh: actual, productionUnknown: actual === null,
+    expectedEnergyKwh: expected, expectedUnknown: expected === null,
     lossPercent: loss !== null && expected !== null && expected > 0 ? loss / expected * 100 : null,
     intervalLosses: clipped, summaryPeriods: undefined,
     evidence: { ...issue.evidence, intervalLosses: clipped },

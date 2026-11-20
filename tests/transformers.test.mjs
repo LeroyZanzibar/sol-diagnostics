@@ -55,11 +55,14 @@ test('independent transformer caps, override toggle, DC limits and delivery loss
   assert.equal(m.pvCeilingKw,350);assert.equal(m.modeledGrossKw,250);near(m.gridExportKw,220.5);
 });
 
-test('incomplete transformer drafts block analysis; legacy models retain their capacity',()=>{
+test('incomplete transformer drafts preserve observed outages with unknown loss; legacy capacities remain',()=>{
   for(const change of [a=>a.find(a=>a.id==='i0').parentId=null,a=>a[1].nameplateKva='',a=>a[1].parentId=null,a=>{a[1].pvCeilingOverrideEnabled=true;},a=>a.find(a=>a.id==='m0').quantity=0]){
     const f=fixture(1);change(f.assets);const m=capacity.arrayCapacityModel(f.assets);
     assert.equal(m.complete,false);assert.equal(m.gridExportKw,null);
-    assert.throws(()=>engine.buildAnalysis(f.summary,f.assets),/Complete the transformer model/);
+    f.summary.equipmentProduction.find(p=>p.equipmentId==='i0').intervalProduction[0].energyKwh=0;
+    f.summary.equipmentProduction[0].intervalProduction[0].energyKwh=255;
+    const result=engine.buildAnalysis(f.summary,f.assets),outage=result.issues.find(i=>i.equipmentId==='i0'&&i.type==='Equipment outage');
+    assert.ok(outage);assert.equal(outage.lossUnknown,true);assert.equal(outage.estimatedLossKwh,0);
   }
   const a=model().filter(a=>a.type!=='transformer');a.filter(a=>a.type==='inverter').forEach(a=>a.parentId='meter');
   assert.equal(capacity.arrayCapacityModel(a).gridExportKw,400);
@@ -99,26 +102,27 @@ test('meter fallback caps each branch, preserves inverter readings, and requires
   }
 });
 
-test('normal transformer clipping cannot become a persistent peer anomaly',()=>{
+test('transformer clipping cannot create positive-output findings or change supplied expectations',()=>{
   const f=fixture();
   const raw=JSON.stringify(f.summary.equipmentProduction.map(p=>p.intervalProduction));
   const peerPlan=peers.compareCapacityPeers(f.summary,f.assets);
   assert.equal(peerPlan.findings.size,0,'capacity-inconsistent expected data cannot qualify peer references');
   const result=engine.buildAnalysis(f.summary,f.assets);
-  assert.equal(result.peerComparison.invertersWithRepeatedDeficits,0);
+  assert.equal(result.peerComparison,undefined);
+  assert.ok(!result.issues.some(i=>i.type==='Underperformance'));
   assert.equal(result.totalLossKwh,0);
   assert.equal(JSON.stringify(f.summary.equipmentProduction.map(p=>p.intervalProduction)),raw);
-  assert.equal(result.transformerLimits.cappedExpectedIntervals,16);
-  assert.equal(result.transformerLimits.excludedExpectedKwh,800);
-  assert.equal(result.inverterExpectation.expectedData.capacityConflict,16,'original expected data is checked before transformer capping');
+  assert.equal(result.transformerLimits.capacityConflictIntervals,16);
+  assert.equal(result.transformerLimits.cappedExpectedIntervals,undefined);
+  assert.equal(result.inverterExpectation.expectedData.capacityConflict,16,'original expected data is never capped');
 });
 
-test('site outage expected losses respect transformer ceiling at hourly and five-minute cadence',()=>{
+test('site outage losses use supplied expectation despite model conflicts at hourly and five-minute cadence',()=>{
   for(const minutes of [5,60]){
     const f=fixture(1,minutes);
     f.summary.equipmentProduction.forEach(p=>p.intervalProduction.forEach(p=>p.energyKwh=0));
     const result=engine.buildAnalysis(f.summary,f.assets);
-    near(result.totalLossKwh,350*4);
+    near(result.totalLossKwh,400*4);
     assert.ok(result.issues.every(p=>p.equipmentId==='meter'));
     near(result.issues.flatMap(i=>i.evidence.intervalLosses).reduce((s,p)=>s+(p.countedLossKwh??p.lossKwh),0),result.totalLossKwh);
   }

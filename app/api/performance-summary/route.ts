@@ -1,11 +1,9 @@
 import { readCheckpoint, writeCheckpoint, analysisJsonResponse } from "./checkpoint-storage";
-import {buildRecurringIssues,splitRecurringGaps,RECURRING_POLICY} from "../../recurring-issues";
-import { sharedReductionIntervals, allocateSharedReductions, SHARED_REDUCTION_METHOD } from "./shared-underperformance";
+import { isCompletedAnalysisRun, publishedAnalysisAvailable } from "../analysis-history/availability";
 import { arrayCapacityModel } from "../../array-capacity";
-import { inverterExpectationContext, INVERTER_EXPECTATION_METHOD, type InverterExpectationContext } from "./inverter-expectation";
-import { transformerAnalysisContext, transformerIntervalTotals, transformerPeerExclusions, limitTransformerLosses } from "./transformer-limits";
+import { inverterExpectationContext, type InverterExpectationContext } from "./inverter-expectation";
+import { transformerAnalysisContext, transformerIntervalTotals, limitTransformerLosses } from "./transformer-limits";
 import { meterMappingError } from "../../meter-mapping";
-import { compareCapacityPeers, PEER_METHOD, type PeerFinding, type PeerInterval } from "./peer-comparison";
 import { packSummary, unpackSummary, compactIssueEvidence, issueSaveIndex } from "./analysis-storage";
 import { currentAnalysisInput, readManifest } from "../data-history/service";
 import { canonicalAnalysisCsv, captureAnalysisProvenance, resumeAnalysisProvenance, analysisRevisionIsCurrent, legacyAnalysisInputIsCurrent, assessAnalysisFreshness } from "../performance-data/analysis";
@@ -13,7 +11,7 @@ import type { PerformanceAnalysisProvenance } from "../../../db/performance-stor
 import { historyCsv, decodeHistoryCells, type HistoryCell } from "../../data-history";
 import { issueEventKey, issueEvidenceSignature, defaultConfidence } from "../../issue-review";
 import { prepareTelemetry, reconcileTelemetry } from "./telemetry-events";
-import { attributeCauses, expectedAssumptions, type CauseSummary, type SuspectedCause } from "./causes";
+import { expectedAssumptions, type CauseSummary, type SuspectedCause } from "./causes";
 import { databaseErrorDetails } from "./database-errors";
 import { monthlyLosses } from "../../issue-periods";
 import { parseTelemetryTimestamp, inspectTelemetryTimestamp, localDate, isValidTimezone } from "../../telemetry-time";
@@ -78,6 +76,7 @@ type EquipmentProduction = {
 };
 type TelemetrySummary = Omit<CauseSummary, "intervalIrradiance" | "equipmentProduction"> & {
   parserVersion?: number;
+  methodId?: string;
   timezone?: string;
   timestampConvention?: "start" | "end";
   intervalMinutes?: number;
@@ -129,7 +128,6 @@ type IntervalAssessment = {
   type: IssueType;
   severity: Severity;
   rule?: string;
-  peer?: PeerInterval;
   derivedExpectedKwh?: number;
 };
 type PerformanceIssue = {
@@ -142,6 +140,7 @@ type PerformanceIssue = {
   intervalLosses?: IntervalLossEvidence[];
   sharedSourceEvents?: unknown;
   lossUnknown?: boolean;
+  expectedUnknown?: boolean;
   productionUnknown?: boolean;
   affectedEquipment?: { id: string; name: string }[];
   suspectedCause?: SuspectedCause;
@@ -183,9 +182,9 @@ type Accumulator = {
   productionSignalSeen: boolean;
 };
 
-const PARSER_VERSION = 28;
-// Recalculate current results once for five-day recurring issue grouping. Immutable
-// older analyses remain accessible through analysis history.
+const PARSER_VERSION = 29;
+const OUTAGE_METHOD_ID = "outage-only-v2";
+// Outage-only calculation identity. Completed older snapshots retain their identity.
 const supportedParser = (version: unknown) => Number(version) === PARSER_VERSION;
 const MIN_IRRADIANCE_WM2 = 50;
 
@@ -276,19 +275,8 @@ function timestampAt(moment: number, reference: string) {
 function siteDate(timestamp: string, timezone?: string) {
   return timezone && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(timestamp) ? localDate(timestamp, timezone) : timestamp.slice(0, 10);
 }
-function dayNumber(value: string) {
-  return Date.parse(`${value.slice(0, 10)}T00:00:00Z`);
-}
 function addMinutes(value: string, minutes: number) {
   return timestampAt(intervalNumber(value) + minutes * 60000, value);
-}
-function median(values: number[]) {
-  if (!values.length) return 0;
-  const ordered = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(ordered.length / 2);
-  return ordered.length % 2
-    ? ordered[middle]
-    : (ordered[middle - 1] + ordered[middle]) / 2;
 }
 function gapContainsOnlyLowIrradiance(
   previousTimestamp: string,
@@ -503,571 +491,72 @@ function siteDeliveryFactor(
   );
   return (1 - line / 100) * (1 - transformer / 100);
 }
-function applyRevenueMeterFallback(
-  production: EquipmentProduction[],
-  equipment: (typeof equipmentAssets.$inferSelect)[],
-): {
-  production: EquipmentProduction[];
-  revenueMeterFallback?: {
-    equipmentId: string;
-    points: RevenueMeterFallbackPoint[];
-  };
-} {
-  const meter = production.find(
-    (item) => item.equipmentType === "revenue_meter",
-  );
-  if (!meter) return { production, revenueMeterFallback: undefined };
-  const inverterProduction = production.filter(
-    (item) => item.equipmentType === "inverter",
-  );
-  if (!inverterProduction.length)
-    return { production, revenueMeterFallback: undefined };
-  const inverterAggregate = new Map<string, number>();
-  inverterProduction.forEach((item) =>
-    (item.intervalProduction || []).forEach((point) =>
-      inverterAggregate.set(
-        point.timestamp,
-        (inverterAggregate.get(point.timestamp) || 0) + point.energyKwh,
-      ),
-    ),
-  );
-  const factor = siteDeliveryFactor(equipment);
-  const meterValues = new Map(
-    (meter.intervalProduction || []).map((point) => [
-      point.timestamp,
-      point.energyKwh,
-    ]),
-  );
-  const fallbackPoints = [...inverterAggregate.entries()]
-    .filter(([, energyKwh]) => energyKwh > 0)
-    .flatMap(([timestamp, energyKwh]) => {
-      const meterValue = meterValues.get(timestamp);
-      return meterValue === undefined || meterValue <= 0
-        ? [
-            {
-              timestamp,
-              energyKwh: energyKwh * factor,
-              inverterAggregateEnergyKwh: energyKwh,
-              wasMissing: meterValue === undefined,
-            },
-          ]
-        : [];
-    })
-    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  if (!fallbackPoints.length)
-    return { production, revenueMeterFallback: undefined };
-  const substituted = new Map(meterValues);
-  fallbackPoints.forEach((point) =>
-    substituted.set(point.timestamp, point.energyKwh),
-  );
-  const intervalProduction = [...substituted.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([timestamp, energyKwh]) => ({ timestamp, energyKwh }));
-  const source: Source =
-    meter.source ||
-    inverterProduction.find((item) => item.source)?.source ||
-    "";
-  const nextMeter: EquipmentProduction = {
-    ...meter,
-    intervalProduction,
-    dailyProduction: dailyFromIntervals(intervalProduction),
-    source,
-  };
-  return {
-    production: production.map((item) =>
-      item.equipmentId === meter.equipmentId ? nextMeter : item,
-    ),
-    revenueMeterFallback: {
-      equipmentId: meter.equipmentId,
-      points: fallbackPoints,
-    },
-  };
-}
-
+/** Outages are observed production states; no historical fit or deficit training. */
 function analyzeEquipment(
   production: EquipmentProduction,
   irradiance: Map<string, IntervalIrradiancePoint>,
   intervalMinutes: number,
   siteImpactPercent: number,
   importedExpected: Map<string, number>,
-  siteTotalAcKw: number,
-  excludedWindows: TimeWindow[] = [],
-  synchronizedSiteDropTimestamps: Set<string> = new Set(),
-  sortedSun?: IntervalIrradiancePoint[],
-  snowDays: Set<string> = new Set(),
-  timezone?: string,
-  peerFinding?: PeerFinding,
   expectationContext?: InverterExpectationContext,
   blocked: Set<string> = new Set(),
+  siteOutageTimestamps: Set<string> = new Set(),
 ) {
-  const points = production.intervalProduction || [];
-  if (points.length < 5) return [] as PerformanceIssue[];
-  const values = new Map(
-    points.map((point) => [point.timestamp, point.energyKwh]),
-  );
-  const first = points[0].timestamp;
-  const last = points.at(-1)?.timestamp || first;
-  const qualifiedSun = sortedSun || [...irradiance.values()]
-    .filter(point => point.averageWm2 >= MIN_IRRADIANCE_WM2)
-    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  const bound = (timestamp: string, inclusive: boolean) => {
-    let low = 0, high = qualifiedSun.length;
-    while (low < high) {
-      const middle = (low + high) >>> 1;
-      if (qualifiedSun[middle].timestamp < timestamp ||
-          (inclusive && qualifiedSun[middle].timestamp === timestamp)) low = middle + 1;
-      else high = middle;
-    }
-    return low;
-  };
-  const candidateSun = qualifiedSun.slice(bound(first, false), bound(last, true));
-  const yieldsByDay = new Map<string, number[]>();
-  points.forEach((point) => {
-    const sun = irradiance.get(point.timestamp);
-    if (
-      point.energyKwh <= 0 ||
-      !sun ||
-      sun.averageWm2 < MIN_IRRADIANCE_WM2 ||
-      sun.insolationKwhM2 <= 0
-    )
-      return;
-    const date = siteDate(point.timestamp, timezone);
-    const yields = yieldsByDay.get(date) || [];
-    yields.push(point.energyKwh / sun.insolationKwhM2);
-    yieldsByDay.set(date, yields);
-  });
-  const dailyYields = [...yieldsByDay.entries()].map(([date, yields]) => ({
-    date,
-    moment: dayNumber(date),
-    yield: median(yields),
-  })).sort((a, b) => a.moment - b.moment);
-  const allDailyYields = dailyYields.map((item) => item.yield);
-  const globalYield =
-    median(allDailyYields) ||
-    (production.capacityKw > 0 ? production.capacityKw * 0.8 : 0);
-  const baselineByDay = new Map<string, number>();
-  let windowStart = 0, windowEnd = 0;
-  new Set(candidateSun.map((point) => siteDate(point.timestamp, timezone))).forEach(
-    (date) => {
-      const moment = dayNumber(date);
-      const radius = 14 * 86400000;
-      while (windowStart < dailyYields.length && dailyYields[windowStart].moment < moment - radius) windowStart++;
-      windowEnd = Math.max(windowEnd, windowStart);
-      while (windowEnd < dailyYields.length && dailyYields[windowEnd].moment <= moment + radius) windowEnd++;
-      const nearby = dailyYields.slice(windowStart, windowEnd).map(item => item.yield);
-      baselineByDay.set(
-        date,
-        (nearby.length >= 4 ? median(nearby) : globalYield) || globalYield,
-      );
-    },
-  );
-  const capacityLimit =
-    production.capacityKw > 0
-      ? production.capacityKw * (intervalMinutes / 60)
-      : Number.POSITIVE_INFINITY;
-  const expectedFor = (sun: IntervalIrradiancePoint) =>
-    Math.min(
-      (baselineByDay.get(siteDate(sun.timestamp, timezone)) || globalYield) *
-        sun.insolationKwhM2,
-      capacityLimit,
-    );
-  const derived = production.equipmentType === "inverter" ? expectationContext : undefined;
-  const derivedInverter = derived?.model.inverters.get(production.equipmentId);
-  const eligibleDerived = (sun: IntervalIrradiancePoint, value: number | undefined, point: ReturnType<InverterExpectationContext["at"]>) =>
-    !!point && !!derivedInverter && Number.isFinite(value) && value! > 0 &&
-    sun.averageWm2 >= INVERTER_EXPECTATION_METHOD.minimumIrradianceWm2 &&
-    point.expectedKwh >= derivedInverter.acKw * (intervalMinutes / 60) * INVERTER_EXPECTATION_METHOD.minimumExpectedAcFraction &&
-    !point.capacityLimited && value! < derivedInverter.acKw * (intervalMinutes / 60) * INVERTER_EXPECTATION_METHOD.maximumLoadingFraction &&
-    !blocked.has(sun.timestamp) && !snowDays.has(siteDate(sun.timestamp, timezone));
-  const derivedDeficitDays = new Set<string>();
-  let derivedDeficitIntervals = 0;
-  // Persistence is tested independently for each inverter, without a peer prerequisite.
-  if (derived) for (const sun of candidateSun) {
-    const point = derived.at(production.equipmentId, sun.timestamp), value = values.get(sun.timestamp);
-    if (eligibleDerived(sun, value, point) && value! / point!.expectedKwh <= 1 - INVERTER_EXPECTATION_METHOD.minimumDeficitPercent / 100 + 1e-9) {
-      derivedDeficitDays.add(siteDate(sun.timestamp, timezone)); derivedDeficitIntervals++;
-    }
+  const assessments: Array<IntervalAssessment & { lossUnknown: boolean; expectedUnknown: boolean }> = [];
+  for (const point of production.intervalProduction || []) {
+    const { timestamp, energyKwh: actual } = point;
+    if (!Number.isFinite(actual) || blocked.has(timestamp)) continue;
+    const supplied = importedExpected.get(timestamp);
+    const validExpected = supplied !== undefined && Number.isFinite(supplied) && supplied >= 0;
+    const sun = irradiance.get(timestamp)?.averageWm2;
+    if (!(sun !== undefined ? Number.isFinite(sun) && sun >= MIN_IRRADIANCE_WM2 : validExpected && supplied > 0)) continue;
+    const inverter = production.equipmentType === "inverter";
+    // Keep the supported partially affected interval immediately before a full
+    // site outage. A positive deficit by itself is not an outage finding.
+    const onset = production.equipmentType === "revenue_meter" && validExpected && supplied > 0 &&
+      actual > 0 && actual / supplied < .7 && siteOutageTimestamps.has(addMinutes(timestamp, intervalMinutes));
+    if (inverter ? actual !== 0 : !onset) continue;
+    const allocation = inverter ? expectationContext?.at(production.equipmentId, timestamp) : undefined;
+    const expected = inverter ? allocation?.expectedKwh : validExpected ? supplied : undefined;
+    const unknown = expected === undefined;
+    assessments.push({ timestamp, actualKwh: actual, expectedKwh: expected ?? 0,
+      lossKwh: unknown ? 0 : Math.max(0, expected - actual), ratio: expected ? actual / expected : 0,
+      type: inverter ? "Equipment outage" : "Site outage", severity: "critical",
+      lossUnknown: unknown, expectedUnknown: unknown, derivedExpectedKwh: allocation?.expectedKwh,
+      rule: inverter ? "outage_inverter_allocation_v2" : "supported_site_outage_onset_v2" });
   }
-  const derivedDeficitHours = derivedDeficitIntervals * intervalMinutes / 60;
-  const persistentDerivedDeficit = derivedDeficitDays.size >= INVERTER_EXPECTATION_METHOD.minimumDays &&
-    derivedDeficitHours + 1e-9 >= INVERTER_EXPECTATION_METHOD.minimumDeficitHours;
-  if (derived && persistentDerivedDeficit) derived.coverage.invertersWithRepeatedDeficits++;
-  const assessments: IntervalAssessment[] = [];
-  candidateSun.forEach((sun) => {
-    const start = intervalNumber(sun.timestamp),
-      end = start + intervalMinutes * 60000;
-    if (
-      excludedWindows.some((window) => start < window.end && end > window.start)
-    )
-      return;
-    const importedValue = importedExpected.get(sun.timestamp);
-    const derivedStatus = derived?.rates.get(sun.timestamp)?.status;
-    const siteExpectedValue = importedValue !== undefined && Number.isFinite(importedValue) && importedValue >= 0 &&
-      derivedStatus !== "invalid" && derivedStatus !== "capacityConflict" ? importedValue : undefined;
-    const importedEquipmentExpected = siteExpectedValue === undefined ? undefined : production.equipmentType === "revenue_meter"
-      ? Math.min(siteExpectedValue, capacityLimit) : production.equipmentType === "inverter" && siteTotalAcKw > 0
-        ? Math.min(siteExpectedValue * production.capacityKw / siteTotalAcKw, capacityLimit) : undefined;
-    const derivedPoint = derived?.at(production.equipmentId, sun.timestamp);
-    const onSnowDay = snowDays.has(siteDate(sun.timestamp, timezone));
-    const detectionExpected = derivedPoint ? derivedPoint.expectedKwh : onSnowDay && importedEquipmentExpected !== undefined
-      ? importedEquipmentExpected : expectedFor(sun);
-    const actual = values.get(sun.timestamp);
-    if (derived) {
-      if (!derivedPoint) derived.coverage.fallbackInverterIntervals++;
-      else if (blocked.has(sun.timestamp)) derived.coverage.telemetryBlockedInverterIntervals++;
-      else if (onSnowDay) derived.coverage.snowInverterIntervals++;
-      else if (derivedPoint.capacityLimited || actual! >= capacityLimit * INVERTER_EXPECTATION_METHOD.maximumLoadingFraction) derived.coverage.capacityLimitedInverterIntervals++;
-      else if (eligibleDerived(sun, actual, derivedPoint)) derived.coverage.comparedInverterIntervals++;
-      else derived.coverage.lowLightInverterIntervals++;
-    }
-    if (detectionExpected <= 0) return;
-    if (actual === undefined) {
-      assessments.push({
-        timestamp: sun.timestamp,
-        actualKwh: 0,
-        expectedKwh: detectionExpected,
-        lossKwh: detectionExpected,
-        ratio: 0,
-        type: "Data gap",
-        severity: "high",
-      });
-      return;
-    }
-    const ratio = actual / detectionExpected;
-    const peer = peerFinding?.intervals.get(sun.timestamp);
-    const outage =
-      production.equipmentType === "inverter" ? actual <= 0 : ratio <= 0.05;
-    if (derivedPoint) {
-      if (!outage && !(onSnowDay ? ratio < .7 : persistentDerivedDeficit && eligibleDerived(sun, actual, derivedPoint) &&
-        ratio <= 1 - INVERTER_EXPECTATION_METHOD.minimumDeficitPercent / 100 + 1e-9)) return;
-    } else if (ratio >= .7) return;
-    const type = outage
-      ? production.equipmentType === "revenue_meter"
-        ? "Site outage"
-        : "Equipment outage"
-      : "Underperformance";
-    const siteExpected = siteExpectedValue;
-    const lossExpected =
-      derivedPoint ? derivedPoint.expectedKwh :
-      type === "Underperformance" && importedEquipmentExpected !== undefined ? importedEquipmentExpected :
-      type === "Site outage" && siteExpected !== undefined
-        ? siteExpected
-        : type === "Equipment outage" &&
-            production.equipmentType === "inverter" &&
-            siteExpected !== undefined &&
-            siteTotalAcKw > 0
-          ? (siteExpected * production.capacityKw) / siteTotalAcKw
-          : detectionExpected;
-    assessments.push({
-      timestamp: sun.timestamp,
-      actualKwh: actual,
-      expectedKwh: lossExpected,
-      lossKwh: Math.max(0, lossExpected - actual),
-      ratio,
-      peer,
-      derivedExpectedKwh: derivedPoint?.expectedKwh,
-      rule: derivedPoint ? "derived_inverter_expectation_v1" : undefined,
-      type,
-      severity: outage ? "critical" : ratio < 0.4 ? "high" : "medium",
-    });
-  });
-  if (production.equipmentType === "revenue_meter") {
-    assessments.forEach((assessment, index) => {
-      if (assessment.type !== "Site outage") return;
-      const previous = assessments[index - 1];
-      if (
-        !previous ||
-        previous.type !== "Underperformance" ||
-        intervalNumber(assessment.timestamp) -
-          intervalNumber(previous.timestamp) !==
-          intervalMinutes * 60000
-      )
-        return;
-      const siteExpected = importedExpected.get(previous.timestamp);
-      const expectedKwh = siteExpected ?? previous.expectedKwh;
-      previous.type = "Site outage";
-      previous.expectedKwh = expectedKwh;
-      previous.lossKwh = Math.max(0, expectedKwh - previous.actualKwh);
-    });
-    const candidateTimestamps = new Set(
-      candidateSun.map((point) => point.timestamp),
-    );
-    const assessmentByTimestamp = new Map(
-      assessments.map((assessment) => [assessment.timestamp, assessment]),
-    );
-    assessments.forEach((assessment) => {
-      if (
-        assessment.type !== "Underperformance" ||
-        !synchronizedSiteDropTimestamps.has(assessment.timestamp)
-      )
-        return;
-      const previousTimestamp = addMinutes(
-        assessment.timestamp,
-        -intervalMinutes,
-      );
-      const nextTimestamp = addMinutes(assessment.timestamp, intervalMinutes);
-      const healthyBefore =
-        candidateTimestamps.has(previousTimestamp) &&
-        !assessmentByTimestamp.has(previousTimestamp);
-      const healthyAfter =
-        candidateTimestamps.has(nextTimestamp) &&
-        !assessmentByTimestamp.has(nextTimestamp);
-      if (!healthyBefore || !healthyAfter) return;
-      const siteExpected = importedExpected.get(assessment.timestamp);
-      const expectedKwh = siteExpected ?? assessment.expectedKwh;
-      assessment.type = "Site outage";
-      assessment.severity = "critical";
-      assessment.expectedKwh = expectedKwh;
-      assessment.lossKwh = Math.max(0, expectedKwh - assessment.actualKwh);
-      assessment.rule = "isolated_synchronized_site_drop";
-    });
-  }
-  const groups: IntervalAssessment[][] = [];
-  assessments.forEach((item) => {
-    const group = groups.at(-1);
-    const previous = group?.at(-1);
-    if (
-      group &&
-      previous?.type === item.type &&
-      gapContainsOnlyLowIrradiance(
-        previous.timestamp,
-        item.timestamp,
-        irradiance,
-        intervalMinutes,
-      )
-    )
-      group.push(item);
+  const groups: typeof assessments[] = [];
+  for (const item of assessments) {
+    const group = groups.at(-1), previous = group?.at(-1);
+    if (group && previous && previous.lossUnknown === item.lossUnknown &&
+        gapContainsOnlyLowIrradiance(previous.timestamp, item.timestamp, irradiance, intervalMinutes)) group.push(item);
     else groups.push([item]);
-  });
-  return groups.map((group, index) => {
-    const expected = group.reduce((sum, item) => sum + item.expectedKwh, 0);
-    const actual = group.reduce((sum, item) => sum + item.actualKwh, 0);
-    const loss = Math.max(0, expected - actual);
-    const severity = group.some((item) => item.severity === "critical")
-      ? "critical"
-      : group.some((item) => item.severity === "high")
-        ? "high"
-        : "medium";
-    const start = group[0].timestamp;
-    const end = addMinutes(group.at(-1)?.timestamp || start, intervalMinutes);
-    const durationMinutes = Math.max(
-      intervalMinutes,
-      (intervalNumber(end) - intervalNumber(start)) / 60000,
-    );
-    const descriptions: Partial<Record<IssueType, string>> = {
-      "Site outage":
-        "Site production fell to 5% or less of its irradiance-adjusted expectation during these intervals.",
-      "Equipment outage":
-        "Equipment production fell to 5% or less of its irradiance-adjusted expectation during these intervals.",
-      Underperformance:
-        "Production was materially below this equipment's irradiance-normalized interval baseline.",
-      "Data gap":
-        "No valid production reading was available while irradiance indicated expected production.",
-    };
-    const type = group[0].type as Exclude<IssueType, "Communication issue">;
-    const name =
-      production.equipmentType === "inverter" && type === "Equipment outage"
-        ? `Inverter ${production.equipmentName} offline`
-        : production.equipmentType === "inverter" && type === "Underperformance"
-          ? `Inverter ${production.equipmentName} underperformance`
-          : type;
-    return {
-      id: `${production.equipmentId}-${type.toLowerCase().replace(/\s+/g, "-")}-${start}-${index}`,
-      name,
-      type,
-      category: type === "Data gap" ? "Data quality" : "Performance",
-      confidence: "model-based",
-      severity,
-      equipmentId: production.equipmentId,
-      equipmentName: production.equipmentName,
-      equipmentType: production.equipmentType,
-      equipmentExternalId: production.externalId,
-      startDateTime: start,
-      endDateTime: end,
-      durationMinutes,
-      durationDays: durationMinutes / 1440,
-      estimatedLossKwh: loss,
-      lossPercent: expected ? Math.min(100, (loss / expected) * 100) : 0,
-      siteImpactPercent,
-      actualEnergyKwh: actual,
-      expectedEnergyKwh: expected,
-      description: group.some(p => p.rule === "derived_inverter_expectation_v1")
-        ? (type === "Underperformance" ? "Production is below the inverter expectation derived from site Expected Production and configured array capacities. " : "Inverter outage loss uses the expectation derived from site Expected Production and configured array capacities. ") + "Peer evidence is optional; the physical cause is not established."
-        : descriptions[type] || type,
-      evidence: {
-        rule:
-          group.find((item) => item.rule)?.rule ||
-          "irradiance_adjusted_baseline",
-        intervalCount: group.length,
-        intervalLosses: group.map((item) => ({
-          timestamp: item.timestamp,
-          lossKwh: item.lossKwh,
-          actualKwh: item.actualKwh,
-          expectedKwh: item.expectedKwh,
-          ...(item.derivedExpectedKwh !== undefined ? { derivedInverterExpectedKwh: item.derivedExpectedKwh, detectionBasis: "derived_inverter_expectation_v1", peerCorroborated: !!item.peer } : {}),
-          ...(item.peer ? { peerExpectedKwh: item.peer.expectedKwh, peerSetIndex: item.peer.peerSetIndex, peerCount: item.peer.peerCount,
-            actualToPeerRatio: item.peer.actualToPeerRatio, detectionBasis: item.rule || "irradiance_adjusted_baseline" } : {}),
-        })),
-        ...(derived && derivedInverter && group.some(p => p.derivedExpectedKwh !== undefined) ? { derivedInverterExpectation: {
-          methodVersion: INVERTER_EXPECTATION_METHOD.version, acRatedCapacityKw: derivedInverter.acKw, dcRatedCapacityKw: derivedInverter.dcKw,
-          qualifiedDays: derivedDeficitDays.size, deficitHours: derivedDeficitHours, siteDeliveryFactor: derived.model.deliveryFactor,
-          peerCorroboratedIntervals: group.filter(p => p.peer).length, lossBasis: "Derived inverter expectation; optional peers do not set the loss amount." } } : {}),
-        ...(peerFinding && group.some(p => p.peer) ? { peerComparison: { acRatedCapacityKw: peerFinding.group.acKw,
-          dcRatedCapacityKw: peerFinding.group.dcKw, groupKey: peerFinding.group.key,
-          qualifiedDays: peerFinding.qualifiedDays, deficitHours: peerFinding.deficitHours, methodVersion: PEER_METHOD.version } } : {}),
-        minimumIrradianceWm2: MIN_IRRADIANCE_WM2,
-        actualToExpectedRatio: expected ? actual / expected : 0,
-      },
-    } satisfies PerformanceIssue;
-  });
-}
-
-function revenueMeterCommunicationIssues(
-  summary: TelemetrySummary,
-  equipment: (typeof equipmentAssets.$inferSelect)[],
-  irradiance: Map<string, IntervalIrradiancePoint>,
-  intervalMinutes: number,
-) {
-  const fallback = summary.revenueMeterFallback;
-  if (!fallback?.points.length) return [] as PerformanceIssue[];
-  const meter = equipment.find(
-    (item) => item.id === fallback.equipmentId && item.type === "revenue_meter",
-  );
-  if (!meter) return [] as PerformanceIssue[];
-  const groups: RevenueMeterFallbackPoint[][] = [];
-  fallback.points.forEach((point) => {
-    const group = groups.at(-1);
-    const previous = group?.at(-1);
-    const adjacent =
-      previous &&
-      intervalNumber(point.timestamp) - intervalNumber(previous.timestamp) ===
-        intervalMinutes * 60000;
-    if (
-      group &&
-      previous &&
-      (adjacent ||
-        gapContainsOnlyLowIrradiance(
-          previous.timestamp,
-          point.timestamp,
-          irradiance,
-          intervalMinutes,
-        ))
-    )
-      group.push(point);
-    else groups.push([point]);
-  });
-  const importedExpected = new Map(
-    (summary.expectedProduction || []).map((point) => [
-      point.timestamp,
-      point.energyKwh,
-    ]),
-  );
-  return groups.map((group, index) => {
-    const start = group[0].timestamp;
-    const end = addMinutes(group.at(-1)?.timestamp || start, intervalMinutes);
-    const durationMinutes = Math.max(
-      intervalMinutes,
-      (intervalNumber(end) - intervalNumber(start)) / 60000,
-    );
-    const substitutedEnergyKwh = group.reduce(
-      (sum, point) => sum + point.energyKwh,
-      0,
-    );
-    const expectedEnergyKwh = group.reduce(
-      (sum, point) =>
-        sum + (importedExpected.get(point.timestamp) ?? point.energyKwh),
-      0,
-    );
-    const estimatedLossKwh = Math.max(
-      0,
-      expectedEnergyKwh - substitutedEnergyKwh,
-    );
-    const inverterAggregateEnergyKwh = group.reduce(
-      (sum, point) => sum + point.inverterAggregateEnergyKwh,
-      0,
-    );
-    const missingIntervals = group.filter((point) => point.wasMissing).length;
-    const zeroIntervals = group.length - missingIntervals;
-    const condition =
-      missingIntervals && zeroIntervals
-        ? "was missing or reported zero"
-        : missingIntervals
-          ? "was missing"
-          : "reported zero";
-    const lineLossPercent = Math.min(
-      100,
-      Math.max(0, Number(meter.acLineLossPercent) || 0),
-    );
-    const transformerLossPercent = Math.min(
-      100,
-      Math.max(0, Number(meter.transformerLossPercent) || 0),
-    );
-    return {
-      id: `${meter.id}-communication-issue-${start}-${index}`,
-      name: "Revenue meter communication issue",
-      type: "Communication issue",
-      category: "Communications",
-      confidence: "confirmed",
-      severity: "high",
-      equipmentId: meter.id,
-      equipmentName: meter.name,
-      equipmentType: meter.type,
-      equipmentExternalId: meter.externalId,
-      startDateTime: start,
-      endDateTime: end,
-      durationMinutes,
-      durationDays: durationMinutes / 1440,
-      estimatedLossKwh,
-      lossPercent: expectedEnergyKwh
-        ? Math.min(100, (estimatedLossKwh / expectedEnergyKwh) * 100)
-        : 0,
-      siteImpactPercent: 100,
-      actualEnergyKwh: substitutedEnergyKwh,
-      expectedEnergyKwh,
-      description: `The revenue meter ${condition} while the inverter fleet recorded production. Estimated loss uses Expected Production minus the inverter aggregate, adjusted for configured line and transformer losses.`,
-      evidence: {
-        rule: "expected_production_minus_inverter_aggregate",
-        intervalLosses: group.map((point) => ({
-          timestamp: point.timestamp,
-          lossKwh: Math.max(
-            0,
-            (importedExpected.get(point.timestamp) ?? point.energyKwh) -
-              point.energyKwh,
-          ),
-        })),
-        missingIntervalCount: missingIntervals,
-        zeroIntervalCount: zeroIntervals,
-        inverterAggregateEnergyKwh,
-        substitutedSiteEnergyKwh: substitutedEnergyKwh,
-        lineLossPercent,
-        transformerLossPercent,
-        siteDeliveryFactor: siteDeliveryFactor(equipment),
-      },
-    } satisfies PerformanceIssue;
-  });
-}
-
-function descendantIds(
-  equipment: (typeof equipmentAssets.$inferSelect)[],
-  rootIds: Set<string>,
-) {
-  const descendants = new Set(rootIds);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    equipment.forEach((asset) => {
-      if (
-        asset.parentId &&
-        descendants.has(asset.parentId) &&
-        !descendants.has(asset.id)
-      ) {
-        descendants.add(asset.id);
-        changed = true;
-      }
-    });
   }
-  rootIds.forEach((id) => descendants.delete(id));
-  return descendants;
+  return groups.map((group, index): PerformanceIssue => {
+    const expected = group.reduce((sum, p) => sum + p.expectedKwh, 0);
+    const actual = group.reduce((sum, p) => sum + p.actualKwh, 0);
+    const loss = group.reduce((sum, p) => sum + p.lossKwh, 0);
+    const first = group[0], start = first.timestamp, end = addMinutes(group.at(-1)!.timestamp, intervalMinutes);
+    const durationMinutes = (intervalNumber(end) - intervalNumber(start)) / 60000;
+    const description = production.equipmentType === "inverter"
+      ? "The inverter reports zero production during qualified daylight. Loss uses its configured DC/AC share of the supplied site Expected Production, not measured peers."
+      : "This partially affected interval directly precedes a supported full site outage. Loss uses the supplied Expected Production at the same timestamp.";
+    return { id: `${production.equipmentId}-${first.type.toLowerCase().replace(/\s+/g, "-")}-${start}-${index}`,
+      name: production.equipmentType === "inverter" ? `Inverter ${production.equipmentName} offline` : first.type,
+      type: first.type, category: "Performance", confidence: "model-based", severity: "critical",
+      equipmentId: production.equipmentId, equipmentName: production.equipmentName, equipmentType: production.equipmentType,
+      equipmentExternalId: production.externalId, startDateTime: start, endDateTime: end, durationMinutes, durationDays: durationMinutes / 1440,
+      estimatedLossKwh: loss, lossPercent: expected ? Math.min(100, loss / expected * 100) : 0,
+      actualEnergyKwh: actual, expectedEnergyKwh: expected, siteImpactPercent,
+      lossUnknown: first.lossUnknown, expectedUnknown: first.expectedUnknown, productionUnknown: false,
+      description: description + (first.lossUnknown ? " Energy loss is unknown and excluded from quantified totals." : ""),
+      evidence: { rule: first.rule, lossUnknown: first.lossUnknown, expectedUnknown: first.expectedUnknown, productionUnknown: false,
+        intervalCount: group.length, minimumIrradianceWm2: MIN_IRRADIANCE_WM2,
+        intervalLosses: group.map(p => ({ timestamp: p.timestamp, actualKwh: p.actualKwh, expectedKwh: p.expectedKwh,
+          lossKwh: p.lossKwh, lossUnknown: p.lossUnknown, expectedUnknown: p.expectedUnknown,
+          ...(p.derivedExpectedKwh !== undefined ? { derivedInverterExpectedKwh: p.derivedExpectedKwh } : {}) })) }
+    };
+  });
 }
 
 type IntervalLossEvidence = {
@@ -1077,6 +566,9 @@ type IntervalLossEvidence = {
   intervalMinutes?: number;
   actualKwh?: number;
   expectedKwh?: number;
+  lossUnknown?: boolean;
+  expectedUnknown?: boolean;
+  hierarchyCovered?: boolean;
   attributedInverterLossKwh?: number;
   residualLossKwh?: number;
 };
@@ -1088,133 +580,6 @@ function applyInverterLossAttribution(
   intervalMinutes: number,
 ) {
   const deliveryFactor = siteDeliveryFactor(equipment);
-  const inverterIntervals = new Map<
-    string,
-    Array<{
-      issueId: string;
-      equipmentId: string;
-      deliveredLossKwh: number;
-    }>
-  >();
-  equipmentIssues.forEach((issue) => {
-    if (issue.equipmentType !== "inverter") return;
-    const intervals = Array.isArray(issue.evidence?.intervalLosses)
-      ? (issue.evidence.intervalLosses as IntervalLossEvidence[])
-      : [];
-    intervals.forEach((interval) => {
-      const deliveredLossKwh =
-        Math.max(0, interval.lossKwh) * deliveryFactor;
-      if (deliveredLossKwh <= 0) return;
-      const contributors = inverterIntervals.get(interval.timestamp) || [];
-      contributors.push({ issueId: issue.id, equipmentId: issue.equipmentId, deliveredLossKwh });
-      inverterIntervals.set(interval.timestamp, contributors);
-    });
-  });
-
-  const allocatedInverterLoss = new Map<string, number>();
-  const attributedMeterIssues = meterIssues.flatMap((issue) => {
-    if (issue.type !== "Underperformance") return [issue];
-    const intervals = Array.isArray(issue.evidence?.intervalLosses)
-      ? (issue.evidence.intervalLosses as IntervalLossEvidence[])
-      : [];
-    const contributingInverters = new Set<string>();
-    let attributedLossKwh = 0;
-    let originalLossKwh = 0;
-    const residualIntervals = intervals.map((interval) => {
-      const siteLossKwh = Math.max(0, interval.lossKwh);
-      originalLossKwh += siteLossKwh;
-      const contributors = inverterIntervals.get(interval.timestamp) || [];
-      const deliveredInverterLossKwh = contributors.reduce(
-        (sum, contributor) => sum + contributor.deliveredLossKwh,
-        0,
-      );
-      const explainedLossKwh = Math.min(
-        siteLossKwh,
-        deliveredInverterLossKwh,
-      );
-      // Attribution changes where loss is reported, never how much is counted.
-      // Even a small unexplained remainder must survive reconciliation.
-      const residualLossKwh = Math.max(0, siteLossKwh - explainedLossKwh);
-      attributedLossKwh += explainedLossKwh;
-      const allocationScale = deliveredInverterLossKwh
-        ? explainedLossKwh / deliveredInverterLossKwh
-        : 0;
-      contributors.forEach((contributor) => {
-        contributingInverters.add(contributor.equipmentId);
-        const key = `${contributor.issueId}\u0000${interval.timestamp}`;
-        allocatedInverterLoss.set(
-          key,
-          (allocatedInverterLoss.get(key) || 0) +
-            contributor.deliveredLossKwh * allocationScale,
-        );
-      });
-      return {
-        ...interval,
-        attributedInverterLossKwh: explainedLossKwh,
-        residualLossKwh,
-        lossKwh: residualLossKwh,
-      };
-    });
-    const retainedIntervals = residualIntervals.filter(
-      (interval) => interval.lossKwh > 0,
-    );
-    if (!retainedIntervals.length) return [];
-    const estimatedLossKwh = retainedIntervals.reduce(
-      (sum, interval) => sum + interval.lossKwh,
-      0,
-    );
-    const actualEnergyKwh = retainedIntervals.reduce(
-      (sum, interval) => sum + Math.max(0, interval.actualKwh || 0),
-      0,
-    );
-    const startDateTime = retainedIntervals[0].timestamp;
-    const endDateTime = addMinutes(
-      retainedIntervals.at(-1)?.timestamp || startDateTime,
-      intervalMinutes,
-    );
-    const durationMinutes = Math.max(
-      intervalMinutes,
-      (intervalNumber(endDateTime) - intervalNumber(startDateTime)) / 60000,
-    );
-    return [
-      {
-        ...issue,
-        name: "Unexplained site underperformance",
-        startDateTime,
-        endDateTime,
-        durationMinutes,
-        durationDays: durationMinutes / 1440,
-        estimatedLossKwh,
-        actualEnergyKwh,
-        expectedEnergyKwh: actualEnergyKwh + estimatedLossKwh,
-        lossPercent:
-          actualEnergyKwh + estimatedLossKwh > 0
-            ? Math.min(
-                100,
-                (estimatedLossKwh /
-                  (actualEnergyKwh + estimatedLossKwh)) *
-                  100,
-              )
-            : 0,
-        description:
-          "The inverter fleet explains part of the measured site loss. This issue contains only the remaining unattributed revenue-meter underperformance.",
-        evidence: {
-          ...issue.evidence,
-          rule: "residual_after_inverter_loss_attribution",
-          intervalLosses: residualIntervals,
-          originalSiteLossKwh: originalLossKwh,
-          attributedInverterLossKwh: attributedLossKwh,
-          residualSiteLossKwh: estimatedLossKwh,
-          inverterExplainedPercent: originalLossKwh
-            ? Math.min(100, (attributedLossKwh / originalLossKwh) * 100)
-            : 0,
-          contributingInverterIds: [...contributingInverters],
-          siteDeliveryFactor: deliveryFactor,
-        },
-      },
-    ];
-  });
-
   const attributedEquipmentIssues = equipmentIssues.map((issue) => {
     if (issue.equipmentType !== "inverter") return issue;
     const intervals = Array.isArray(issue.evidence?.intervalLosses)
@@ -1222,24 +587,23 @@ function applyInverterLossAttribution(
       : [];
     let changed = false;
     const attributedIntervals = intervals.map((interval) => {
-      const allocated = allocatedInverterLoss.get(
-        `${issue.id}\u0000${interval.timestamp}`,
-      );
-      const derivedInterval = (interval as IntervalLossEvidence & { derivedInverterExpectedKwh?: number }).derivedInverterExpectedKwh !== undefined;
-      if (allocated === undefined && !derivedInterval) return interval;
       changed = true;
-      const delivered = allocated ?? interval.lossKwh * deliveryFactor;
-      return {
+      // Known energy crosses the delivery boundary independently of loss coverage.
+      const deliveredInterval = {
         ...interval,
+        actualKwh: interval.actualKwh === undefined ? undefined : interval.actualKwh * deliveryFactor,
+        expectedKwh: interval.expectedKwh === undefined ? undefined : interval.expectedKwh * deliveryFactor,
+      };
+      if (issue.lossUnknown || interval.lossUnknown) return deliveredInterval;
+      const delivered = interval.lossKwh * deliveryFactor;
+      return {
+        ...deliveredInterval,
         lossKwh: delivered,
-        ...(derivedInterval ? { lossBoundary: "meter_poi", inverterTerminalLossKwh: interval.lossKwh,
-          actualKwh: (interval.actualKwh || 0) * deliveryFactor,
-          expectedKwh: (interval.expectedKwh || 0) * deliveryFactor }
-          : { originalLossKwh: interval.lossKwh, siteDeliveredLossKwh: delivered }),
+        lossBoundary: "meter_poi", inverterTerminalLossKwh: interval.lossKwh,
       };
     });
     if (!changed) return issue;
-    const estimatedLossKwh = attributedIntervals.reduce(
+    const estimatedLossKwh = issue.lossUnknown ? issue.estimatedLossKwh : attributedIntervals.reduce(
       (sum, interval) => sum + Math.max(0, interval.lossKwh),
       0,
     );
@@ -1256,14 +620,16 @@ function applyInverterLossAttribution(
       evidence: {
         ...issue.evidence,
         intervalLosses: attributedIntervals,
-        originalEstimatedLossKwh: issue.estimatedLossKwh,
-        siteDeliveredAttributedLossKwh: estimatedLossKwh,
+        ...(!issue.lossUnknown ? {
+          originalEstimatedLossKwh: issue.estimatedLossKwh,
+          siteDeliveredAttributedLossKwh: estimatedLossKwh,
+        } : {}),
         siteDeliveryFactor: deliveryFactor,
       },
     };
   });
   return {
-    meterIssues: attributedMeterIssues,
+    meterIssues,
     equipmentIssues: attributedEquipmentIssues,
   };
 }
@@ -1284,7 +650,7 @@ function applyHierarchyLossPriority(
   };
   const outagesByEquipment = new Map<string, TimeWindow[]>();
   issues.forEach(issue => {
-    if (issue.type !== "Site outage" || issue.estimatedLossKwh <= 0) return;
+    if (issue.type !== "Site outage") return;
     const windows = outagesByEquipment.get(issue.equipmentId) || [];
     windows.push({ start: intervalNumber(issue.startDateTime), end: intervalNumber(issue.endDateTime) });
     outagesByEquipment.set(issue.equipmentId, windows);
@@ -1322,7 +688,7 @@ function applyHierarchyLossPriority(
       }
       const covered = low > 0 && moment < coverage[low - 1].end;
       if (covered) suppressedLossKwh += Math.max(0, interval.lossKwh);
-      return { ...interval, countedLossKwh: covered ? 0 : interval.lossKwh };
+      return { ...interval, hierarchyCovered: covered, countedLossKwh: covered ? 0 : interval.lossKwh };
     });
     const estimatedLossKwh = Math.max(
       0,
@@ -1347,221 +713,67 @@ function applyHierarchyLossPriority(
   });
 }
 
+const OUTAGE_METHOD = "Outages require measured zero production or corroborating telemetry during daylight. Site losses use supplied weather-adjusted Expected Production at each timestamp; inverter losses use the complete DC/AC model, transformer headroom and one delivery conversion. Missing references or required readings leave loss unknown, without hiding known production. Site outages take priority over covered inverter intervals, so overlapping loss is counted once.";
+
 function* buildAnalysisSteps(
   summary: TelemetrySummary,
   equipment: (typeof equipmentAssets.$inferSelect)[],
-  batch?: { offset: number; limit: number; issues: PerformanceIssue[]; coverage?: InverterExpectationContext["coverage"] },
+  batch?: { offset: number; limit: number; issues: PerformanceIssue[] },
 ) {
-  // Preserve the source expectation for qualification: transformer capping must not hide a model mismatch.
-  let referenceExpected = summary.expectedProduction;
-  const transformerContext=transformerAnalysisContext(summary,equipment);
+  const transformerContext = transformerAnalysisContext(summary, equipment);
   const telemetryPlan = prepareTelemetry(summary, equipment);
-  const transformerTotals=transformerIntervalTotals(summary,transformerContext.model);
-  const inverterContext = inverterExpectationContext(summary, equipment, referenceExpected);
-  if(batch?.coverage)Object.assign(inverterContext.coverage,batch.coverage);
-  referenceExpected = undefined;
-  const inverterBlocked = transformerPeerExclusions(transformerContext.model,transformerTotals,transformerContext.hours,telemetryPlan.blocked);
-  const peerPlan = compareCapacityPeers(summary, equipment, inverterBlocked, undefined, inverterContext);
+  const transformerTotals = transformerIntervalTotals(summary, transformerContext.model);
+  const inverterContext = inverterExpectationContext(summary, equipment);
   const production = summary.equipmentProduction || [];
-  const snowDays = new Set(summary.snowSensorConfigured ? summary.snowDays || [] : []);
   const intervalMinutes = summary.intervalMinutes || 60;
   const timezone = summary.timezone || summary.causeContext?.timeZone;
-  const irradiance = new Map(
-    (summary.intervalIrradiance || []).map((point) => [point.timestamp, point]),
-  );
-  const sortedSun = [...irradiance.values()]
-    .filter(point => point.averageWm2 >= MIN_IRRADIANCE_WM2)
-    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  const importedExpected = new Map(
-    (summary.expectedProduction || []).map((point) => [
-      point.timestamp,
-      point.energyKwh,
-    ]),
-  );
-  const totalAcKw = equipment
-    .filter((item) => item.type === "inverter")
-    .reduce(
-      (sum, item) => sum + Math.max(0, Number(item.acRatedCapacityKw) || 0),
-      0,
-    );
-  const meterIds = new Set(
-    equipment
-      .filter((item) => item.type === "revenue_meter")
-      .map((item) => item.id),
-  );
-  const meterProduction = production.filter((item) =>
-    meterIds.has(item.equipmentId),
-  );
-  const communicationIssues: PerformanceIssue[] = [];
+  const irradiance = new Map((summary.intervalIrradiance || []).map(p => [p.timestamp, p]));
+  const importedExpected = new Map((summary.expectedProduction || []).map(p => [p.timestamp, p.energyKwh]));
+  const inverterItems = production.filter(p => p.equipmentType === "inverter");
   const equipmentIssues: PerformanceIssue[] = batch?.issues || [];
-  // Transformer nodes constrain branches; fault detection continues at monitored inverters and the meter.
-  const analyzable = irradiance.size ? production.filter(item=>item.equipmentType!=="transformer") : [];
   let processed = batch?.offset || 0;
-  const inverterItems = analyzable.filter(item => !meterIds.has(item.equipmentId));
-  yield { stage: "equipment" as AnalysisStage, completed: processed, total: analyzable.length };
+  yield { stage: "equipment" as AnalysisStage, completed: processed, total: inverterItems.length };
   for (const item of inverterItems.slice(processed)) {
     equipmentIssues.push(...analyzeEquipment(item, irradiance, intervalMinutes,
-      equipmentSiteImpactPercent(item.equipmentId, equipment), importedExpected,
-      totalAcKw, [], new Set(), sortedSun, snowDays, timezone, peerPlan.findings.get(item.equipmentId), inverterContext, inverterBlocked.get(item.equipmentId)));
-    yield { stage: "equipment" as AnalysisStage, completed: ++processed, total: analyzable.length };
+      equipmentSiteImpactPercent(item.equipmentId, equipment), importedExpected, inverterContext, telemetryPlan.blocked.get(item.equipmentId)));
+    yield { stage: "equipment" as AnalysisStage, completed: ++processed, total: inverterItems.length };
     if (batch && (processed - batch.offset >= batch.limit || processed === inverterItems.length)) {
-      yield { stage: (processed === inverterItems.length ? "reconcile" : "equipment") as AnalysisStage, completed: processed, total: inverterItems.length, equipmentCheckpoint: {issues:equipmentIssues,coverage:inverterContext.coverage} };
+      yield { stage: (processed === inverterItems.length ? "reconcile" : "equipment") as AnalysisStage,
+        completed: processed, total: inverterItems.length, equipmentCheckpoint: { issues: equipmentIssues } };
     }
   }
-  const sharedIntervals = sharedReductionIntervals(summary, equipmentIssues, inverterContext, inverterBlocked,
-    timestamp => snowDays.has(siteDate(timestamp, timezone)));
-  // Branch clipping adds temporary sets for each inverter. The shared telemetry
-  // exclusions are still needed below, but the branch copies are not.
-  if (inverterBlocked !== telemetryPlan.blocked) inverterBlocked.clear();
-  const inverterProduction = production.filter(
-    (item) => item.equipmentType === "inverter",
-  );
-  const monitoredInverterCounts = new Map<string, number>();
-  inverterProduction.forEach((item) =>
-    (item.intervalProduction || []).forEach((point) =>
-      monitoredInverterCounts.set(
-        point.timestamp,
-        (monitoredInverterCounts.get(point.timestamp) || 0) + 1,
-      ),
-    ),
-  );
-  const inverterIssueCounts = new Map<string, Set<string>>();
-  equipmentIssues.forEach((issue) => {
-    if (issue.equipmentType !== "inverter") return;
-    const intervalLosses = Array.isArray(issue.evidence?.intervalLosses)
-      ? (issue.evidence.intervalLosses as IntervalLossEvidence[])
-      : [];
-    intervalLosses.forEach((interval) => {
-      const affected = inverterIssueCounts.get(interval.timestamp) || new Set();
-      affected.add(issue.equipmentId);
-      inverterIssueCounts.set(interval.timestamp, affected);
-    });
-  });
-  const synchronizedSiteDropTimestamps = new Set(
-    [...inverterIssueCounts.entries()]
-      .filter(
-        ([timestamp, affected]) => {
-          const monitored = monitoredInverterCounts.get(timestamp) || 0;
-          return monitored > 0 && affected.size / monitored >= 0.8;
-        },
-      )
-      .map(([timestamp]) => timestamp),
-  );
-  monitoredInverterCounts.clear();
-  inverterIssueCounts.clear();
-  const communicationTimestamps = new Set(
-    (summary.revenueMeterFallback?.points || []).map(
-      (point) => point.timestamp,
-    ),
-  );
-  communicationTimestamps.forEach((timestamp) =>
-    synchronizedSiteDropTimestamps.delete(timestamp),
-  );
-  const meterIssues: PerformanceIssue[] = [];
-  for (const item of irradiance.size ? meterProduction : []) {
-    meterIssues.push(...analyzeEquipment(item, irradiance, intervalMinutes,
-      equipmentSiteImpactPercent(item.equipmentId, equipment), importedExpected,
-      totalAcKw, [], synchronizedSiteDropTimestamps, sortedSun, snowDays, timezone));
-    yield { stage: "equipment" as AnalysisStage, completed: ++processed, total: analyzable.length };
-  }
-  // All inverter evidence now owns the few values it needs; release the shared
-  // interval baseline before reconciling and serializing the full-year ledger.
+  const siteOutageTimestamps = new Set(telemetryPlan.events.filter(e => e.type === "Site outage").map(e => e.timestamp));
+  const meterIssues = production.filter(p => p.equipmentType === "revenue_meter").flatMap(item =>
+    analyzeEquipment(item, irradiance, intervalMinutes, 100, importedExpected, undefined,
+      telemetryPlan.blocked.get(item.equipmentId), siteOutageTimestamps));
   inverterContext.rates.clear();
   yield { stage: "reconcile" as AnalysisStage, completed: 0, total: 1 };
-  const attributed = applyInverterLossAttribution(
-    meterIssues,
-    limitTransformerLosses(equipmentIssues,transformerContext.model,transformerTotals,transformerContext.hours),
-    equipment,
-    intervalMinutes,
-  );
+  const attributed = applyInverterLossAttribution(meterIssues,
+    limitTransformerLosses(equipmentIssues, transformerContext.model, transformerTotals, transformerContext.hours), equipment, intervalMinutes);
   equipmentIssues.length = 0;
-  meterIssues.length = 0;
   transformerTotals.clear();
-  const reconciledIssues = applyHierarchyLossPriority(
-    [
-      ...communicationIssues,
-      ...attributed.meterIssues,
-      ...attributed.equipmentIssues,
-    ],
-    equipment,
-  )
-    // A downstream finding that is completely covered by an active ancestor
-    // is not a separate actionable issue. Hierarchy allocation sets its loss
-    // to zero; remove the row as well so the table reflects the array model.
-    .filter(
-      (issue) =>
-        issue.category === "Communications" || issue.estimatedLossKwh > 0,
-    )
-    .sort(
-    (a, b) =>
-      b.estimatedLossKwh - a.estimatedLossKwh ||
-      a.startDateTime.localeCompare(b.startDateTime),
-  );
-  attributed.equipmentIssues.length = 0;
-  attributed.meterIssues.length = 0;
-  const telemetryIssues = reconcileTelemetry(reconciledIssues, telemetryPlan);
-  const meter = equipment.find(item => item.type === "revenue_meter");
-  const sharedIssues = meter ? allocateSharedReductions(telemetryIssues, sharedIntervals, meter, intervalMinutes,
-    (a, b) => gapContainsOnlyLowIrradiance(a, b, irradiance, intervalMinutes), addMinutes) : telemetryIssues;
-  sharedIntervals.clear();
-  const issues: PerformanceIssue[] = splitRecurringGaps(attributeCauses(sharedIssues, summary, peerPlan).map(issue => ({ ...issue, timezone, intervalMinutes, detectionBasis:String(issue.evidence?.rule||"legacy") }))).sort((a, b) => b.estimatedLossKwh - a.estimatedLossKwh || a.startDateTime.localeCompare(b.startDateTime));
-  reconciledIssues.length = 0;
-  const peerDeficitCount = peerPlan.findings.size;
-  // Optional support is now in the issue ledgers. Its working maps can be
-  // large for a fleet with repeated deficits and must not survive serialization.
-  peerPlan.findings.clear();
-  peerPlan.recoveryDays.clear();
-  const primary =
-    production.find((item) => item.equipmentType === "revenue_meter") ||
-    production[0];
-  const first = primary?.intervalProduction?.[0]?.timestamp || "",
-    last = primary?.intervalProduction?.at(-1)?.timestamp || first;
-  const irradianceInRange = [...irradiance.values()].filter(
-    (point) => !first || (point.timestamp >= first && point.timestamp <= last),
-  );
-  const qualified = irradianceInRange.filter(
-    (point) => point.averageWm2 >= MIN_IRRADIANCE_WM2,
-  );
-  const analyzedDays = new Set(
-    qualified.map((point) => siteDate(point.timestamp, timezone)),
-  ).size;
-  const affectedDays = affectedDayCount(issues);
-  const recurringIssues = buildRecurringIssues(issues,summary);
-  return {
-    issues,
-    recurringIssues,
-    recurringPolicy: RECURRING_POLICY,
-    timezone,
-    expectedProductionAssumptions: summary.causeContext?.assumptions,
-    telemetryQuality: summary.telemetryQuality,
+  const reconciled = applyHierarchyLossPriority([...attributed.meterIssues, ...attributed.equipmentIssues], equipment);
+  const issues = reconcileTelemetry(reconciled, telemetryPlan).map(issue => ({ ...issue, timezone, intervalMinutes,
+    detectionBasis: String(issue.evidence?.rule || "outage_only_v2") })).sort((a, b) =>
+      b.estimatedLossKwh - a.estimatedLossKwh || a.startDateTime.localeCompare(b.startDateTime));
+  const primary = production.find(p => p.equipmentType === "revenue_meter") || production[0];
+  const first = summary.timestamps?.[0] || primary?.intervalProduction?.[0]?.timestamp || "";
+  const last = summary.timestamps?.at(-1) || primary?.intervalProduction?.at(-1)?.timestamp || first;
+  const timestamps = new Set([...(summary.timestamps || []), ...irradiance.keys(), ...importedExpected.keys()]);
+  const inRange = [...timestamps].filter(t => !first || (t >= first && t <= last));
+  const qualified = inRange.filter(t => { const sun = irradiance.get(t)?.averageWm2, expected = importedExpected.get(t);
+    return sun !== undefined ? Number.isFinite(sun) && sun >= MIN_IRRADIANCE_WM2 : expected !== undefined && Number.isFinite(expected) && expected > 0; });
+  const lowLight = [...irradiance.values()].filter(p => (!first || (p.timestamp >= first && p.timestamp <= last)) && p.averageWm2 < MIN_IRRADIANCE_WM2);
+  return { issues, recurringIssues: [], timezone, telemetryQuality: summary.telemetryQuality,
     inverterExpectation: inverterContext.methodology(),
-    sharedReduction: SHARED_REDUCTION_METHOD,
-    ...(transformerContext.model.hasTransformers ? {transformerLimits: transformerContext.methodology} : {}),
-    peerComparison: { ...PEER_METHOD, configuredGroups: new Set(peerPlan.groups.values()).size, invertersWithRepeatedDeficits: peerDeficitCount, referenceSets: peerPlan.referenceSets, referenceQualification: peerPlan.referenceQualification },
-    causeAnalysis: { version: 2, snowSensorConfigured: Boolean(summary.snowSensorConfigured), snowReadingCount: summary.snowReadingCount || 0, snowDays: summary.snowDays || [], shadingMethod: "Recurring solar-position losses with same-day recovery and capacity-matched peers; suspected only." },
-    totalLossKwh: issues.reduce(
-      (sum, issue) => sum + issue.estimatedLossKwh,
-      0,
-    ),
-    affectedDays,
-    analyzedDays,
-    analyzedIntervals: qualified.length,
-    analysisIntervalMinutes: intervalMinutes,
-    irradianceAvailable: irradiance.size > 0,
-    irradianceDays: new Set(
-      irradianceInRange.map((point) => siteDate(point.timestamp, timezone)),
-    ).size,
-    skippedLowIrradianceDays: new Set(
-      irradianceInRange
-        .filter((point) => point.averageWm2 < MIN_IRRADIANCE_WM2)
-        .map((point) => siteDate(point.timestamp, timezone)),
-    ).size,
-    skippedLowIrradianceIntervals: irradianceInRange.length - qualified.length,
-    lowIrradianceThresholdWm2: MIN_IRRADIANCE_WM2,
-    baselineMethod: irradiance.size
-      ? (transformerContext.model.hasTransformers ? transformerContext.methodology.method+" Imported site expected energy is capped at the modeled export ceiling for the interval; source imports remain unchanged. Peer comparison excludes a branch at or above 95% of its transformer ceiling. " : "") + `Missing readings are preserved. Site telemetry gaps have unknown loss and are excluded from quantified totals. Nighttime missing readings contribute zero only when solar position confirms darkness; missing flags are retained. Meter fallback requires complete inverter capacity coverage. Shared partial outages require at least three inverters and 20% AC capacity, a synchronized onset, and meter corroboration. Covered child intervals are removed from displayed dates and losses. The site historical detector and inverter fallback use each equipment node's 28-day irradiance-normalized yield at the imported ${intervalMinutes}-minute cadence. Inverter underperformance primarily uses an expectation derived from site Expected Production at the meter / POI, assumed to have no shading allowance. Configured delivery losses are undone and a common output per kWdc is solved subject to each inverter AC ceiling and each transformer branch ceiling. Measured inverter production does not fit this expectation. A deficit of at least 10% must occur on at least three local dates and total at least three hours. Qualified intervals require irradiance at least 200 W/m², expected output at least 10% of inverter AC capacity, and expected and actual output below 95% of inverter and transformer ceilings. Existing inverter outage and onsite-snow rules remain separate. Missing, invalid or capacity-inconsistent expected data, or an incomplete allocation model, uses the historical detector as a labeled fallback. Optional corroboration uses equal configured AC and summed module DC ratings. References must agree within 10% of derived expected output, remain above the 10% deficit threshold, and agree in at least 80% of eligible intervals totaling three hours on three dates within each local month and hour. At least two independently qualified peers must also agree at the comparison timestamp; the target is excluded. Missing peers never suppress primary model-derived findings and peer evidence never adds energy loss. Derived inverter losses are limited by transformer headroom, converted to delivered energy using configured losses, and reconciled once with meter findings. Orientation, tilt, tracking and inverter-specific response differences remain unmodeled. A shared deficit is detectable but does not prove that the site expected-production model is correct. Shared site reduction attribution: ${SHARED_REDUCTION_METHOD.basis} ${SHARED_REDUCTION_METHOD.exclusions} ${SHARED_REDUCTION_METHOD.allocation} Historical fallback retains its existing imported AC-share loss basis when allocation is incomplete; invalid or capacity-inconsistent expectations cannot supply fallback inverter losses. Suspected causes partition existing losses without adding to their total. For inverter findings, expected interval energy is capped at the inverter's AC rating multiplied by the interval duration. Intervals below ${MIN_IRRADIANCE_WM2} W/m², and intervals without mapped irradiance, are excluded from issue and loss calculations. Revenue-meter underperformance is reconciled interval by interval against inverter losses adjusted by the configured site delivery factor. Inverter issues receive the attributable delivered loss. Every remaining kWh is retained as unexplained site underperformance; the meter finding is removed only when its loss is fully attributed, so attribution never changes the total quantified shortfall. When a revenue-meter site outage begins, one immediately preceding adjacent underperformance interval is included in the outage so a partial first-interval loss is captured. After telemetry reconciliation, adjoining quantified site-outage segments for the same meter are combined into one event with the original detector evidence retained and each interval loss counted once; healthy intervals, telemetry gaps, and unknown-loss segments remain boundaries. An isolated reduced revenue-meter interval is classified as a model-based site outage when its immediately preceding and following qualified intervals are healthy and at least 80% of monitored inverters show a synchronized reduction in that interval. When the revenue meter is missing or zero while the inverter aggregate is positive, a confirmed communications issue is logged and the inverter aggregate is adjusted for configured line and transformer losses and substituted as site production for those intervals. No other communication classification is applied. Consecutive findings of the same type can span nights and low-light intervals; a qualified healthy interval ends the occurrence. Inverter underperformance is additionally split at any local date with no active loss interval. Successive affected local dates no more than five calendar days apart form a recurring review record with the original active intervals underneath; larger gaps start a new record. Multi-day duration spans the full start-to-end period, while estimated loss includes qualified irradiance intervals only. Site impact is calculated separately as the affected equipment's share of total modeled array capacity: each inverter contributes the lesser of connected DC and AC rated capacity, module groups receive their proportional share of the parent inverter, and revenue-meter findings affect 100% of the site. Timestamps preserve source resolution and are stored as UTC instants, displayed in the source timezone. Issue start/end times describe measured interval boundaries, not exact within-interval failure times; the preceding partial-loss interval is included without inventing an exact outage onset. During a revenue-meter site outage, overlapping findings for downstream array-model equipment are suppressed. Telemetry issues with unknown production do not add energy loss; complete inverter fallback can quantify the site shortfall.`
-      : "No performance issues or losses are generated until POA or GHI irradiance is mapped to a configured sensor. Revenue-meter communication issues can still be confirmed when the meter is missing or zero while the inverter fleet records production.",
-  };
+    ...(transformerContext.model.hasTransformers ? { transformerLimits: transformerContext.methodology } : {}),
+    totalLossKwh: issues.reduce((sum, issue) => sum + (issue.lossUnknown ? 0 : issue.estimatedLossKwh), 0),
+    affectedDays: affectedDayCount(issues), analyzedDays: new Set(qualified.map(t => siteDate(t, timezone))).size,
+    analyzedIntervals: qualified.length, analysisIntervalMinutes: intervalMinutes, irradianceAvailable: irradiance.size > 0,
+    irradianceDays: new Set([...irradiance.keys()].map(t => siteDate(t, timezone))).size,
+    skippedLowIrradianceDays: new Set(lowLight.map(p => siteDate(p.timestamp, timezone))).size,
+    skippedLowIrradianceIntervals: lowLight.length, lowIrradianceThresholdWm2: MIN_IRRADIANCE_WM2,
+    baselineMethod: OUTAGE_METHOD };
 }
 
 // The same generator drives synchronous calculation tests and checkpointed jobs.
@@ -1577,8 +789,8 @@ async function buildSummary(
   equipment: (typeof equipmentAssets.$inferSelect)[],
   progress?: (completed: number, total: number) => Promise<void>,
 ) {
-  const capacityModel=arrayCapacityModel(equipment);
-  if(capacityModel.hasTransformers&&!capacityModel.complete)throw new Error(`Complete the transformer model before analysis: ${capacityModel.issues.join(" ")}`);
+  // Incomplete allocation must not block measured outages or telemetry findings.
+  // Quantification still requires the full DC/AC model and branch readings.
   const historyMetadata = safeJson<Record<string, unknown>>(record.validation, {});
   const object = historyMetadata.performanceStore ? { body: canonicalAnalysisCsv(record, equipment) } : historyMetadata.datasetManifest ? { body: historyCsv(await readManifest(record.siteId,record.id), async key => {
     const part=await getBucketBinding().get(key);if(!part)throw new Error("A retained history partition is unavailable.");return decodeHistoryCells(await part.json<Parameters<typeof decodeHistoryCells>[0]>());
@@ -1659,7 +871,7 @@ async function buildSummary(
     } else if (measurement === "Expected Production") {
       const value = toKwh(raw, "kWh", header);
       if (value !== null)
-        accumulator.expectedProduction.set(timestamp, Math.max(0, value));
+        accumulator.expectedProduction.set(timestamp, value);
     } else if (measurement === "Energy") {
       accumulator.productionSignalSeen = true;
       const value = toKwh(raw, unit, header);
@@ -1754,7 +966,7 @@ async function buildSummary(
         roles.expectedProduction,
       );
       if (expected !== null)
-        siteExpectedProduction.set(timestamp, Math.max(0, expected));
+        siteExpectedProduction.set(timestamp, expected);
     }
     const unit = roles.unit ? row[indexes[roles.unit]] || "" : "";
     if (roles.equipment && roles.measurement && roles.value) {
@@ -1901,12 +1113,14 @@ async function buildSummary(
       readingCount: value.readingCount,
     }));
   const expectedProductionMap = shiftMap(siteExpectedProduction);
-  accumulators.forEach((accumulator) =>
+  // A selected site reference owns its missingness too. An equipment channel
+  // must not fill its blanks or replace its invalid values.
+  if (!roles.expectedProduction) accumulators.forEach((accumulator) => {
     accumulator.expectedProduction.forEach((value, timestamp) => {
       if (!expectedProductionMap.has(timestamp))
         expectedProductionMap.set(timestamp, value);
-    }),
-  );
+    });
+  });
   const expectedProduction = [...expectedProductionMap.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([timestamp, energyKwh]) => ({ timestamp, energyKwh }));
@@ -2043,7 +1257,10 @@ async function arrayModelRevision(
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
 }
-type PerformanceAnalysis = ReturnType<typeof buildAnalysis>;
+type PerformanceAnalysis = ReturnType<typeof buildAnalysis> & {
+  peerComparison?: { referenceSets: Record<number, string[]>; qualification?: unknown;
+    referenceQualification?: { deliveryFactor: number; records: Array<{ equipmentId: string }> } };
+};
 type CachedPerformancePointer = {
   parserVersion: number;
   modelRevision: string;
@@ -2051,6 +1268,7 @@ type CachedPerformancePointer = {
   analysisRunId?: string;
 };
 type CachedPerformancePayload = {
+  methodId?: string;
   provenance?: PerformanceAnalysisProvenance | null;
   methodology?: Record<string, unknown>;
   schemaVersion?: number;
@@ -2078,12 +1296,27 @@ type CachedPerformancePayload = {
 };
 type UserThresholdRow = { minimum_issue_loss_kwh: string };
 type AnalysisInputCheckpoint = {
+  parserVersion: number;
+  methodId: string;
   record: typeof telemetryImports.$inferSelect;
   equipment: (typeof equipmentAssets.$inferSelect)[];
   site: typeof siteSettings.$inferSelect;
   modelRevision: string;
   provenance?: PerformanceAnalysisProvenance | null;
 };
+class IncompatibleAnalysisCheckpoint extends Error {
+  constructor() { super("This retained checkpoint uses an incompatible analysis method. Run a new analysis instead of retrying it."); }
+}
+function assertCompatibleCheckpoint(value: unknown) {
+  const checkpoint = value as { parserVersion?: unknown; methodId?: unknown } | null;
+  if (!checkpoint || !supportedParser(checkpoint.parserVersion) || checkpoint.methodId !== OUTAGE_METHOD_ID)
+    throw new IncompatibleAnalysisCheckpoint();
+}
+function incompatibleCheckpointResponse() {
+  return Response.json({ hasData: false, processing: false, analysisRequired: true,
+    code: "incompatible_analysis_checkpoint", error: new IncompatibleAnalysisCheckpoint().message },
+    { status: 409, headers: { "Cache-Control": "private, no-store" } });
+}
 function applyLossThreshold(analysis: PerformanceAnalysis, value: string) {
   const parsed = value.trim() === "" ? null : Number(value);
   if (parsed === null || !Number.isFinite(parsed))
@@ -2094,23 +1327,7 @@ function applyLossThreshold(analysis: PerformanceAnalysis, value: string) {
       unfilteredTotalLossKwh: analysis.totalLossKwh,
       thresholdExcludedLossKwh: 0,
     };
-  const recurringKey = (issue: PerformanceIssue) => issue.type === "Underperformance" && issue.category === "Performance" && issue.equipmentType === "inverter" && issue.equipmentId
-    ? JSON.stringify([issue.equipmentId, issue.category, issue.type, issue.suspectedCause || ""]) : "";
-  const recurring = new Map<string, { lossKwh: number; count: number }>();
-  for (const issue of analysis.issues) {
-    const key = recurringKey(issue);
-    if (!key || issue.lossUnknown) continue;
-    const group = recurring.get(key) || { lossKwh: 0, count: 0 };
-    group.lossKwh += issue.estimatedLossKwh; group.count++; recurring.set(key, group);
-  }
-  const issues = analysis.issues.filter(
-    (issue) =>
-      issue.category === "Communications" || issue.lossUnknown ||
-      issue.estimatedLossKwh > parsed || (recurring.get(recurringKey(issue))?.lossKwh || 0) > parsed,
-  ).map(issue => {
-    const group = recurring.get(recurringKey(issue));
-    return group && group.count > 1 ? { ...issue, recurringLossKwh: group.lossKwh, recurringIssueCount: group.count } : issue;
-  });
+  const issues = analysis.issues.filter(issue => issue.category === "Communications" || issue.lossUnknown || issue.estimatedLossKwh > parsed);
   const lossEligibleIssues = issues.filter(
     (issue) => issue.category !== "Communications",
   );
@@ -2148,7 +1365,7 @@ function displayPayload(payload: CachedPerformancePayload): CachedPerformancePay
         intervalLosses: ((evidence?.intervalLosses || issue.intervalLosses || []) as IntervalLossEvidence[]).map(point => ({
           timestamp: point.timestamp, lossKwh: point.lossKwh,
           countedLossKwh: point.countedLossKwh, intervalMinutes: point.intervalMinutes || intervalMinutes,
-          actualKwh: point.actualKwh, expectedKwh: point.expectedKwh,
+          actualKwh: point.actualKwh, expectedKwh: point.expectedKwh, lossUnknown: point.lossUnknown, expectedUnknown: point.expectedUnknown,
         })),
         summaryIssueNumber: numbers.get(issue.id),
         summaryPeriods: monthlyLosses({ ...issue, timezone, evidence }, intervalMinutes),
@@ -2158,13 +1375,20 @@ function displayPayload(payload: CachedPerformancePayload): CachedPerformancePay
 }
 function publicIssue(issue: PerformanceIssue) {
   return { ...issue, estimatedLossKwh: issue.lossUnknown ? null : issue.estimatedLossKwh,
-    lossPercent: issue.lossUnknown ? null : issue.lossPercent, actualEnergyKwh: issue.productionUnknown ? null : issue.actualEnergyKwh };
+    lossPercent: issue.lossUnknown ? null : issue.lossPercent, actualEnergyKwh: issue.productionUnknown ? null : issue.actualEnergyKwh,
+    expectedEnergyKwh: issue.expectedUnknown ? null : issue.expectedEnergyKwh };
 }
 async function responseTag(sourceEtag: string, threshold: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
-    JSON.stringify(["display-v5-recurring", sourceEtag, threshold]),
+    JSON.stringify(["display-v6-outage-only", sourceEtag, threshold]),
   ));
   return '"' + [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("") + '"';
+}
+
+function unavailableAnalysisResponse(explicitAttempt: boolean) {
+  return Response.json(explicitAttempt ? { error: "Analysis attempt not found." } :
+    { hasData: false, analysisRequired: true, reason: "Run analysis to create a saved result." },
+    { status: explicitAttempt ? 404 : 200, headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -2181,8 +1405,11 @@ export async function GET(request: Request): Promise<Response> {
       const database = getDatabaseBinding();
       const row = await database.prepare("SELECT id FROM analysis_jobs WHERE site_id = ? AND attempt_id = ?")
         .bind(siteId, attemptId).first<{ id: string }>();
-      if (!row) return Response.json({ error: "Analysis attempt not found." }, { status: 404 });
-      return analysisJobResponse((await readJob(database, row.id))!);
+      if (!row) return unavailableAnalysisResponse(true);
+      const job = await readJob(database, row.id);
+      if(!job || (job.status === "completed" && !await isCompletedAnalysisRun(database, siteId, job.attempt_id,
+          `analysis/${siteId}/jobs/${job.attempt_id}/result.json`))) return unavailableAnalysisResponse(true);
+      return analysisJobResponse(job);
     }
     const db = getDb();
     let [site] = await db
@@ -2205,9 +1432,11 @@ export async function GET(request: Request): Promise<Response> {
       : await database.prepare(`SELECT * FROM analysis_jobs WHERE site_id = ?
           ORDER BY CASE WHEN status IN ('processing','canceling') THEN 0 ELSE 1 END,
             updated_at DESC, id DESC LIMIT 1`).bind(siteId).first<AnalysisJob>();
-    if (requestedAttempt && !selectedJob?.attempt_id) return Response.json({ error: "Analysis attempt not found." }, { status: 404 });
     if (!selectedJob?.attempt_id) selectedJob = null;
     if (selectedJob) selectedJob = await readJob(database, selectedJob.id);
+    if (requestedAttempt && !selectedJob) return unavailableAnalysisResponse(true);
+    if(requestedAttempt && selectedJob?.status === "completed" && !await isCompletedAnalysisRun(database, siteId, requestedAttempt,
+        `analysis/${siteId}/jobs/${requestedAttempt}/result.json`)) return unavailableAnalysisResponse(true);
     // Publication is independent of the latest attempt. A stopped rerun must
     // neither hide the published snapshot nor make its checkpoint a prerequisite
     // for browsing it. Explicit attempt/progress requests retain their controls.
@@ -2217,6 +1446,7 @@ export async function GET(request: Request): Promise<Response> {
     if (!requestedAttempt && selectedJob && !["processing", "canceling"].includes(selectedJob.status)) selectedJob = null;
     const retainedInput = selectedJob ? await bucket.get(`analysis/${siteId}/jobs/${selectedJob.attempt_id}/input.json`) : null;
     const inputCheckpoint = retainedInput ? await readCheckpoint<AnalysisInputCheckpoint>(retainedInput) : null;
+    if (selectedJob && selectedJob.status !== "completed") assertCompatibleCheckpoint(inputCheckpoint);
     if (inputCheckpoint && (inputCheckpoint.record.siteId !== siteId || inputCheckpoint.record.id !== selectedJob!.import_id)) throw new Error("Analysis input checkpoint mismatch.");
     let record = inputCheckpoint?.record || await currentAnalysisInput(siteId,Number(searchParams.get("year")||2026));
     if (selectedJob && record?.id !== selectedJob.import_id) {
@@ -2242,49 +1472,65 @@ export async function GET(request: Request): Promise<Response> {
     const modelRevision = inputCheckpoint?.modelRevision || await arrayModelRevision(equipment,site);
     const cached = cachedRows.find(item => item.importId === record.id);
     const pointer = cached ? safeJson<CachedPerformancePointer | null>(cached.summary, null) : null;
+    // A retained older input may still own the sole published pointer. Never
+    // search historical runs or fall back past an unavailable current pointer.
+    const publishedRow = cached || (cachedRows.length === 1 ? cachedRows[0] : undefined);
+    const publishedPointer = publishedRow ? safeJson<CachedPerformancePointer | null>(publishedRow.summary, null) : null;
+    const publicationAvailable = !!publishedRow && await publishedAnalysisAvailable(database, siteId, publishedRow.importId, publishedPointer);
+    const currentPublicationAvailable = publicationAvailable && publishedRow?.importId === record.id;
     const threshold = thresholdRow?.minimum_issue_loss_kwh || "";
     const pendingJob = selectedJob || stoppedJob;
     const refreshing = Boolean(selectedJob && selectedJob.status !== "completed" && !pointer?.objectKey?.includes(selectedJob.attempt_id));
     // New jobs publish an immutable result through an atomic database pointer.
-    let stableObject = initialStableObject;
-    if (pointer && supportedParser(pointer.parserVersion) && pointer.modelRevision === modelRevision && pointer.objectKey) {
+    let stableObject = currentPublicationAvailable && pointer?.objectKey === analysisObjectKey ? initialStableObject : null;
+    if (currentPublicationAvailable && pointer && supportedParser(pointer.parserVersion) && pointer.modelRevision === modelRevision && pointer.objectKey) {
       analysisObjectKey = pointer.objectKey;
       if (analysisObjectKey !== `analysis/${record.siteId}/current.json`) stableObject = await bucket.head(analysisObjectKey);
     }
     let sourceEtag = stableObject?.etag || "";
     const requestedPointerMatches = !requestedAttempt || pointer?.objectKey?.includes(`/jobs/${requestedAttempt}/`);
-    const stableMetadataMatches = !refreshing && requestedPointerMatches &&
+    const stableMetadataMatches = currentPublicationAvailable && !refreshing && requestedPointerMatches &&
       stableObject?.customMetadata?.siteId === record.siteId &&
       stableObject.customMetadata.importId === record.id &&
       supportedParser(stableObject.customMetadata.parserVersion) &&
       stableObject.customMetadata.modelRevision === modelRevision;
-    const legacyPointerMatches = !refreshing && requestedPointerMatches && pointer &&
+    const legacyPointerMatches = currentPublicationAvailable && !refreshing && requestedPointerMatches && pointer &&
       supportedParser(pointer.parserVersion) &&
       pointer.modelRevision === modelRevision &&
       Boolean(pointer.objectKey);
-    if (statusOnly)
+    if (statusOnly) {
+      const available = !!publishedRow && await publishedAnalysisAvailable(database, siteId, publishedRow.importId, publishedPointer);
+      if (requestedAttempt && pendingJob?.status === "completed" && !await isCompletedAnalysisRun(database, siteId, requestedAttempt,
+          `analysis/${siteId}/jobs/${requestedAttempt}/result.json`)) return unavailableAnalysisResponse(true);
       return Response.json({
         cacheStatus:
-          stableMetadataMatches || legacyPointerMatches ? "stored" : "stale",
+          available && (stableMetadataMatches || legacyPointerMatches) ? "stored" : "stale",
+        ...(!available ? {analysisRequired:true} : {}),
         ...(lastAttempt ? { lastAttempt } : {}),
       }, { headers: { "Cache-Control": "private, no-store" } });
+    }
 
     const canonicalInput = Boolean(safeJson<Record<string,unknown>>(record.validation,{}).performanceStore);
     const responseHeaders = new Headers({ "Cache-Control": canonicalInput || lastAttempt ? "private, no-store" : "private, no-cache", Vary: "Cookie, Authorization" });
     if (stableMetadataMatches && !issueId && !canonicalInput && !lastAttempt) {
       responseHeaders.set("ETag", await responseTag(sourceEtag, threshold));
-      if (request.headers.get("if-none-match") === responseHeaders.get("ETag"))
+      if (request.headers.get("if-none-match") === responseHeaders.get("ETag")) {
+        // Metadata and the tag digest may yield while deletion commits.
+        if (!await publishedAnalysisAvailable(database, siteId, record.id, pointer))
+          return unavailableAnalysisResponse(Boolean(requestedAttempt));
         return new Response(null, { status: 304, headers: responseHeaders });
+      }
     }
     let payload: CachedPerformancePayload | null = null;
     let cacheStatus: "stored" | "generated" = "stored";
     let loadedDisplay = false;
     if (stableMetadataMatches && !issueId) {
       const compact = await bucket.get(displayObjectKey);
-      if (compact?.customMetadata?.sourceEtag === sourceEtag && compact.customMetadata.displayVersion === "4") {
+      if (compact?.customMetadata?.sourceEtag === sourceEtag && compact.customMetadata.displayVersion === "5") {
         const candidate = await readCheckpoint<CachedPerformancePayload>(compact);
         if (candidate?.siteId === siteId && candidate.importId === record.id &&
-            candidate.modelRevision === modelRevision && supportedParser(candidate.parserVersion) && candidate.issueDatabase) {
+            candidate.modelRevision === modelRevision && supportedParser(candidate.parserVersion) && candidate.issueDatabase &&
+            await isCompletedAnalysisRun(database, siteId, candidate.issueDatabase.analysisRunId, analysisObjectKey)) {
           payload = candidate;
           loadedDisplay = true;
         }
@@ -2299,7 +1545,7 @@ export async function GET(request: Request): Promise<Response> {
           candidate.importId === record.id &&
           candidate && supportedParser(candidate.parserVersion) &&
           candidate.modelRevision === modelRevision &&
-          candidate.issueDatabase
+          candidate.issueDatabase && await isCompletedAnalysisRun(database, siteId, candidate.issueDatabase.analysisRunId, analysisObjectKey)
         )
           payload = candidate;
       }
@@ -2310,25 +1556,23 @@ export async function GET(request: Request): Promise<Response> {
         const candidate = await readCheckpoint<CachedPerformancePayload>(object);
         if (
           candidate && supportedParser(candidate.parserVersion) &&
-          candidate.modelRevision === modelRevision
+          candidate.siteId === siteId && candidate.importId === record.id && candidate.modelRevision === modelRevision &&
+          candidate.issueDatabase && await isCompletedAnalysisRun(database, siteId, candidate.issueDatabase.analysisRunId, pointer.objectKey)
         )
           payload = candidate;
       }
     }
 
     let publishedSnapshot = false;
-    if (!payload && !requestedAttempt && !refreshing) {
-      // The last published run and the current dataset are independent. Keep a
-      // published immutable snapshot visible until the user requests analysis.
-      for (const previous of cachedRows) {
-        const oldPointer = safeJson<CachedPerformancePointer | null>(previous.summary,null);
-        if (!oldPointer?.objectKey) continue;
-        const object = await bucket.get(oldPointer.objectKey);
-        if (!object) continue;
+    if (!payload && !requestedAttempt && !refreshing && publicationAvailable && publishedRow && publishedPointer?.objectKey) {
+      // Completed snapshot bytes retain their original calculation/method identity.
+      const object = await bucket.get(publishedPointer.objectKey);
+      if(object) {
         const candidate = await readCheckpoint<CachedPerformancePayload>(object);
-        if (candidate.siteId === siteId && candidate.importId === previous.importId && candidate.issueDatabase &&
-            (!oldPointer.analysisRunId || candidate.issueDatabase.analysisRunId === oldPointer.analysisRunId)) {
-          payload = candidate; sourceEtag = object.etag; publishedSnapshot = true; break;
+        if(candidate.siteId === siteId && candidate.importId === publishedRow.importId && candidate.issueDatabase &&
+            (!publishedPointer.analysisRunId || candidate.issueDatabase.analysisRunId === publishedPointer.analysisRunId) &&
+            await isCompletedAnalysisRun(database, siteId, candidate.issueDatabase.analysisRunId, publishedPointer.objectKey)) {
+          payload=candidate; sourceEtag=object.etag; analysisObjectKey=publishedPointer.objectKey; publishedSnapshot=true;
         }
       }
     }
@@ -2336,14 +1580,17 @@ export async function GET(request: Request): Promise<Response> {
       const object = await bucket.get(`analysis/${siteId}/jobs/${pendingJob.attempt_id}/result.json`);
       if (object) {
         const candidate = await readCheckpoint<CachedPerformancePayload>(object);
-        if (candidate.siteId === siteId && candidate.issueDatabase?.analysisRunId === pendingJob.attempt_id) {
-          payload = candidate; sourceEtag = object.etag; publishedSnapshot = true;
+        if (candidate.siteId === siteId && candidate.importId === pendingJob.import_id && candidate.issueDatabase?.analysisRunId === pendingJob.attempt_id &&
+            await isCompletedAnalysisRun(database, siteId, pendingJob.attempt_id, `analysis/${siteId}/jobs/${pendingJob.attempt_id}/result.json`)) {
+          payload = candidate; sourceEtag = object.etag; analysisObjectKey=`analysis/${siteId}/jobs/${pendingJob.attempt_id}/result.json`; publishedSnapshot = true;
         }
       }
     }
     if (!payload?.issueDatabase || (payload.importId !== record.id && !publishedSnapshot)) {
       payload = null;
       const job = pendingJob;
+      if (requestedAttempt && job?.status === "completed" && !await isCompletedAnalysisRun(database, siteId, requestedAttempt,
+          `analysis/${siteId}/jobs/${requestedAttempt}/result.json`)) return unavailableAnalysisResponse(true);
       if (!job) {
         return Response.json({ hasData: false, analysisRequired: true, reason: "Performance data is available. Run analysis to create a saved result." }, { headers: { "Cache-Control": "private, no-store" } });
       }
@@ -2367,28 +1614,30 @@ export async function GET(request: Request): Promise<Response> {
         let provenance = job.stage === "read" ? null : resumeAnalysisProvenance(job.attempt_id,record,inputCheckpoint?.provenance);
         if (job.stage === "read") {
           provenance = captureAnalysisProvenance(job.attempt_id, record, equipment);
-          await writeCheckpoint(bucket, `${root}/input.json`, { record, equipment, site, modelRevision, provenance });
+          await writeCheckpoint(bucket, `${root}/input.json`, { parserVersion: PARSER_VERSION, methodId: OUTAGE_METHOD_ID, record, equipment, site, modelRevision, provenance });
           const summary = alignWithArrayModel(await buildSummary(record, equipment,
             (completed, total) => report("read", completed, total)), equipment);
           summary.causeContext = { latitude: site.latitude || "", longitude: site.longitude || "", timeZone: record.timezone,
             assumptions: expectedAssumptions(site) };
           await report("read", record.rowCount, record.rowCount);
-          await bucket.put(`${root}/summary.json`, JSON.stringify(packSummary(summary)));
+          await bucket.put(`${root}/summary.json`, JSON.stringify({...packSummary(summary), methodId: OUTAGE_METHOD_ID}));
           await report("equipment", 0, summary.equipmentProduction?.length || 0, true);
         } else if (job.stage === "equipment" || job.stage === "reconcile") {
           // Progress may be ahead of the last durable batch when a request dies.
           let retained = await bucket.get(`${root}/equipment-final.json`);
           for(let offset=Math.floor(job.completed/16)*16;!retained&&offset>=16;offset-=16)
             retained=await bucket.get(`${root}/equipment-${offset}.json`);
-          const previous = retained ? await readCheckpoint<{offset:number;issues:PerformanceIssue[];coverage?:InverterExpectationContext["coverage"]}>(retained) : {offset:0,issues:[]};
+          const previous = retained ? await readCheckpoint<{parserVersion:number;methodId:string;offset:number;issues:PerformanceIssue[]}>(retained) : {offset:0,issues:[]};
+          if (retained) assertCompatibleCheckpoint(previous);
           const summary = unpackSummary<TelemetrySummary>(await readSnapshot("summary"));
-          const steps = buildAnalysisSteps(summary, equipment, {offset:previous.offset,limit:16,issues:previous.issues,coverage:previous.coverage});
+          assertCompatibleCheckpoint(summary);
+          const steps = buildAnalysisSteps(summary, equipment, {offset:previous.offset,limit:16,issues:previous.issues});
           let next = steps.next();
           while (!next.done) {
             if ("equipmentCheckpoint" in next.value && next.value.equipmentCheckpoint) {
               const checkpointName = next.value.stage === "reconcile" ? "equipment-final" : `equipment-${next.value.completed}`;
               await report("equipment", next.value.completed, next.value.total);
-              await writeCheckpoint(bucket, `${root}/${checkpointName}.json`, {offset:next.value.completed,...next.value.equipmentCheckpoint});
+              await writeCheckpoint(bucket, `${root}/${checkpointName}.json`, {parserVersion:PARSER_VERSION,methodId:OUTAGE_METHOD_ID,offset:next.value.completed,...next.value.equipmentCheckpoint});
               await report(next.value.stage, next.value.stage === "reconcile" ? 0 : next.value.completed,
                 next.value.stage === "reconcile" ? 1 : next.value.total, true);
               return analysisJobResponse((await readJob(database,key))!);
@@ -2396,7 +1645,7 @@ export async function GET(request: Request): Promise<Response> {
             await report(next.value.stage, next.value.completed, next.value.total);
             next = steps.next();
           }
-          const source: CachedPerformancePayload = { parserVersion: PARSER_VERSION,
+          const source: CachedPerformancePayload = { parserVersion: PARSER_VERSION, methodId: OUTAGE_METHOD_ID,
             modelRevision, provenance, summary: compactSummary(summary), analysis: next.value };
           await report("reconcile", 1, 1);
           await writeCheckpoint(bucket, `${root}/analysis.json`, source);
@@ -2404,17 +1653,21 @@ export async function GET(request: Request): Promise<Response> {
           for (let offset=0;offset<source.analysis.issues.length;offset+=1800) {
             const starts=Array.from({length:Math.min(6,Math.ceil((source.analysis.issues.length-offset)/300))},(_,i)=>offset+i*300);
             await Promise.all(starts.map(start=>writeCheckpoint(bucket, `${root}/save-${start}.json`,
-              issueSaveIndex(source.analysis.issues.slice(start,start+300),resultKey))));
+              {parserVersion:PARSER_VERSION,methodId:OUTAGE_METHOD_ID,issues:issueSaveIndex(source.analysis.issues.slice(start,start+300),resultKey)})));
             await report("reconcile",1,1);
           }
-          await bucket.put(`${root}/save-manifest.json`,JSON.stringify({count:source.analysis.issues.length}));
+          await bucket.put(`${root}/save-manifest.json`,JSON.stringify({parserVersion:PARSER_VERSION,methodId:OUTAGE_METHOD_ID,count:source.analysis.issues.length}));
           await report("save", 0, source.analysis.issues.length, true);
         } else if (job.stage === "save") {
           const manifest = await bucket.get(`${root}/save-manifest.json`);
           const start = job.completed;
           if (manifest) {
-            const {count} = await manifest.json<{count:number}>();
-            const issues = count ? await readSnapshot<PerformanceIssue[]>(`save-${start}`) : [];
+            const savedManifest = await manifest.json<{parserVersion:number;methodId:string;count:number}>();
+            assertCompatibleCheckpoint(savedManifest);
+            const {count} = savedManifest;
+            const page = count ? await readSnapshot<{parserVersion:number;methodId:string;issues:PerformanceIssue[]}>(`save-${start}`) : null;
+            if(page) assertCompatibleCheckpoint(page);
+            const issues = page?.issues || [];
             await persistPerformanceIssues({database,siteId,importId:record.id,parserVersion:PARSER_VERSION,modelRevision,
               analysisObjectKey:resultKey,issues,runIdOverride:job.attempt_id,append:true,checkpoint:()=>report("save",start,count)});
             const end=Math.min(start+issues.length,count);
@@ -2424,12 +1677,15 @@ export async function GET(request: Request): Promise<Response> {
           const index = await bucket.get(`${root}/save.json`);
           let issues: PerformanceIssue[];
           if (index) {
-            issues = await index.json<PerformanceIssue[]>();
+            const page = await index.json<{parserVersion:number;methodId:string;issues:PerformanceIssue[]}>();
+            assertCompatibleCheckpoint(page);
+            issues = page.issues;
           } else {
-            // Jobs started before this optimization retain their saved offset.
+            // Same-method compact layouts can retain their saved offset.
             const source = await readSnapshot<CachedPerformancePayload>("analysis");
+            assertCompatibleCheckpoint(source);
             issues = issueSaveIndex(source.analysis.issues, resultKey);
-            await bucket.put(`${root}/save.json`, JSON.stringify(issues));
+            await bucket.put(`${root}/save.json`, JSON.stringify({parserVersion:PARSER_VERSION,methodId:OUTAGE_METHOD_ID,issues}));
           }
           // A request saves a bounded slice, then releases its lease. Browser
           // refreshes and retries resume after the last fully saved slice.
@@ -2444,6 +1700,7 @@ export async function GET(request: Request): Promise<Response> {
         } else if (job.stage === "finalize") {
           await report("finalize", 0, 1);
           const source = await readSnapshot<CachedPerformancePayload>("analysis");
+          assertCompatibleCheckpoint(source);
           provenance = resumeAnalysisProvenance(job.attempt_id,record,source.provenance);
           if (source.modelRevision !== modelRevision) throw new Error("The saved analysis model checkpoint does not match this attempt.");
           const persisted = await readPerformanceIssueReferences(database, job.attempt_id);
@@ -2461,12 +1718,7 @@ export async function GET(request: Request): Promise<Response> {
             }));
             if(offset%1000===0)await report("finalize",offset,issues.length);
           }
-          const memberIndex=new Map(issues.map(i=>[i.id,i]));
-          const recurringIssues=await Promise.all((source.analysis.recurringIssues||[]).map(async episode=>{
-            const members=episode.members.map(m=>{const i=memberIndex.get(m.id)!;return {id:i.id,eventKey:i.eventKey,evidenceSignature:i.evidenceSignature};});
-            const hash=async(value:unknown)=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(value))))].map(b=>b.toString(16).padStart(2,"0")).join("");
-            return {...episode,members,eventKey:await hash([siteId,"recurring-v1",episode.id]),evidenceSignature:await hash(members.map(m=>[m.eventKey,m.evidenceSignature]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))};
-          }));
+          const recurringIssues: never[] = [];
           payload = { ...source, provenance, schemaVersion: 1, siteId, importId: record.id,
             generatedAt: new Date().toISOString(), analysis: { ...source.analysis, issues, recurringIssues },
             capacityKw: gridCapacity(equipment), validation: safeJson<Record<string, unknown>>(record.validation, {}),
@@ -2479,8 +1731,8 @@ export async function GET(request: Request): Promise<Response> {
               partitionHashes:safeJson<Record<string,unknown>>(record.validation,{}).partitionHashes||null,
               timestampConvention:safeJson<Record<string,unknown>>(record.validation,{}).timestampConvention||"start",
               sourceImports:safeJson<Record<string,unknown>>(record.validation,{}).sourceImports||[{id:record.id,fileName:record.fileName,createdAt:record.createdAt}],
-              datasetRevision:provenance?.revision ?? (safeJson<Record<string,unknown>>(record.validation,{}).datasetManifest?record.id:null),thresholdAtAnalysis:threshold,thresholdMethod:"Individual issue or recurring inverter underperformance total, grouped by equipment/category/type/suspected cause across the full analysis period; strict greater-than threshold.",peerComparison:source.analysis.peerComparison,inverterExpectation:source.analysis.inverterExpectation,sharedReduction:source.analysis.sharedReduction,recurringPolicy:RECURRING_POLICY,transformerLimits:source.analysis.transformerLimits,
-              exclusions:source.analysis.baselineMethod,lowIrradianceThresholdWm2:MIN_IRRADIANCE_WM2} };
+              datasetRevision:provenance?.revision ?? (safeJson<Record<string,unknown>>(record.validation,{}).datasetManifest?record.id:null),thresholdAtAnalysis:threshold,thresholdMethod:"Each event must exceed the loss threshold; communications and unknown-loss events remain visible.",inverterExpectation:source.analysis.inverterExpectation,transformerLimits:source.analysis.transformerLimits,
+              method:OUTAGE_METHOD,exclusions:source.analysis.baselineMethod,lowIrradianceThresholdWm2:MIN_IRRADIANCE_WM2} };
           await report("finalize", 0, 1);
           await writeCheckpoint(bucket,`${root}/review-index.json`,{siteId,provenance:payload.provenance,methodology:{inputProvenance:payload.provenance,dependencyScope:"analysis-range"},issueDatabase:payload.issueDatabase,analysis:{recurringIssues,issues:issues.map(({evidence,intervalLosses,sharedSourceEvents,...issue})=>issue)}});
           const saved = await writeCheckpoint(bucket, resultKey, payload, {
@@ -2513,6 +1765,7 @@ export async function GET(request: Request): Promise<Response> {
         }));
         await stopJob(database, job, token, error);
         const stopped = (await readJob(database, key))!;
+        if(error instanceof IncompatibleAnalysisCheckpoint)return incompatibleCheckpointResponse();
         // Resolve the published view immediately when this polling request fails;
         // do not require a manual reload after the progress panel stops polling.
         if (!requestedAttempt && ["canceled", "failed", "interrupted"].includes(stopped.status)) return GET(request);
@@ -2521,6 +1774,8 @@ export async function GET(request: Request): Promise<Response> {
       if (!payload) return analysisJobResponse((await readJob(database, key))!);
     }
     if (!payload) throw new Error("The saved analysis could not be loaded.");
+    if (!payload.issueDatabase || !await isCompletedAnalysisRun(database, siteId, payload.issueDatabase.analysisRunId, analysisObjectKey))
+      return unavailableAnalysisResponse(Boolean(requestedAttempt));
     if (issueId) {
       const issue = payload.analysis.issues.find(item => item.id === issueId || item.databaseId === issueId);
       if (issue?.evidence?.evidenceFormat === "analysis-result") {
@@ -2535,11 +1790,13 @@ export async function GET(request: Request): Promise<Response> {
       if (issue?.evidence?.peerComparison && payload.analysis.peerComparison?.referenceSets) {
         const indexes = new Set(((issue.evidence.intervalLosses || []) as Record<string, unknown>[])
           .map(p => p.peerSetIndex).filter((id): id is number => typeof id === "number"));
-        issue.evidence.peerReferenceSets = Object.fromEntries([...indexes].map(id => [id, payload!.analysis.peerComparison.referenceSets[id]]));
-        const referenceIds = new Set([...indexes].flatMap(id => payload!.analysis.peerComparison.referenceSets[id] || []));
+        issue.evidence.peerReferenceSets = Object.fromEntries([...indexes].map(id => [id, payload!.analysis.peerComparison!.referenceSets[id]]));
+        const referenceIds = new Set([...indexes].flatMap(id => payload!.analysis.peerComparison!.referenceSets[id] || []));
         const qualification = payload.analysis.peerComparison.referenceQualification;
         if (qualification) issue.evidence.peerReferenceQualification = { method: payload.analysis.peerComparison.qualification, deliveryFactor: qualification.deliveryFactor, records: qualification.records.filter(r => referenceIds.has(r.equipmentId)) };
       }
+      if (!await isCompletedAnalysisRun(database, siteId, payload.issueDatabase.analysisRunId, analysisObjectKey))
+        return unavailableAnalysisResponse(Boolean(requestedAttempt));
       return Response.json(issue ? { issue: publicIssue(issue) } : { error: "Issue not found." }, {
         status: issue ? 200 : 404, headers: { "Cache-Control": "private, no-store" },
       });
@@ -2549,7 +1806,7 @@ export async function GET(request: Request): Promise<Response> {
       // A failed derivative write must not prevent serving the authoritative analysis.
       if (sourceEtag) await writeCheckpoint(bucket, displayObjectKey, payload, {
         httpMetadata: { contentType: "application/json" },
-        customMetadata: { sourceEtag, displayVersion: "4" },
+        customMetadata: { sourceEtag, displayVersion: "5" },
       }).catch(() => undefined);
     }
     if (payload.provenance) responseHeaders.set("Cache-Control","private, no-store");
@@ -2559,6 +1816,10 @@ export async function GET(request: Request): Promise<Response> {
       payload.analysis,
       threshold,
     );
+    // Display writes and the final ETag digest must finish before admitting the
+    // exact saved run to a public response. Retained payload bytes are not authority.
+    if (!payload.issueDatabase || !await isCompletedAnalysisRun(database, siteId, payload.issueDatabase.analysisRunId, analysisObjectKey))
+      return unavailableAnalysisResponse(Boolean(requestedAttempt));
     return analysisJsonResponse({
       hasData: Boolean(summary.dailyProduction.length || analysis.issues.length),
       // Transient attempt metadata is never written into the saved result or its
@@ -2588,6 +1849,7 @@ export async function GET(request: Request): Promise<Response> {
       },
     }, { headers: responseHeaders });
   } catch (error) {
+    if(error instanceof IncompatibleAnalysisCheckpoint)return incompatibleCheckpointResponse();
     console.error("Performance analysis failed.", error);
     const message = error instanceof Error ? error.message : "";
     const safe = /retained CSV|revenue meter|mapped/.test(message)
@@ -2619,22 +1881,25 @@ export async function POST(request: Request) {
       const revision=await arrayModelRevision(equipment,site);
       const bucket=getBucketBinding();
       const job=await restartJob(getDatabaseBinding(),await analysisJobKey(record.id,PARSER_VERSION,revision),siteId,record.id,
-        async attempt=>{await writeCheckpoint(bucket,`analysis/${siteId}/jobs/${attempt}/input.json`,{record,equipment,site,modelRevision:revision,provenance:null});});
+        async attempt=>{await writeCheckpoint(bucket,`analysis/${siteId}/jobs/${attempt}/input.json`,{parserVersion:PARSER_VERSION,methodId:OUTAGE_METHOD_ID,record,equipment,site,modelRevision:revision,provenance:null});});
       return analysisJobResponse(job);
     }
     if (!siteId || !attemptId || !["cancel", "retry"].includes(action))
       return Response.json({ error: "A site, analysis attempt, and valid action are required." }, { status: 400 });
     const bucket=getBucketBinding();
     const previousInput=action === "retry" ? await bucket.get(`analysis/${siteId}/jobs/${attemptId}/input.json`) : null;
+    const previousCheckpoint = previousInput ? await readCheckpoint<AnalysisInputCheckpoint>(previousInput) : null;
+    if(action === "retry") assertCompatibleCheckpoint(previousCheckpoint);
     const job = await controlJob(getDatabaseBinding(), siteId, attemptId, action as "cancel" | "retry",async nextAttempt=>{
-      if (previousInput) {
-        const checkpoint=await readCheckpoint<AnalysisInputCheckpoint>(previousInput);
+      if (previousCheckpoint) {
+        const checkpoint=previousCheckpoint;
         await writeCheckpoint(bucket,`analysis/${siteId}/jobs/${nextAttempt}/input.json`,{...checkpoint,provenance:null});
       }
     });
     if (!job) return Response.json({ error: "Analysis attempt not found." }, { status: 404 });
     return analysisJobResponse(job);
   } catch (error) {
+    if(error instanceof IncompatibleAnalysisCheckpoint)return incompatibleCheckpointResponse();
     console.error("Analysis control failed", error);
     return Response.json({ error: "Unable to update the analysis. Please try again." }, { status: 500 });
   }

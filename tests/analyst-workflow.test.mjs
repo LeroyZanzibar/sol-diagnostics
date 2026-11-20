@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as XLSX from 'xlsx';
-import {loadSource} from './source-module.mjs';
+import {loadSource as sourceModule} from './source-module.mjs';
+const availability={...sourceModule('app/api/analysis-history/availability.ts',[],{Error}),...sourceModule('app/issue-visibility.ts'),...sourceModule('app/data-freshness.ts')};
+const loadSource=(path,names=[],bindings={})=>sourceModule(path,names,{Error,TypeError,...availability,...(bindings.savedAnalysis?{reviewedAnalysisBaseline:bindings.savedAnalysis}:{}),...bindings});
 const review=loadSource('app/issue-review.ts');
 const basis={calculationVersion:25,modelRevision:'model-a'};
 const original={id:'event',eventKey:'event-key',equipmentId:'inverter',type:'Underperformance',category:'Performance',name:'Inverter underperformance',confidence:'model-based',startDateTime:'2026-01-01T16:00:00.000Z',endDateTime:'2026-01-01T18:00:00.000Z',estimatedLossKwh:20,actualEnergyKwh:180,expectedEnergyKwh:200,evidenceSignature:'old',intervalMinutes:60,evidence:{rule:'derived_inverter_expectation_v1'},intervalLosses:[{timestamp:'2026-01-01T16:00:00.000Z',lossKwh:10,countedLossKwh:10,actualKwh:90,expectedKwh:100},{timestamp:'2026-01-01T17:00:00.000Z',lossKwh:10,countedLossKwh:10,actualKwh:90,expectedKwh:100}]};
@@ -88,8 +90,8 @@ test('preset dismissal and resolution reasons satisfy validation without typing 
  assert.doesNotThrow(()=>review.validateReview({...state,status:'Confirmed',resolution:'Resolved',resolvedAt:original.endDateTime,resolutionNote:'Production recovery verified'},''));
 });
 test('XLSX records effective decisions, retained numerical changes, audit mode and period loss treatment',()=>{
- const report=loadSource('app/report-methodology.ts',[],{...review,XLSX}),book=XLSX.utils.book_new(),issue=scaled(1.0005);
- const r={...saved(original),needsReview:false,assessment:decide(original,issue)};
+ const report=loadSource('app/report-methodology.ts',[],{...review,XLSX}),book=XLSX.utils.book_new(),issue={...scaled(1.0005),type:'Equipment outage'};
+ const before={...original,type:'Equipment outage'},r={...saved(before),needsReview:false,assessment:decide(before,issue)};
  report.appendReportMethodology(book,{reviewFilter:'All findings',reviews:{[issue.eventKey]:r},reviewRetrievedAt:'now',reviewTotals:{detected:20.01,dismissed:20.01,adjusted:0,provisional:0},issues:[issue]});
  const reopened=XLSX.read(XLSX.write(book,{type:'buffer',bookType:'xlsx'}));
  const [row]=XLSX.utils.sheet_to_json(reopened.Sheets['Analyst reviews']);
@@ -105,7 +107,7 @@ test('a zero-loss summary exports an empty main table and a separate dismissed-f
   useState:initial=>[initial,()=>{}],useMemo:fn=>fn(),React:{createElement:(type,props,...children)=>({type,props,children})},
   XLSX:{...XLSX,writeFile:book=>{captured=book;}},
  });
- const context={reviewFilter:'Exclude dismissed',reviews:{[original.eventKey]:{...saved(original),needsReview:false}},reviewRetrievedAt:'now',reviewTotals:{detected:20,dismissed:20,adjusted:0,provisional:0},excludedIssues:[original],issues:[]};
+ const context={reviewFilter:'Exclude dismissed',reviews:{[original.eventKey]:{...saved(original),needsReview:false}},reviewRetrievedAt:'now',reviewTotals:{detected:20,dismissed:20,adjusted:0,provisional:0},excludedIssues:[{...original,type:'Equipment outage'}],issues:[]};
  const tree=component.default({issues:[],siteName:'Synthetic review QA',onBack:()=>{},reportContext:context});
  const find=node=>{if(!node||typeof node!=='object')return null;if(node.type==='button'&&node.children.includes('Export XLSX '))return node;return node.children?.flat(Infinity).map(find).find(Boolean);};
  const button=find(tree);assert.ok(button);assert.equal(button.props.disabled,false);button.props.onClick();

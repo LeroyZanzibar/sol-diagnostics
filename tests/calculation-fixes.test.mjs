@@ -86,43 +86,39 @@ test("cumulative energy is rejected rather than counted as interval production",
   }), /converted to interval energy/);
 });
 
-const attribution = loadSource(routePath, ["applyInverterLossAttribution", "applyLossThreshold"], {...modelCapacityBindings(),...(time)});
+const attribution = loadSource(routePath, ["applyInverterLossAttribution", "applyLossThreshold", "applyHierarchyLossPriority"], {...modelCapacityBindings(),...(time)});
 function issue(id, equipmentType, loss, timestamp = "2026-06-01T12:00:00") {
   return { id, equipmentId: equipmentType === "inverter" ? "inv" : "meter", equipmentType,
-    type: "Underperformance", name: id, estimatedLossKwh: loss, actualEnergyKwh: 100,
+    type: equipmentType === "inverter" ? "Equipment outage" : "Site outage", category: "Performance", name: id, estimatedLossKwh: loss, actualEnergyKwh: 100,
     expectedEnergyKwh: 100 + loss, startDateTime: timestamp, endDateTime: "2026-06-01T13:00:00",
     evidence: { intervalLosses: [{ timestamp, lossKwh: loss, actualKwh: 100, expectedKwh: 100 + loss }] } };
 }
 
-test("inverter attribution preserves all residual loss on both sides of the former 80% cutoff", () => {
-  for (const explained of [0, 79, 80, 85, 99.999, 100, 120]) {
-    const result = attribution.applyInverterLossAttribution([issue("site", "revenue_meter", 100)], [issue("inverter", "inverter", explained)], equipment, 60);
-    const meterLoss = result.meterIssues.reduce((sum, item) => sum + item.estimatedLossKwh, 0);
-    const inverterLoss = result.equipmentIssues.reduce((sum, item) => sum + item.estimatedLossKwh, 0);
-    assert.ok(Math.abs(meterLoss + inverterLoss - 100) < 1e-9, `${explained} explained: expected 100 total, got ${meterLoss + inverterLoss}`);
-    assert.ok(Math.abs(meterLoss - Math.max(0, 100 - explained)) < 1e-9);
-    assert.equal(result.meterIssues.length, explained >= 100 ? 0 : 1);
+test("standalone inverter outage losses convert to delivered energy exactly once", () => {
+  const adjusted=equipment.map(a=>a.type==='revenue_meter'?{...a,acLineLossPercent:'10',transformerLossPercent:'2'}:a);
+  for(const loss of [0,79,80,85,99.999,100,120]){
+    const original=issue('inverter','inverter',loss),before=JSON.stringify(original);
+    const result=attribution.applyInverterLossAttribution([], [original], adjusted, 60);
+    assert.equal(result.meterIssues.length,0);assert.equal(result.equipmentIssues.length,1);
+    const converted=result.equipmentIssues[0];assert.ok(Math.abs(converted.estimatedLossKwh-loss*.9*.98)<1e-9);
+    assert.equal(converted.evidence.intervalLosses[0].inverterTerminalLossKwh,loss);
+    assert.equal(converted.evidence.intervalLosses[0].lossBoundary,'meter_poi');assert.equal(JSON.stringify(original),before);
   }
 });
 
-test("delivery-adjusted attribution preserves loss and evidence across multiple intervals", () => {
-  const adjustedEquipment = equipment.map(item => item.type === "revenue_meter" ? { ...item, acLineLossPercent: "10" } : item);
-  const site = issue("site", "revenue_meter", 200);
-  site.evidence.intervalLosses = [
-    { timestamp: "2026-06-01T12:00:00", lossKwh: 100, actualKwh: 100 },
-    { timestamp: "2026-06-01T13:00:00", lossKwh: 100, actualKwh: 100 },
+test("site priority removes covered child dates and preserves independent delivered loss", () => {
+  const telemetry=loadSource('app/api/performance-summary/telemetry-events.ts',[],{...modelCapacityBindings(),...time});
+  const parent=issue('site','revenue_meter',100),child=issue('inverter','inverter',200);
+  child.endDateTime='2026-06-01T14:00:00';child.evidence.intervalLosses=[
+    {timestamp:'2026-06-01T12:00:00',lossKwh:100,actualKwh:0,expectedKwh:100},
+    {timestamp:'2026-06-01T13:00:00',lossKwh:100,actualKwh:0,expectedKwh:100},
   ];
-  const inverter = issue("inverter", "inverter", 200);
-  inverter.evidence.intervalLosses = [
-    { timestamp: "2026-06-01T12:00:00", lossKwh: 100 },
-    { timestamp: "2026-06-01T13:00:00", lossKwh: 100 },
-  ];
-  const result = attribution.applyInverterLossAttribution([site], [inverter], adjustedEquipment, 60);
-  assert.equal(result.meterIssues[0].estimatedLossKwh, 20);
-  assert.equal(result.equipmentIssues[0].estimatedLossKwh, 180);
-  const counted = [...result.meterIssues, ...result.equipmentIssues].flatMap(item => item.evidence.intervalLosses)
-    .reduce((sum, item) => sum + item.lossKwh, 0);
-  assert.equal(counted, 200);
+  const adjusted=equipment.map(a=>a.type==='revenue_meter'?{...a,acLineLossPercent:'10'}:a);
+  const converted=attribution.applyInverterLossAttribution([parent],[child],adjusted,60);
+  const prioritized=attribution.applyHierarchyLossPriority([...converted.meterIssues,...converted.equipmentIssues],adjusted);
+  const visible=telemetry.reconcileTelemetry(prioritized,{events:[],blocked:new Map(),inferred:new Map(),minutes:60,assets:adjusted});
+  const retained=visible.find(i=>i.equipmentType==='inverter');assert.equal(retained.startDateTime,'2026-06-01T13:00:00');assert.equal(retained.endDateTime,'2026-06-01T14:00:00');
+  assert.equal(retained.estimatedLossKwh,90);assert.equal(visible.reduce((s,i)=>s+i.estimatedLossKwh,0),190);
 });
 
 test("loss thresholds preserve the unfiltered quantified shortfall separately from visible totals", () => {
@@ -135,4 +131,17 @@ test("loss thresholds preserve the unfiltered quantified shortfall separately fr
     assert.equal(result.thresholdExcludedLossKwh, excluded);
     assert.equal(result.totalLossKwh + result.thresholdExcludedLossKwh, result.unfilteredTotalLossKwh);
   }
+});
+
+
+test('mapped site expectation blanks and invalid values never borrow another expected channel or become zero',async()=>{
+ for(const raw of ['', 'NaN', 'Infinity', '-1', '0', '37']){
+  const summary=await summarize(`time,meter,inv,siteExpected,otherExpected\n2026-06-01T12:00Z,0,0,${raw},99\n`,[
+   {column:'meter',equipmentId:'meter',measurement:'Energy'}, {column:'inv',equipmentId:'inv',measurement:'Energy'},
+   {column:'otherExpected',equipmentId:'meter',measurement:'Expected Production'},
+  ],'1 hour',{expectedProduction:'siteExpected'});
+  const point=summary.expectedProduction[0];
+  if(['','NaN','Infinity'].includes(raw))assert.equal(point,undefined,raw);
+  else assert.equal(point.energyKwh,Number(raw));
+ }
 });
