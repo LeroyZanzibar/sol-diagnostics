@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.11.21.1 — pending publication
+## 2026.11.21.1 — published November 21, 2026
 
 - Add site-scoped monthly utility actuals for on-peak/off-peak production, revenue, energy used and invoice cost. Preserve entered decimal precision, explicit zero, blank fields and utility money credits; total either available production category without requiring both.
 - Add twelve calendar-month production, revenue and insolation baselines plus an operations start date and explicit annual degradation assumption. Preview projection changes before saving, retain incomplete setup, and calculate a 300-month horizon with partial-start-month and anniversary-day proration. Display rounding does not rewrite saved values.
@@ -8,7 +8,7 @@
 - Add monthly configuration, utility and derived-rollup tables through an additive schema migration. Preserve imported readings, saved analyses, reviews and existing settings; upgrading does not download/import data or automatically rerun analyses.
 - Package the shared monthly runtime domain module in the container image and extend the native-image persistence smoke to verify exact monthly inputs, approved projections and corrected telemetry after restart and recreation.
 
-Publication, native AMD64/ARM64 image verification and installed-app deployment remain separate release gates. Back up complete app storage before an installed-app upgrade; this pending entry does not claim publication or deployment.
+Published source `97fcf94d3c5feceed128844729d7ee70a6d8a473` as `v2026.11.21.1`. Release build and 906 tests passed; native AMD64/ARM64 hardened persistence checks and separate anonymous native pulls passed. The two-platform image index is `sha256:946b2fc3a0ffcfc51ad6e9a1d443ca16362363c16892f8cff0bb171fbf85a35c`. Public source/checksum assets were downloaded and byte-verified. This documentation-only update does not move the source tag or replace its images. Community-store publication and installed-app deployment are separate; back up complete app storage before upgrading. Existing standalone typecheck/lint baseline diagnostics remain distinct from the successful production build/tests.
 
 ## 2026.11.20.1 — published November 20, 2026
 
