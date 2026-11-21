@@ -1,5 +1,5 @@
 import {createHmac,randomBytes} from 'node:crypto';
-import {demand,emptyConfiguration,validateConfiguration,validateUtilityRows,projectionRows,horizon} from '../app/monthly-domain.mjs';
+import {demand,emptyConfiguration,validateConfiguration,validateUtilityRows,projectionRows,horizon,modelDcCapacity} from '../app/monthly-domain.mjs';
 
 const configurationSQL='SELECT revision,configuration_json FROM monthly_configuration WHERE site_id=?';
 export class MonthlyStore {
@@ -9,7 +9,10 @@ export class MonthlyStore {
   snapshot(read,siteId){
     this.assertSite(read,siteId);const config=read.first(configurationSQL,siteId);
     const utility=Object.fromEntries(read.all('SELECT month,on_peak,off_peak,revenue,energy_used,invoice_cost FROM monthly_utility WHERE site_id=? ORDER BY month',siteId).map(r=>[r.month,{onPeak:r.on_peak,offPeak:r.off_peak,revenue:r.revenue,energyUsed:r.energy_used,invoiceCost:r.invoice_cost}]));
-    return {siteId,revision:config?.revision??0,configuration:config?JSON.parse(config.configuration_json):emptyConfiguration(),utility};
+    // Read model capacity under the same shared-database snapshot as the inputs.
+    // Verification, AC ratings and losses do not gate installed module DC kWp.
+    const capacity=modelDcCapacity(read.all('SELECT id,type,parent_id AS parentId,module_rated_capacity_w AS moduleRatedCapacityW,quantity FROM equipment_assets WHERE site_id=? ORDER BY id',siteId));
+    return {siteId,revision:config?.revision??0,configuration:config?JSON.parse(config.configuration_json):emptyConfiguration(),utility,capacity};
   }
   read(siteId){return this.database.withSynchronousRead(read=>this.snapshot(read,siteId));}
   assertRevision(current,revision){demand(Number.isSafeInteger(revision)&&revision>=0,'An edit revision is required.');demand(current.revision===revision,'Monthly data changed in another session. Reload before editing.',409,'monthly-conflict');}

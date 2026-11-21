@@ -70,3 +70,105 @@ export function validateUtilityRows(rows){
   demand(Array.isArray(rows)&&rows.length>0&&rows.length<=300,'Save 1–300 monthly rows at a time.');const seen=new Set();
   return rows.map(row=>{demand(row&&typeof row==='object','Invalid monthly row.');const month=validateMonth(row.month);demand(!seen.has(month),'A month may appear only once.');seen.add(month);return {month,...Object.fromEntries(utilityFields.map(k=>[k,nullableDecimal(row[k],k==='revenue'||k==='invoiceCost')]))};});
 }
+
+export const calculatedFields = [
+  'budgetedSpecificYield','actualSpecificYield','specificYieldRatio',
+  'budgetedPerformanceRatio','actualPerformanceRatio','performanceRatioRatio',
+  'insolationRatio','productionProjectionRatio','productionExpectedRatio','revenueRatio','iapr','iar'
+];
+
+// Equipment ratings accept Number-compatible strings, unlike monthly inputs.
+// Number is only an admission check: decimal/scientific digits stay exact.
+function positiveModelFraction(value){
+  if(typeof value!=='string'&&typeof value!=='number')return null;
+  const text=String(value).trim();
+  if(!text||text.length>4096||!Number.isFinite(Number(text))||Number(text)<=0)return null;
+  if(/^(?:0x[\da-f]+|0b[01]+|0o[0-7]+)$/i.test(text))return rational(BigInt(text));
+  const match=/^\+?((?:\d+(?:\.\d*)?|\.\d+))(?:e([+-]?\d+))?$/i.exec(text);
+  if(!match)return null;
+  const base=fraction(match[1]),exponent=BigInt(match[2]||'0');
+  return exponent>=0n?multiply(base,{n:String(10n**exponent),d:'1'}):multiply(base,{n:'1',d:String(10n**-exponent)});
+}
+
+/** Installed connected module DC kWp, not an AC/export/loss-limited ceiling. */
+export function modelDcCapacity(assets){
+  const unavailable=detail=>({dcKwp:null,unavailableReason:`DC capacity is unavailable: ${detail}`});
+  if(!Array.isArray(assets)||!assets.length)return unavailable('save a connected module model.');
+  if(assets.some(a=>!a||typeof a.id!=='string'||!a.id))return unavailable('the saved model has an invalid equipment identity.');
+  const byId=new Map(assets.map(a=>[a.id,a]));
+  if(byId.size!==assets.length)return unavailable('the saved model has duplicate equipment identities.');
+  const meters=assets.filter(a=>a.type==='revenue_meter'),inverters=assets.filter(a=>a.type==='inverter'),modules=assets.filter(a=>a.type==='module_group');
+  if(meters.length!==1||meters[0].parentId)return unavailable('connect the model to one root revenue meter.');
+  if(!inverters.length||!modules.length)return unavailable('configure modules for every connected inverter.');
+  for(const a of assets.filter(a=>a.type==='transformer'))if(byId.get(a.parentId)?.type!=='revenue_meter')return unavailable('connect every transformer to the revenue meter.');
+  for(const a of inverters){
+    const parent=byId.get(a.parentId);
+    if(!parent||!['revenue_meter','transformer'].includes(parent.type))return unavailable('connect every inverter to the revenue meter, directly or through a transformer.');
+  }
+  let total=fraction('0');const populated=new Set();
+  for(const a of modules){
+    if(byId.get(a.parentId)?.type!=='inverter')return unavailable('connect every module group to an inverter; orphan groups cannot be omitted.');
+    const watts=positiveModelFraction(a.moduleRatedCapacityW),quantity=positiveModelFraction(a.quantity);
+    if(!watts||!quantity)return unavailable('every module group needs a finite positive module wattage and quantity.');
+    total=add(total,multiply(watts,quantity,fraction('0.001')));populated.add(a.parentId);
+  }
+  if(inverters.some(a=>!populated.has(a.id)))return unavailable('every inverter needs a complete connected module group.');
+  return {dcKwp:total,unavailableReason:null};
+}
+
+const missingCalculated=reason=>({value:null,state:'missing',reason});
+function availableInput(value,label){
+  return value===null||value===undefined||value===''?missingCalculated(`${label} is missing.`):{value:fraction(value),state:'available',reason:null};
+}
+function telemetryInput(telemetry,month,kind){
+  const label=kind==='expected'?'Hourly Expected Production':'Actual insolation';
+  if(telemetry?.state!=='current')return missingCalculated(`${label} is unavailable: telemetry is ${telemetry?.state==='refreshing'?'refreshing':'missing'}.`);
+  if(kind==='insolation'&&telemetry.selectionRequired)return missingCalculated('Select an available reporting irradiance channel for Actual insolation.');
+  if(kind==='expected'&&telemetry.expectedUnavailableReason)return missingCalculated(telemetry.expectedUnavailableReason);
+  const metric=telemetry.months[month]?.[kind];
+  if(!metric||metric.state==='missing'||metric.value===null)return missingCalculated(`${label} is missing for this month.`);
+  if(metric.state!=='complete'){
+    const details=[metric.partialIntervals?`${metric.partialIntervals} partial intervals`:null,metric.unknownQualityIntervals?'quality unknown':null].filter(Boolean);
+    return {value:metric.value,state:'partial',reason:`${label} has partial monthly coverage${details.length?` (${details.join('; ')})`:''}.`};
+  }
+  return availableInput(metric.value,label);
+}
+function ratio(numerator,denominator,denominatorLabel){
+  const missing=[numerator,denominator].filter(x=>x.value===null);
+  if(missing.length)return missingCalculated([...new Set(missing.map(x=>x.reason))].join(' '));
+  if(BigInt(denominator.value.n)===0n)return missingCalculated(`${denominatorLabel} is zero; this ratio is unavailable.`);
+  const partial=[numerator,denominator].filter(x=>x.state==='partial');
+  return {
+    value:rational(BigInt(numerator.value.n)*BigInt(denominator.value.d),BigInt(numerator.value.d)*BigInt(denominator.value.n)),
+    state:partial.length?'partial':'available',reason:partial.length?[...new Set(partial.map(x=>x.reason))].join(' '):null
+  };
+}
+
+/** Compose only from the saved, already prorated/degraded projection rows. */
+export function calculatedRows(projections,utility,telemetry,capacity){
+  const dc=capacity?.dcKwp&&BigInt(capacity.dcKwp.n)>0n?availableInput(capacity.dcKwp,'DC capacity'):missingCalculated(capacity?.unavailableReason||'DC capacity is unavailable.');
+  return Object.fromEntries(projections.map(row=>{
+    const actual=utility[row.month],production=availableInput(utilityTotal(actual?.onPeak,actual?.offPeak),'Utility actual production total');
+    const projected=availableInput(row.production,'Projected production'),budget=availableInput(row.revenue,'Budgeted revenue');
+    const projectedInsolation=availableInput(row.insolation,'Projected insolation'),actualInsolation=telemetryInput(telemetry,row.month,'insolation');
+    const budgetedSpecificYield=ratio(projected,dc,'DC capacity'),actualSpecificYield=ratio(production,dc,'DC capacity');
+    // Reference irradiance is 1 kW/m²: PR = specific yield / insolation.
+    const budgetedPerformanceRatio=ratio(budgetedSpecificYield,projectedInsolation,'Projected insolation');
+    const actualPerformanceRatio=ratio(actualSpecificYield,actualInsolation,'Actual insolation');
+    const insolationRatio=ratio(actualInsolation,projectedInsolation,'Projected insolation');
+    const productionProjectionRatio=ratio(production,projected,'Projected production');
+    const revenueRatio=ratio(availableInput(actual?.revenue,'Utility actual revenue'),budget,'Budgeted revenue');
+    return [row.month,{
+      budgetedSpecificYield,actualSpecificYield,specificYieldRatio:ratio(actualSpecificYield,budgetedSpecificYield,'Budgeted specific yield'),
+      budgetedPerformanceRatio,actualPerformanceRatio,performanceRatioRatio:ratio(actualPerformanceRatio,budgetedPerformanceRatio,'Budgeted performance ratio'),
+      insolationRatio,productionProjectionRatio,productionExpectedRatio:ratio(production,telemetryInput(telemetry,row.month,'expected'),'Hourly Expected Production'),
+      revenueRatio,iapr:ratio(productionProjectionRatio,insolationRatio,'Actual/projected insolation'),iar:ratio(revenueRatio,insolationRatio,'Actual/projected insolation')
+    }];
+  }));
+}
+
+/** Fractions remain dimensionless; percent scaling and rounding are display-only. */
+export function formatCalculatedValue(field,value,group=false){
+  if(value===null||value===undefined)return '—';
+  return field==='budgetedSpecificYield'||field==='actualSpecificYield'?formatValue(value,2,group):`${formatValue(multiply(value,fraction('100')),0,group)}%`;
+}

@@ -13,7 +13,14 @@
 .monthly-workspace .baseline-scroll { max-height:630px; }
 .monthly-workspace .monthly-table { width:100%;border-collapse:separate;border-spacing:0;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums; }
 .monthly-workspace .utility-table { min-width:1040px;table-layout:fixed; }
-.monthly-workspace .comparison-table { min-width:1200px; }
+.monthly-workspace .comparison-table { min-width:3240px; }
+.monthly-workspace .comparison-scroll { width:100%;overscroll-behavior-x:contain; }
+.monthly-workspace .monthly-table .monthly-calculated-group { border-left:1px solid var(--line); }
+.monthly-workspace .monthly-table .monthly-calculated-cell { min-width:150px;max-width:190px;vertical-align:top; }
+.monthly-workspace .monthly-table .monthly-calculated-reason { white-space:normal;overflow-wrap:anywhere;margin-top:3px; }
+.monthly-workspace .comparison-table th[data-calculated-field] { min-width:150px;max-width:190px; }
+.monthly-workspace .comparison-table th[data-calculated-field] span { display:block;cursor:help; }
+.monthly-workspace .comparison-table th[data-calculated-field] span:focus-visible { outline:2px solid var(--accent,var(--gold));outline-offset:3px; }
 .monthly-workspace .baseline-table { min-width:760px; }
 .monthly-workspace .monthly-table thead { position:sticky;top:0;z-index:4; }
 .monthly-workspace .monthly-table thead th { background:var(--monthly-soft);color:var(--ink);font-size:11px;line-height:1.5;padding:10px 13px;text-align:right;vertical-align:middle;font-weight:500;letter-spacing:0;text-transform:none;border-bottom:1px solid var(--line); }

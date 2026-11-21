@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.11.21.2 — pending publication
+
+- Add twelve read-only monthly calculated columns: budgeted/actual specific yield and their ratio; budgeted/actual performance ratio and their ratio; actual/projected insolation; utility production versus projected and Expected Production; utility revenue versus budget; IAPR; and IAR.
+- Calculate yield from saved DC module nameplate capacity and utility production. Use the existing prorated/degraded projections and selected insolation reporting source. Recalculate from saved inputs on reads, including capacity edits, without rewriting utility inputs, telemetry or saved analyses.
+- Preserve exact underlying fractions. Display specific yield with two decimals and ratios as whole percentages; do not cap above 100%. Show unavailable denominators and visibly retain partial telemetry coverage. No schema migration, new imports or automatic analysis.
+
+See the feature PR checks for verification. Release publication and installed-app deployment remain separate.
+
 ## 2026.11.21.1 — published November 21, 2026
 
 - Add site-scoped monthly utility actuals for on-peak/off-peak production, revenue, energy used and invoice cost. Preserve entered decimal precision, explicit zero, blank fields and utility money credits; total either available production category without requiring both.
