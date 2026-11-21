@@ -1,4 +1,8 @@
 "use client";
+import './monthly.css';
+import MonthlySettings from './MonthlySettings';
+import {confirmMonthlyNavigation} from './monthly-client';
+
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatDateTime } from "./issue-date-format";
@@ -858,6 +862,7 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 3200);
   }
   function goTo(next: typeof view) {
+    if(next!==view&&!confirmMonthlyNavigation())return;
     if(next==='user'||next==='issue-visibility')setUserMenuOpen(true);
     if(next==='uploads'||next==='maintenance-uploads'||next==='manage-analyses')setUploadsMenuOpen(true);
     setMobileMenuOpen(false);
@@ -1288,11 +1293,13 @@ export default function Home() {
     setForm((current) => ({ ...current, [field]: value }));
   }
   function selectSettingsSite(siteId: string) {
+    if(siteId!==settingsSiteId&&!confirmMonthlyNavigation())return;
     setCreatingSite(false);
     setSettingsSiteId(siteId);
     setForm(configs[siteId]);
   }
   function startNewSite() {
+    if(!confirmMonthlyNavigation())return;
     setCreatingSite(true);
     setSettingsSiteId("");
     setForm(blankConfig());
@@ -2389,6 +2396,7 @@ export default function Home() {
                   </button>
                 </footer>
               </form>
+              {!creatingSite&&settingsSiteId&&<MonthlySettings key={settingsSiteId} siteId={settingsSiteId}/>}
             </div>
           </section>
         )}

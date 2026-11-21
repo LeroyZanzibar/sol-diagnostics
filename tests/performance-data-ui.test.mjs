@@ -15,7 +15,7 @@ function harness(path,initial={},bindings={}){
  for(const node of parsed.statements){if(ts.isImportDeclaration(node)){const c=node.importClause;if(c?.name)defaults[c.name.text]=()=>null;for(const n of c?.namedBindings?.elements||[])defaults[n.name.text]=()=>null;}}
  function visit(n){if(ts.isVariableDeclaration(n)&&ts.isArrayBindingPattern(n.name)&&ts.isCallExpression(n.initializer)&&n.initializer.expression.getText(parsed)==='useState')names.push(n.name.elements[0].getText(parsed));ts.forEachChild(n,visit);}visit(parsed);
  const state={...initial},refs=[],effects=[],queued=[];let index=0,refIndex=0,effectIndex=0;
- const module=loadSource(path,[],{...defaults,React,Fragment:React.Fragment,...time,...periods,...dates,...review,...visibility,...recurring,...loadSource('app/data-freshness.ts'),
+ const module=loadSource(path,[],{...defaults,...loadSource('app/monthly-client.ts'),React,Fragment:React.Fragment,...time,...periods,...dates,...review,...visibility,...recurring,...loadSource('app/data-freshness.ts'),
   AbortController,fetch:async()=>Response.json({}),window:{scrollTo:noop,setTimeout:noop},useMemo:fn=>fn(),useCallback:fn=>fn,
   useState:value=>{const name=names[index++];if(!(name in state))state[name]=typeof value==='function'?value():value;return [state[name],next=>{state[name]=typeof next==='function'?next(state[name]):next;}];},
   useRef:value=>refs[refIndex++]??(refs[refIndex-1]={current:value}),

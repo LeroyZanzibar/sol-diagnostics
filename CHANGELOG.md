@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.11.21.1 — pending publication
+
+- Add site-scoped monthly utility actuals for on-peak/off-peak production, revenue, energy used and invoice cost. Preserve entered decimal precision, explicit zero, blank fields and utility money credits; total either available production category without requiring both.
+- Add twelve calendar-month production, revenue and insolation baselines plus an operations start date and explicit annual degradation assumption. Preview projection changes before saving, retain incomplete setup, and calculate a 300-month horizon with partial-start-month and anniversary-day proration. Display rounding does not rewrite saved values.
+- Compare monthly actuals with revision-aware Expected Production and integrated irradiance from committed performance data. Show partial/missing coverage and reporting-source provenance, support explicit irradiance selection, and refresh after corrections and restart without requiring an analysis rerun.
+- Add monthly configuration, utility and derived-rollup tables through an additive schema migration. Preserve imported readings, saved analyses, reviews and existing settings; upgrading does not download/import data or automatically rerun analyses.
+- Package the shared monthly runtime domain module in the container image and extend the native-image persistence smoke to verify exact monthly inputs, approved projections and corrected telemetry after restart and recreation.
+
+Publication, native AMD64/ARM64 image verification and installed-app deployment remain separate release gates. Back up complete app storage before an installed-app upgrade; this pending entry does not claim publication or deployment.
+
 ## 2026.11.20.1 — published November 20, 2026
 
 - Focus new analyses on site, partial-site and inverter outages plus distinct telemetry/data-quality findings. Remove the active site/inverter underperformance detectors, historical-deficit baselines, peer/shared reductions, cause attribution and recurrence generation.

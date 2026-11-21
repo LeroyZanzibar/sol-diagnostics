@@ -1,0 +1,25 @@
+export type Fraction = {n:string;d:string};
+export type UtilityField = 'onPeak'|'offPeak'|'revenue'|'energyUsed'|'invoiceCost';
+export type UtilityValues = Record<UtilityField,string|null>;
+export type BaselineField = 'production'|'revenue'|'insolation';
+export type Baseline = Record<BaselineField,string|null>;
+export type MonthlyConfiguration = {operationsStart:string|null;degradation:string|null;irradianceChannelId:string|null;baselines:Record<string,Baseline>};
+export type ProjectionRow = {month:string;operationalDays:number;days:number;production:Fraction|null;revenue:Fraction|null;insolation:Fraction|null};
+export const utilityFields:UtilityField[];
+export const baselineFields:BaselineField[];
+export class MonthlyError extends Error {status:number;code:string;constructor(message:string,status?:number,code?:string)}
+export function demand(condition:unknown,message:string,status?:number,code?:string):asserts condition;
+export function fraction(value:string|Fraction):Fraction;
+export function add(...values:Fraction[]):Fraction;
+export function multiply(...values:Fraction[]):Fraction;
+export function validateDecimal(value:unknown,signed?:boolean,max?:string):string;
+export function nullableDecimal(value:unknown,signed?:boolean):string|null;
+export function formatValue(value:string|Fraction|null|undefined,places?:number,group?:boolean):string;
+export function utilityTotal(onPeak:string|null|undefined,offPeak:string|null|undefined):Fraction|null;
+export function emptyConfiguration():MonthlyConfiguration;
+export function daysInMonth(year:number,month:number):number;
+export function validateMonth(month:unknown):string;
+export function validateConfiguration(input:unknown):MonthlyConfiguration;
+export function horizon(start:string|null):string[];
+export function projectionRows(config:MonthlyConfiguration):ProjectionRow[];
+export function validateUtilityRows(input:unknown):Array<UtilityValues&{month:string}>;
