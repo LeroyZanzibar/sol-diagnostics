@@ -25,7 +25,7 @@ function harness(path,initial={},bindings={}) {
   }
   visit(source);
   const state={...initial},callbacks=[];let si=0,ri=0,ei=0,ci=0;
-  const module=loadSource(path,[],{...defaults,React,Fragment:React.Fragment,...time,...csv,Error,TypeError,AbortController,Date:FixtureDate,
+  const module=loadSource(path,[],{...defaults,...loadSource('app/monthly-client.ts'),React,Fragment:React.Fragment,...time,...csv,Error,TypeError,AbortController,Date:FixtureDate,
     useState:value=>{const key=states[si++];assert.ok(key,'Every useState has an AST-derived name');if(!(key in state))state[key]=typeof value==='function'?value():value;return [state[key],next=>{state[key]=typeof next==='function'?next(state[key]):next;}];},
     useRef:value=>refs[ri++]??(refs[ri-1]={current:value}),useMemo:fn=>fn(),useCallback:(fn,deps)=>{const i=ci++,old=callbacks[i];if(!old||deps.some((d,j)=>d!==old.deps[j]))callbacks[i]={fn,deps};return callbacks[i].fn;},
     useEffect:(fn,deps)=>{const i=ei++,old=effects[i];if(!old||deps?.some((d,j)=>d!==old.deps[j])){effects[i]={fn,deps,cleanup:old?.cleanup};queue.push(i);}},
@@ -184,14 +184,14 @@ test('retry/cancel require explicit actions and stale-generation retry is guarde
   const stale=ui({workspace:{settings:{...settings,generation:4},jobs:[failed],job:failed}},{fetch:async()=>{throw Error('Must not write');}});const retry=button(stale.render({...props,activeTab:'activity'}),'Retry download');assert.equal(retry.props.disabled,true);await retry.props.onClick();
 });
 
-test('parent has four keyboard-accessible tabs, one site picker and a stable site-keyed API controller',()=>{
+test('parent preserves import tabs alongside monthly tabs, one site picker and a stable site-keyed API controller',()=>{
   const csv=loadSource('app/telemetry-csv.ts',[],time),h=harness('app/TelemetryUploads.tsx',{siteId:settings.siteId,dataset,datasetLoading:false,pendingPreview:preview,file:new File(['synthetic'],'synthetic.csv')},csv);
   const p={sites:[{id:settings.siteId,name:'Synthetic site',location:'Test'}],initialSiteId:settings.siteId,onBack:noop,notify:noop};
-  let tree=h.render(p),tabs=nodes(tree).filter(n=>n.props?.role==='tab');assert.deepEqual(tabs.map(n=>html(n).replace(/<[^>]+>/g,'')),['Data','API setup','Field mapping','Activity']);
+  let tree=h.render(p),tabs=nodes(tree).filter(n=>n.props?.role==='tab');assert.deepEqual(tabs.map(n=>html(n).replace(/<[^>]+>/g,'')),['Data','Utility data','Projections','API setup','Field mapping','Activity']);
   const component=nodes(tree).find(n=>n.props?.onVerifiedImport);assert.ok(component);assert.equal(component.key,settings.siteId);
   const before=h.state.pendingPreview;tabs[1].props.onClick();tree=h.render(p);assert.equal(h.state.pendingPreview,before);assert.equal(h.state.file.name,'synthetic.csv');assert.equal(nodes(tree).find(n=>n.props?.['data-csv-controller']).props.hidden,true);
   assert.equal(nodes(tree).filter(n=>n.type==='select'&&n.props['aria-label']==='Site').length,1);
-  let focused=false;tabs=nodes(tree).filter(n=>n.props?.role==='tab');tabs[1].props.onKeyDown({key:'ArrowRight',preventDefault:noop,currentTarget:{parentElement:{querySelector:()=>({focus:()=>{focused=true;}})}}});assert.equal(h.state.activeTab,'mapping');assert.equal(focused,true);
+  let focused=false;tabs=nodes(tree).filter(n=>n.props?.role==='tab');tabs[3].props.onKeyDown({key:'ArrowRight',preventDefault:noop,currentTarget:{parentElement:{querySelector:()=>({focus:()=>{focused=true;}})}}});assert.equal(h.state.activeTab,'mapping');assert.equal(focused,true);
   assert.doesNotMatch(readFileSync('app/VcomWorkspace.tsx','utf8'),/localStorage|sessionStorage|setInterval|\/api\/performance-summary/);
 });
 

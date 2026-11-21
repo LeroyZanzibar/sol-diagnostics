@@ -5,6 +5,7 @@ import {LocalDatabase,LocalBucket,LocalFixedLengthStream} from './storage.mjs';
 import {PerformanceStoreManager} from './performance-store.mjs';
 import {ManualVcomStore} from './manual-vcom-store.mjs';
 import {ManualVcomDriver} from './manual-vcom-driver.mjs';
+import {MonthlyService} from './monthly-rollups.mjs';
 
 const password=process.env.SOL_PASSWORD_FILE?readFileSync(process.env.SOL_PASSWORD_FILE,'utf8').trim():process.env.SOL_PASSWORD;
 const username=process.env.SOL_USERNAME||'admin';
@@ -17,7 +18,8 @@ const bucket=new LocalBucket(database,resolve(data,'objects'));await bucket.coll
 // Keep canonical site databases outside the object bucket's orphan cleanup.
 const performance=new PerformanceStoreManager(resolve(data,'performance'));
 const manualVcom=new ManualVcomDriver({store:new ManualVcomStore({database,dataDirectory:data}),username,password});
-const runtime={database,bucket,performance,manualVcom,cleanup:undefined};
+const monthly=new MonthlyService({database,bucket,performance});
+const runtime={database,bucket,performance,manualVcom,monthly,cleanup:undefined};
 globalThis[Symbol.for('sol-diagnostics.runtime')]=runtime;
 globalThis.FixedLengthStream=LocalFixedLengthStream;
 const {startProdServer}=await import('vinext/server/prod-server');
@@ -58,10 +60,11 @@ server.on('request',(req,res)=>{
 server.requestTimeout=10*60*1000;
 // Start only after the same Basic/Origin protection wraps the actual listener.
 manualVcom.start(server);
+monthly.start();
 let cleaning;
 async function cleanup(){if(!runtime.cleanup||cleaning)return;cleaning=Promise.resolve(runtime.cleanup()).catch(error=>console.error('Deferred file cleanup:',error.message)).finally(()=>{cleaning=null;});await cleaning;}
 const timer=setInterval(()=>void cleanup(),60000);timer.unref();
 let closing=false;
-async function shutdown(){if(closing)return;closing=true;clearInterval(timer);setTimeout(()=>process.exit(1),110000).unref();await manualVcom.stop();server.close(async()=>{await cleaning;performance.close();database.close();process.exit(0);});}
+async function shutdown(){if(closing)return;closing=true;clearInterval(timer);setTimeout(()=>process.exit(1),110000).unref();await manualVcom.stop();await monthly.stop();server.close(async()=>{await cleaning;performance.close();database.close();process.exit(0);});}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
 console.log(`Sol Diagnostics: local storage ready (${data}); password protection enabled.`);

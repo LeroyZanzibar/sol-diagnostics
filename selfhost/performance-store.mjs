@@ -559,7 +559,10 @@ class SitePerformanceStore {
     });
   }
   rows(revision, scope) {return this.#using(() => this.#rows(revision, scope));}
-  #rows(revision, scope) {
+  // Reporting only: effective-value provenance survives null-preserving imports.
+  // Never substitute the latest import or numeric fingerprint for this owner.
+  reportingRows(revision, scope) {return this.#using(() => this.#rows(revision, scope, true));}
+  #rows(revision, scope, reporting = false) {
     // Resolve the default revision NOW, not when a lazy generator is first read.
     const pinned = this.describe(revision).revision;
     const filter = scopeFilter(scope);
@@ -574,12 +577,16 @@ class SitePerformanceStore {
           // Keyset pages over immutable history avoid both a mutable-head snapshot
           // and a long-lived SQLite read transaction that would pin WAL retention.
           const page = store.#db.prepare(`SELECT v.timestamp,v.channel_id,v.value_json,c.equipment_id,c.measurement,c.unit
+            ${reporting ? ',i.revision owner_revision,i.stage_id owner_stage,i.metadata_json owner_metadata' : ''}
             FROM reading_versions v JOIN channels c ON c.id=v.channel_id
+            ${reporting ? `JOIN imports i ON i.revision=(SELECT MAX(o.revision) FROM reading_versions o
+              WHERE o.timestamp=v.timestamp AND o.channel_id=v.channel_id AND o.revision<=v.revision
+              AND (o.incoming_value_json!='null' OR o.previous_value_json IS NULL))` : ''}
             WHERE (v.timestamp,v.channel_id)>(?,?) AND v.revision<=?
               AND v.revision=(SELECT MAX(h.revision) FROM reading_versions h WHERE h.timestamp=v.timestamp AND h.channel_id=v.channel_id AND h.revision<=?)
               ${filter.sql} ORDER BY v.timestamp,v.channel_id LIMIT ?`).all(lastTimestamp, lastChannel, pinned, pinned, ...filter.params, BATCH_SIZE);
           if (!page.length) return;
-          for (const row of page) yield {timestamp: row.timestamp, channel: channelFrom(row), value: JSON.parse(row.value_json)};
+          for (const row of page) yield {timestamp: row.timestamp, channel: channelFrom(row), value: JSON.parse(row.value_json), ...(reporting ? {owner:{revision:row.owner_revision,stageId:row.owner_stage,metadata:JSON.parse(row.owner_metadata)}} : {})};
           lastTimestamp = page.at(-1).timestamp; lastChannel = page.at(-1).channel_id;
           if (page.length < BATCH_SIZE) return;
         }

@@ -1,0 +1,37 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {LocalDatabase,LocalBucket} from '../../selfhost/storage.mjs';
+import {PerformanceStoreManager} from '../../selfhost/performance-store.mjs';
+import {MonthlyService,monthBounds} from '../../selfhost/monthly-rollups.mjs';
+import {formatValue} from '../../app/monthly-domain.mjs';
+const channel=(equipmentId,measurement,unit,id=null)=>({id:JSON.stringify([equipmentId,measurement,id]),equipmentId,measurement,unit});
+const expected=channel('@site','Expected Production','kWh'),irradiance=channel('weather','Irradiance','W/m²');
+async function commit(store,readings,source='csv'){
+ const preview=await store.stage({source,fileName:'Synthetic',timezone:'America/New_York',intervalMinutes:60,modelRevision:'synthetic'},readings);
+ return store.commit(preview.stageId,{previewToken:preview.previewToken,approveOverlap:true,modelRevision:'synthetic',actor:'synthetic'});
+}
+test('real immutable imports → monthly refresh, historical correction, owner, restart, source ambiguity and isolation',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'sol-monthly-rollup-'));let db=new LocalDatabase(join(root,'shared.sqlite'),resolve('drizzle')),manager=new PerformanceStoreManager(join(root,'performance'));
+ db.sqlite.exec("INSERT INTO site_settings(id,name) VALUES ('site','Synthetic'),('other','Other')");
+ let monthly=new MonthlyService({database:db,bucket:new LocalBucket(db,join(root,'objects')),performance:manager}),store=manager.site('site');
+ const bounds=monthBounds('2024-03','America/New_York');assert.equal((bounds.end-bounds.start)/3600000,743);
+ assert.equal((monthBounds('2024-11','America/New_York').end-monthBounds('2024-11','America/New_York').start)/3600000,721);
+ const readings=[];for(let t=bounds.start;t<bounds.end;t+=3600000)for(const c of [expected,irradiance])readings.push({timestamp:new Date(t).toISOString(),channel:c,value:c===expected?12.25:500});
+ await commit(store,readings);let result=await monthly.read('site');let march=result.telemetry.months['2024-03'];
+ assert.equal(result.telemetry.sourceRevision,1);assert.equal(formatValue(march.expected.value,2),'9101.75');assert.equal(formatValue(march.insolation.value,2),'371.50');assert.equal(march.expected.state,'complete');assert.equal(march.insolation.source,'Imported irradiance; satellite/POA provenance unknown');
+ const timestamp=readings[0].timestamp;await commit(store,[{timestamp,channel:expected,value:0},{timestamp,channel:irradiance,value:0}]);
+ result=await monthly.read('site');assert.equal(result.telemetry.sourceRevision,2);assert.equal(formatValue(result.telemetry.months['2024-03'].expected.value,2),'9089.50');
+ await commit(store,[{timestamp,channel:expected,value:null}]);assert.equal([...store.reportingRows(3)].find(r=>r.timestamp===timestamp&&r.channel.id===expected.id).owner.revision,2);
+ manager.close();db.close();db=new LocalDatabase(join(root,'shared.sqlite'),resolve('drizzle'));manager=new PerformanceStoreManager(join(root,'performance'));monthly=new MonthlyService({database:db,bucket:new LocalBucket(db,join(root,'objects')),performance:manager});
+ result=await monthly.read('site');assert.equal(result.telemetry.sourceRevision,3);assert.equal(result.telemetry.state,'current');
+ assert.equal((await monthly.read('other')).telemetry.state,'missing');
+ store=manager.site('site');const second=channel('weather2','POA irradiance','W/m²');await commit(store,[{timestamp,channel:second,value:123}]);
+ result=await monthly.read('site');assert.equal(result.telemetry.selectionRequired,true);assert.equal(result.telemetry.months['2024-03'].insolation.value,null);
+ const config={...result.configuration,irradianceChannelId:irradiance.id};const p=monthly.inputs.preview('site',result.revision,config);monthly.inputs.saveConfiguration('site',result.revision,config,p.token);
+ result=await monthly.read('site');assert.equal(result.telemetry.selectionRequired,false);assert.equal(formatValue(result.telemetry.months['2024-03'].insolation.value,2),'371.00');
+ assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM monthly_utility').get().n,0);assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM performance_summaries').get().n,0);
+ await monthly.stop();manager.close();db.close();
+});

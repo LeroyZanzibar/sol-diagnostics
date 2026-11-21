@@ -13,6 +13,7 @@ COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json ./
 COPY --chown=node:node drizzle ./drizzle
 COPY --chown=node:node selfhost ./selfhost
+COPY --chown=node:node app/monthly-domain.mjs ./app/monthly-domain.mjs
 RUN mkdir /data && chown node:node /data
 USER node
 EXPOSE 3080

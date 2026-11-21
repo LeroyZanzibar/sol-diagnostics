@@ -148,6 +148,13 @@
       "when": 1795099221022,
       "tag": "0020_manual_vcom",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1795232680873,
+      "tag": "0021_monthly_data",
+      "breakpoints": true
     }
   ]
 }

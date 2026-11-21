@@ -94,6 +94,8 @@ export interface SitePerformanceStore {
   commit(stageId: string, options: { previewToken: string; approveOverlap: boolean; modelRevision: string; actor: string }): PerformanceCommit;
   cancel(stageId: string): PerformancePreview;
   rows(revision?: number, scope?: PerformanceInputScope): IterableIterator<PerformanceReading>;
+  /** Reporting-only effective-value owner; null-preserving corrections retain it. */
+  reportingRows(revision?: number, scope?: PerformanceInputScope): IterableIterator<PerformanceReading & {owner: {revision:number;stageId:string;metadata:PerformanceImportMetadata}}>;
   fingerprint(revision: number, scope: PerformanceInputScope): string;
   imports(limit?: number): PerformanceImportAudit[];
   recordAnalysis(runId: string, provenance: PerformanceAnalysisProvenance): void;

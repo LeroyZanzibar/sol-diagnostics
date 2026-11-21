@@ -71,6 +71,20 @@ export const siteSettings = sqliteTable("site_settings", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// Exact monthly inputs are TEXT, separate from diagnostic model/settings hashes.
+export const monthlyConfiguration = sqliteTable('monthly_configuration', {
+  siteId:text('site_id').primaryKey().notNull().references(()=>siteSettings.id),
+  revision:integer('revision').notNull(), configurationJson:text('configuration_json').notNull(), updatedAt:text('updated_at').notNull(),
+},table=>[check('monthly_revision',sql`${table.revision} >= 0`)]);
+export const monthlyUtility = sqliteTable('monthly_utility', {
+  siteId:text('site_id').notNull().references(()=>siteSettings.id),month:text('month').notNull(),
+  onPeak:text('on_peak'),offPeak:text('off_peak'),revenue:text('revenue'),energyUsed:text('energy_used'),invoiceCost:text('invoice_cost'),
+},table=>[primaryKey({columns:[table.siteId,table.month]})]);
+export const monthlyRollups = sqliteTable('monthly_rollups', {
+  siteId:text('site_id').primaryKey().notNull().references(()=>siteSettings.id),sourceRevision:integer('source_revision').notNull(),
+  selectionKey:text('selection_key').notNull(),calculationVersion:integer('calculation_version').notNull(),payloadJson:text('payload_json').notNull(),updatedAt:text('updated_at').notNull(),
+});
+
 export const telemetryImports = sqliteTable("telemetry_imports", {
   id: text("id").primaryKey(),
   siteId: text("site_id").notNull(),

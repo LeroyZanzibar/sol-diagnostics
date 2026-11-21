@@ -2,12 +2,13 @@
 // Exercise the actual image, not a host substitute. Only synthetic data is used.
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {mkdtempSync, mkdirSync, rmSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {runPerformancePersistenceSmoke} from './performance-persistence-smoke.mjs';
+import {runMonthlyPersistenceSmoke, verifyMonthlyPersistence} from './monthly-persistence-smoke.mjs';
 
 const image = process.argv[2];
 assert.ok(image, 'Usage: node scripts/container-smoke.mjs IMAGE');
@@ -97,6 +98,11 @@ try {
   const uploaded = await request(`/api/telemetry-imports/chunk?uploadId=${uploadId}&part=1`, {method: 'PUT', body: csv});
   assert.equal(uploaded.status, 201, await uploaded.text());
   const performance = await runPerformancePersistenceSmoke({api, request, siteId: site.id});
+  const monthly = await runMonthlyPersistenceSmoke({api, request});
+  // Keep the approved expectation outside the image and /data. Every lifecycle
+  // readback uses these same bytes, never a new snapshot from the restarted app.
+  const monthlySnapshot = join(root, 'monthly-expected.json');
+  writeFileSync(monthlySnapshot, JSON.stringify(monthly.expected));
   const objectCheck = `
     import assert from 'node:assert/strict';
     import {LocalDatabase,LocalBucket} from './selfhost/storage.mjs';
@@ -115,21 +121,22 @@ try {
     assert.equal(settings.theme, 'jade');
     docker('exec', name, 'node', '--input-type=module', '-e', objectCheck, uploadId, csv);
     await performance.verify();
+    await verifyMonthlyPersistence({api, expected: JSON.parse(readFileSync(monthlySnapshot, 'utf8'))});
     await protectedEndpoints();
   };
   await persisted();
-  console.log('PASS: initial auth, SQLite state, uploaded bytes, canonical readings and approval receipts.');
+  console.log('PASS: initial auth, SQLite state, uploaded bytes, canonical readings/receipts, exact monthly inputs, 300 projections and corrected monthly telemetry.');
   docker('restart', '--time', '120', name);
   await ready();
   await persisted();
-  console.log('PASS: persisted state, exact canonical readings and approval receipts after restart.');
+  console.log('PASS: canonical readings/receipts, exact monthly inputs, 300 projections and corrected monthly telemetry after restart.');
   // Recreate as well as restart: persistence must live on /data, not a layer.
   docker('stop', '--time', '120', name);
   assert.equal(docker('inspect', '--format={{.State.ExitCode}}', name), '0');
   docker('rm', name);
   await start();
   await persisted();
-  console.log('PASS: persisted state, exact canonical readings and approval receipts after container recreation.');
+  console.log('PASS: canonical readings/receipts, exact monthly inputs, 300 projections and corrected monthly telemetry after container recreation.');
   for (let i = 0; i < 90; i++) {
     const status = docker('inspect', '--format={{.State.Health.Status}}', name);
     if (status === 'healthy') break;
@@ -137,7 +144,7 @@ try {
     if (i === 89) throw Error('Image HEALTHCHECK did not become healthy');
     await delay(1000);
   }
-  console.log('PASS: non-root/read-only startup, healthcheck, HTTP auth, CSRF rejection, SQLite, uploaded bytes, canonical readings and approval receipts survive restart and recreation.');
+  console.log('PASS: non-root/read-only startup, healthcheck, HTTP auth, CSRF rejection, SQLite, uploaded bytes, canonical readings/receipts and monthly data survive restart and recreation.');
 } catch (error) {
   console.error('Container smoke failure:', error);
   try { console.error(docker('logs', '--tail', '150', name)); } catch {}
