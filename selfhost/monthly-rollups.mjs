@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {setImmediate as yieldNow} from 'node:timers/promises';
 import {MonthlyStore} from './monthly-store.mjs';
-import {fraction,add,multiply,projectionRows,MonthlyError} from '../app/monthly-domain.mjs';
+import {fraction,add,multiply,projectionRows,calculatedRows,MonthlyError} from '../app/monthly-domain.mjs';
 
 const VERSION=2,HOUR=3600000;
 const isExpected=channel=>channel.equipmentId==='@site'&&channel.measurement==='Expected Production'&&channel.unit==='kWh';
@@ -143,7 +143,10 @@ export class MonthlyService {
     let telemetry;for(let tries=0;tries<2;tries++){telemetry=await this.refresh(siteId);if(telemetry.state!=='refreshing')break;}
     const current=this.inputs.read(siteId),head=this.performance.hasData(siteId)?this.performance.site(siteId).describe().revision:0;
     if(head!==telemetry.sourceRevision||head>0&&this.selectionKey(current.configuration)!==telemetry.selectionKey)telemetry={...telemetry,state:'refreshing'};
-    return {...current,projections:projectionRows(current.configuration),telemetry};
+    const projections=projectionRows(current.configuration);
+    // Compose at read time: utility, forecast and model edits need no reimport,
+    // telemetry-cache rewrite or mutation of saved analysis results.
+    return {...current,projections,telemetry,calculated:calculatedRows(projections,current.utility,telemetry,current.capacity)};
   }
   async validateSelection(siteId,configuration){
     if(configuration.irradianceChannelId===null)return;

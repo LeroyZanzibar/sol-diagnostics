@@ -1,10 +1,18 @@
 export type Fraction = {n:string;d:string};
-export type UtilityField = 'onPeak'|'offPeak'|'revenue'|'energyUsed'|'invoiceCost';
+export type UtilityField = 'onPeak'|'offPeak'|'unpaidEnergy'|'revenue'|'energyUsed'|'invoiceCost';
 export type UtilityValues = Record<UtilityField,string|null>;
 export type BaselineField = 'production'|'revenue'|'insolation';
 export type Baseline = Record<BaselineField,string|null>;
 export type MonthlyConfiguration = {operationsStart:string|null;degradation:string|null;irradianceChannelId:string|null;baselines:Record<string,Baseline>};
 export type ProjectionRow = {month:string;operationalDays:number;days:number;production:Fraction|null;revenue:Fraction|null;insolation:Fraction|null};
+export type MonthlyCapacity = {dcKwp:Fraction|null;unavailableReason:string|null};
+export type MonthlyCalculatedField = 'budgetedSpecificYield'|'actualSpecificYield'|'specificYieldRatio'|'budgetedPerformanceRatio'|'actualPerformanceRatio'|'performanceRatioRatio'|'insolationRatio'|'productionProjectionRatio'|'productionExpectedRatio'|'revenueRatio'|'iapr'|'iar';
+export type MonthlyCalculatedMetric = {value:Fraction|null;state:'available'|'partial'|'missing';reason:string|null};
+export type MonthlyCalculatedMetrics = Record<MonthlyCalculatedField,MonthlyCalculatedMetric>;
+export const calculatedFields:MonthlyCalculatedField[];
+export function modelDcCapacity(assets:ReadonlyArray<{id:string;type:string;parentId?:string|null;moduleRatedCapacityW?:string|number|null;quantity?:number}>):MonthlyCapacity;
+export function calculatedRows(projections:ProjectionRow[],utility:Record<string,UtilityValues>,telemetry:import('./monthly-types').MonthlyTelemetry,capacity:MonthlyCapacity):Record<string,MonthlyCalculatedMetrics>;
+export function formatCalculatedValue(field:MonthlyCalculatedField,value:Fraction|null|undefined,group?:boolean):string;
 export const utilityFields:UtilityField[];
 export const baselineFields:BaselineField[];
 export class MonthlyError extends Error {status:number;code:string;constructor(message:string,status?:number,code?:string)}
@@ -15,7 +23,7 @@ export function multiply(...values:Fraction[]):Fraction;
 export function validateDecimal(value:unknown,signed?:boolean,max?:string):string;
 export function nullableDecimal(value:unknown,signed?:boolean):string|null;
 export function formatValue(value:string|Fraction|null|undefined,places?:number,group?:boolean):string;
-export function utilityTotal(onPeak:string|null|undefined,offPeak:string|null|undefined):Fraction|null;
+export function utilityTotal(onPeak:string|null|undefined,offPeak:string|null|undefined,unpaidEnergy?:string|null):Fraction|null;
 export function emptyConfiguration():MonthlyConfiguration;
 export function daysInMonth(year:number,month:number):number;
 export function validateMonth(month:unknown):string;

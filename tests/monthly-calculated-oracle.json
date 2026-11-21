@@ -1,0 +1,3192 @@
+{
+  "oracle": "Python fractions.Fraction; exact formula and independent display rounding",
+  "keys": [
+    "budgetedSpecificYield",
+    "actualSpecificYield",
+    "specificYieldRatio",
+    "budgetedPerformanceRatio",
+    "actualPerformanceRatio",
+    "performanceRatioRatio",
+    "insolationRatio",
+    "productionProjectionRatio",
+    "productionExpectedRatio",
+    "revenueRatio",
+    "iapr",
+    "iar"
+  ],
+  "cases": [
+    {
+      "name": "ordinary",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "8000",
+        "offPeak": "4000",
+        "unpaidEnergy": null,
+        "revenue": "1200",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "125",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "specificYieldRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "4",
+          "d": "5"
+        },
+        "performanceRatioRatio": {
+          "n": "6",
+          "d": "5"
+        },
+        "insolationRatio": {
+          "n": "5",
+          "d": "6"
+        },
+        "productionProjectionRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "productionExpectedRatio": {
+          "n": "6",
+          "d": "5"
+        },
+        "revenueRatio": {
+          "n": "6",
+          "d": "5"
+        },
+        "iapr": {
+          "n": "6",
+          "d": "5"
+        },
+        "iar": {
+          "n": "36",
+          "d": "25"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "100.00",
+        "specificYieldRatio": "100%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "80%",
+        "performanceRatioRatio": "120%",
+        "insolationRatio": "83%",
+        "productionProjectionRatio": "100%",
+        "productionExpectedRatio": "120%",
+        "revenueRatio": "120%",
+        "iapr": "120%",
+        "iar": "144%"
+      }
+    },
+    {
+      "name": "partial-telemetry",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "8000",
+        "offPeak": "4000",
+        "unpaidEnergy": null,
+        "revenue": "1200",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "specificYieldRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "100",
+          "d": "1"
+        },
+        "performanceRatioRatio": {
+          "n": "150",
+          "d": "1"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "150"
+        },
+        "productionProjectionRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "productionExpectedRatio": {
+          "n": "6",
+          "d": "5"
+        },
+        "revenueRatio": {
+          "n": "6",
+          "d": "5"
+        },
+        "iapr": {
+          "n": "150",
+          "d": "1"
+        },
+        "iar": {
+          "n": "180",
+          "d": "1"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "100.00",
+        "specificYieldRatio": "100%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "10000%",
+        "performanceRatioRatio": "15000%",
+        "insolationRatio": "1%",
+        "productionProjectionRatio": "100%",
+        "productionExpectedRatio": "120%",
+        "revenueRatio": "120%",
+        "iapr": "15000%",
+        "iar": "18000%"
+      }
+    },
+    {
+      "name": "above-100-and-signed-revenue",
+      "modules": [
+        [
+          "500",
+          200
+        ]
+      ],
+      "capacity": {
+        "n": "100",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "50",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "1",
+          "d": "2"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "100",
+        "offPeak": null,
+        "unpaidEnergy": null,
+        "revenue": "-2.125",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "25",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "1",
+          "d": "2"
+        },
+        "actualSpecificYield": {
+          "n": "1",
+          "d": "1"
+        },
+        "specificYieldRatio": {
+          "n": "2",
+          "d": "1"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualPerformanceRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "performanceRatioRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "insolationRatio": {
+          "n": "2",
+          "d": "1"
+        },
+        "productionProjectionRatio": {
+          "n": "2",
+          "d": "1"
+        },
+        "productionExpectedRatio": {
+          "n": "4",
+          "d": "1"
+        },
+        "revenueRatio": {
+          "n": "-17",
+          "d": "8"
+        },
+        "iapr": {
+          "n": "1",
+          "d": "1"
+        },
+        "iar": {
+          "n": "-17",
+          "d": "16"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "0.50",
+        "actualSpecificYield": "1.00",
+        "specificYieldRatio": "200%",
+        "budgetedPerformanceRatio": "100%",
+        "actualPerformanceRatio": "100%",
+        "performanceRatioRatio": "100%",
+        "insolationRatio": "200%",
+        "productionProjectionRatio": "200%",
+        "productionExpectedRatio": "400%",
+        "revenueRatio": "-213%",
+        "iapr": "100%",
+        "iar": "-106%"
+      }
+    },
+    {
+      "name": "zero-numerators",
+      "modules": [
+        [
+          "1000",
+          1
+        ]
+      ],
+      "capacity": {
+        "n": "1",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "1",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "1",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "0",
+        "offPeak": null,
+        "unpaidEnergy": null,
+        "revenue": "0",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "1",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "0",
+          "d": "1"
+        },
+        "specificYieldRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualPerformanceRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "performanceRatioRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "productionProjectionRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "productionExpectedRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "revenueRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "iapr": {
+          "n": "0",
+          "d": "1"
+        },
+        "iar": {
+          "n": "0",
+          "d": "1"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "1.00",
+        "actualSpecificYield": "0.00",
+        "specificYieldRatio": "0%",
+        "budgetedPerformanceRatio": "100%",
+        "actualPerformanceRatio": "0%",
+        "performanceRatioRatio": "0%",
+        "insolationRatio": "100%",
+        "productionProjectionRatio": "0%",
+        "productionExpectedRatio": "0%",
+        "revenueRatio": "0%",
+        "iapr": "0%",
+        "iar": "0%"
+      }
+    },
+    {
+      "name": "rounding-0.994999999999999999",
+      "modules": [
+        [
+          "1e3",
+          1
+        ]
+      ],
+      "capacity": {
+        "n": "1",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "1",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "1",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "0.994999999999999999",
+        "offPeak": null,
+        "unpaidEnergy": null,
+        "revenue": "-0.994999999999999999",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "1",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualPerformanceRatio": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "productionProjectionRatio": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "iapr": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "iar": {
+          "n": "-994999999999999999",
+          "d": "1000000000000000000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "1.00",
+        "actualSpecificYield": "0.99",
+        "specificYieldRatio": "99%",
+        "budgetedPerformanceRatio": "100%",
+        "actualPerformanceRatio": "99%",
+        "performanceRatioRatio": "99%",
+        "insolationRatio": "100%",
+        "productionProjectionRatio": "99%",
+        "productionExpectedRatio": "99%",
+        "revenueRatio": "-99%",
+        "iapr": "99%",
+        "iar": "-99%"
+      }
+    },
+    {
+      "name": "rounding-0.995",
+      "modules": [
+        [
+          "1e3",
+          1
+        ]
+      ],
+      "capacity": {
+        "n": "1",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "1",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "1",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "0.995",
+        "offPeak": null,
+        "unpaidEnergy": null,
+        "revenue": "-0.995",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "1",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "199",
+          "d": "200"
+        },
+        "specificYieldRatio": {
+          "n": "199",
+          "d": "200"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualPerformanceRatio": {
+          "n": "199",
+          "d": "200"
+        },
+        "performanceRatioRatio": {
+          "n": "199",
+          "d": "200"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "productionProjectionRatio": {
+          "n": "199",
+          "d": "200"
+        },
+        "productionExpectedRatio": {
+          "n": "199",
+          "d": "200"
+        },
+        "revenueRatio": {
+          "n": "-199",
+          "d": "200"
+        },
+        "iapr": {
+          "n": "199",
+          "d": "200"
+        },
+        "iar": {
+          "n": "-199",
+          "d": "200"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "1.00",
+        "actualSpecificYield": "1.00",
+        "specificYieldRatio": "100%",
+        "budgetedPerformanceRatio": "100%",
+        "actualPerformanceRatio": "100%",
+        "performanceRatioRatio": "100%",
+        "insolationRatio": "100%",
+        "productionProjectionRatio": "100%",
+        "productionExpectedRatio": "100%",
+        "revenueRatio": "-100%",
+        "iapr": "100%",
+        "iar": "-100%"
+      }
+    },
+    {
+      "name": "rounding-0.005",
+      "modules": [
+        [
+          "1e3",
+          1
+        ]
+      ],
+      "capacity": {
+        "n": "1",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "1",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "1",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "0.005",
+        "offPeak": null,
+        "unpaidEnergy": null,
+        "revenue": "-0.005",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "1",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "1",
+          "d": "200"
+        },
+        "specificYieldRatio": {
+          "n": "1",
+          "d": "200"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualPerformanceRatio": {
+          "n": "1",
+          "d": "200"
+        },
+        "performanceRatioRatio": {
+          "n": "1",
+          "d": "200"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "productionProjectionRatio": {
+          "n": "1",
+          "d": "200"
+        },
+        "productionExpectedRatio": {
+          "n": "1",
+          "d": "200"
+        },
+        "revenueRatio": {
+          "n": "-1",
+          "d": "200"
+        },
+        "iapr": {
+          "n": "1",
+          "d": "200"
+        },
+        "iar": {
+          "n": "-1",
+          "d": "200"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "1.00",
+        "actualSpecificYield": "0.01",
+        "specificYieldRatio": "1%",
+        "budgetedPerformanceRatio": "100%",
+        "actualPerformanceRatio": "1%",
+        "performanceRatioRatio": "1%",
+        "insolationRatio": "100%",
+        "productionProjectionRatio": "1%",
+        "productionExpectedRatio": "1%",
+        "revenueRatio": "-1%",
+        "iapr": "1%",
+        "iar": "-1%"
+      }
+    },
+    {
+      "name": "rounding-0.004999999999999999",
+      "modules": [
+        [
+          "1e3",
+          1
+        ]
+      ],
+      "capacity": {
+        "n": "1",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "1",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "1",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "0.004999999999999999",
+        "offPeak": null,
+        "unpaidEnergy": null,
+        "revenue": "-0.004999999999999999",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "1",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "4999999999999999",
+          "d": "1000000000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "4999999999999999",
+          "d": "1000000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualPerformanceRatio": {
+          "n": "4999999999999999",
+          "d": "1000000000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "4999999999999999",
+          "d": "1000000000000000000"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "productionProjectionRatio": {
+          "n": "4999999999999999",
+          "d": "1000000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "4999999999999999",
+          "d": "1000000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-4999999999999999",
+          "d": "1000000000000000000"
+        },
+        "iapr": {
+          "n": "4999999999999999",
+          "d": "1000000000000000000"
+        },
+        "iar": {
+          "n": "-4999999999999999",
+          "d": "1000000000000000000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "1.00",
+        "actualSpecificYield": "0.00",
+        "specificYieldRatio": "0%",
+        "budgetedPerformanceRatio": "100%",
+        "actualPerformanceRatio": "0%",
+        "performanceRatioRatio": "0%",
+        "insolationRatio": "100%",
+        "productionProjectionRatio": "0%",
+        "productionExpectedRatio": "0%",
+        "revenueRatio": "0%",
+        "iapr": "0%",
+        "iar": "0%"
+      }
+    },
+    {
+      "name": "prorated-and-degraded-2024-03",
+      "modules": [
+        [
+          "450.123456789012345678",
+          1234
+        ],
+        [
+          "3.75e2",
+          321
+        ]
+      ],
+      "capacity": {
+        "n": "168956836419410308641663",
+        "d": "250000000000000000000"
+      },
+      "month": "2024-03",
+      "projection": {
+        "month": "2024-03",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "620024691357802469",
+          "d": "387500000000000"
+        },
+        "revenue": {
+          "n": "48456790123283179",
+          "d": "302734375000000"
+        },
+        "insolation": {
+          "n": "3112345678901234567",
+          "d": "193750000000000000"
+        }
+      },
+      "configuration": {
+        "operationsStart": "2024-03-16",
+        "degradation": "0.123456789012345678",
+        "irradianceChannelId": null,
+        "baselines": {
+          "1": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "2": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "3": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "4": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "5": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "6": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "7": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "8": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "9": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "10": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "11": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "12": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          }
+        }
+      },
+      "utility": {
+        "onPeak": "123.1234567890123456",
+        "offPeak": "0.000000000000000001",
+        "unpaidEnergy": null,
+        "revenue": "-0.12345678901234567",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "36407",
+        "d": "4"
+      },
+      "insolation": {
+        "n": "743",
+        "d": "2"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "12400493827156049380000000",
+          "d": "5237661929001719567891553"
+        },
+        "actualSpecificYield": {
+          "n": "30780864197253086400250",
+          "d": "168956836419410308641663"
+        },
+        "specificYieldRatio": {
+          "n": "3816827160459382713631",
+          "d": "49601975308624197520000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "77503086419725308625000000000000000000000",
+          "d": "525852079750774410721662968686519511964921"
+        },
+        "actualPerformanceRatio": {
+          "n": "61561728394506172800500",
+          "d": "125534929459621859320755609"
+        },
+        "performanceRatioRatio": {
+          "n": "383202758708665446986703414123371589767",
+          "d": "115169586419711808616750000000000000000000"
+        },
+        "insolationRatio": {
+          "n": "71978125000000000000",
+          "d": "3112345678901234567"
+        },
+        "productionProjectionRatio": {
+          "n": "3816827160459382713631",
+          "d": "49601975308624197520000"
+        },
+        "productionExpectedRatio": {
+          "n": "123123456789012345601",
+          "d": "9101750000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-382716045938271577",
+          "d": "496197530862419752960"
+        },
+        "iapr": {
+          "n": "383202758708665446986703414123371589767",
+          "d": "115169586419711808616750000000000000000000"
+        },
+        "iar": {
+          "n": "-183846987470619837538404769165921",
+          "d": "5512481540531965856000000000000000000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "2.37",
+        "actualSpecificYield": "0.18",
+        "specificYieldRatio": "8%",
+        "budgetedPerformanceRatio": "15%",
+        "actualPerformanceRatio": "0%",
+        "performanceRatioRatio": "0%",
+        "insolationRatio": "2313%",
+        "productionProjectionRatio": "8%",
+        "productionExpectedRatio": "1%",
+        "revenueRatio": "0%",
+        "iapr": "0%",
+        "iar": "0%"
+      }
+    },
+    {
+      "name": "prorated-and-degraded-2026-03",
+      "modules": [
+        [
+          "450.123456789012345678",
+          1234
+        ],
+        [
+          "3.75e2",
+          321
+        ]
+      ],
+      "capacity": {
+        "n": "168956836419410308641663",
+        "d": "250000000000000000000"
+      },
+      "month": "2026-03",
+      "projection": {
+        "month": "2026-03",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "2997625595517739977510474598566524801597827606708852684949",
+          "d": "968750000000000000000000000000000000000000000000000000"
+        },
+        "revenue": {
+          "n": "234273435195117522663464993189764723405961285748316908859",
+          "d": "756835937500000000000000000000000000000000000000000000"
+        },
+        "insolation": {
+          "n": "3112345678901234567",
+          "d": "100000000000000000"
+        }
+      },
+      "configuration": {
+        "operationsStart": "2024-03-16",
+        "degradation": "0.123456789012345678",
+        "irradianceChannelId": null,
+        "baselines": {
+          "1": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "2": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "3": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "4": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "5": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "6": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "7": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "8": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "9": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "10": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "11": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "12": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          }
+        }
+      },
+      "utility": {
+        "onPeak": "123.1234567890123456",
+        "offPeak": "0.000000000000000001",
+        "unpaidEnergy": null,
+        "revenue": "-0.12345678901234567",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "36407",
+        "d": "4"
+      },
+      "insolation": {
+        "n": "743",
+        "d": "2"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "2997625595517739977510474598566524801597827606708852684949",
+          "d": "654707741125214945986444125000000000000000000000000000000"
+        },
+        "actualSpecificYield": {
+          "n": "30780864197253086400250",
+          "d": "168956836419410308641663"
+        },
+        "specificYieldRatio": {
+          "n": "119275848764355709800968750000000000000000000000000000000",
+          "d": "2997625595517739977510474598566524801597827606708852684949"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2997625595517739977510474598566524801597827606708852684949",
+          "d": "20376768090342508415464440036602631088640688750000000000000"
+        },
+        "actualPerformanceRatio": {
+          "n": "61561728394506172800500",
+          "d": "125534929459621859320755609"
+        },
+        "performanceRatioRatio": {
+          "n": "7424553449980393035367378648640324551735625000000000000000",
+          "d": "2227235817469680803290282626734927927587185911784677544917107"
+        },
+        "insolationRatio": {
+          "n": "37150000000000000000",
+          "d": "3112345678901234567"
+        },
+        "productionProjectionRatio": {
+          "n": "119275848764355709800968750000000000000000000000000000000",
+          "d": "2997625595517739977510474598566524801597827606708852684949"
+        },
+        "productionExpectedRatio": {
+          "n": "123123456789012345601",
+          "d": "9101750000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-93436534652898334228515625000000000000000000000000000",
+          "d": "234273435195117522663464993189764723405961285748316908859"
+        },
+        "iapr": {
+          "n": "7424553449980393035367378648640324551735625000000000000000",
+          "d": "2227235817469680803290282626734927927587185911784677544917107"
+        },
+        "iar": {
+          "n": "-27828401423775463689895253145232182617187500000000000",
+          "d": "832847666746279039899303779617201863591527441679423269293"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "4.58",
+        "actualSpecificYield": "0.18",
+        "specificYieldRatio": "4%",
+        "budgetedPerformanceRatio": "15%",
+        "actualPerformanceRatio": "0%",
+        "performanceRatioRatio": "0%",
+        "insolationRatio": "1194%",
+        "productionProjectionRatio": "4%",
+        "productionExpectedRatio": "1%",
+        "revenueRatio": "0%",
+        "iapr": "0%",
+        "iar": "0%"
+      }
+    }
+  ],
+  "combinedCases": [
+    {
+      "name": "combined-presence-0",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": null,
+        "offPeak": null,
+        "unpaidEnergy": null,
+        "revenue": "-12.3450",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "125",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": null,
+        "specificYieldRatio": null,
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": null,
+        "performanceRatioRatio": null,
+        "insolationRatio": {
+          "n": "5",
+          "d": "6"
+        },
+        "productionProjectionRatio": null,
+        "productionExpectedRatio": null,
+        "revenueRatio": {
+          "n": "-2469",
+          "d": "200000"
+        },
+        "iapr": null,
+        "iar": {
+          "n": "-7407",
+          "d": "500000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "\u2014",
+        "specificYieldRatio": "\u2014",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "\u2014",
+        "performanceRatioRatio": "\u2014",
+        "insolationRatio": "83%",
+        "productionProjectionRatio": "\u2014",
+        "productionExpectedRatio": "\u2014",
+        "revenueRatio": "-1%",
+        "iapr": "\u2014",
+        "iar": "-1%"
+      }
+    },
+    {
+      "name": "combined-presence-1",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "100.1234567890123456",
+        "offPeak": null,
+        "unpaidEnergy": null,
+        "revenue": "-12.3450",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "125",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "15644290123283179",
+          "d": "18750000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "15644290123283179",
+          "d": "1875000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "15644290123283179",
+          "d": "2343750000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "15644290123283179",
+          "d": "1562500000000000000"
+        },
+        "insolationRatio": {
+          "n": "5",
+          "d": "6"
+        },
+        "productionProjectionRatio": {
+          "n": "15644290123283179",
+          "d": "1875000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "15644290123283179",
+          "d": "1562500000000000000"
+        },
+        "revenueRatio": {
+          "n": "-2469",
+          "d": "200000"
+        },
+        "iapr": {
+          "n": "15644290123283179",
+          "d": "1562500000000000000"
+        },
+        "iar": {
+          "n": "-7407",
+          "d": "500000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "0.83",
+        "specificYieldRatio": "1%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "1%",
+        "performanceRatioRatio": "1%",
+        "insolationRatio": "83%",
+        "productionProjectionRatio": "1%",
+        "productionExpectedRatio": "1%",
+        "revenueRatio": "-1%",
+        "iapr": "1%",
+        "iar": "-1%"
+      }
+    },
+    {
+      "name": "combined-presence-2",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": null,
+        "offPeak": "50.00000000000000001",
+        "unpaidEnergy": null,
+        "revenue": "-12.3450",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "125",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "1666666666666666667",
+          "d": "4000000000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "1666666666666666667",
+          "d": "400000000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "1666666666666666667",
+          "d": "500000000000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "5000000000000000001",
+          "d": "1000000000000000000000"
+        },
+        "insolationRatio": {
+          "n": "5",
+          "d": "6"
+        },
+        "productionProjectionRatio": {
+          "n": "1666666666666666667",
+          "d": "400000000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "5000000000000000001",
+          "d": "1000000000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-2469",
+          "d": "200000"
+        },
+        "iapr": {
+          "n": "5000000000000000001",
+          "d": "1000000000000000000000"
+        },
+        "iar": {
+          "n": "-7407",
+          "d": "500000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "0.42",
+        "specificYieldRatio": "0%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "0%",
+        "performanceRatioRatio": "1%",
+        "insolationRatio": "83%",
+        "productionProjectionRatio": "0%",
+        "productionExpectedRatio": "1%",
+        "revenueRatio": "-1%",
+        "iapr": "1%",
+        "iar": "-1%"
+      }
+    },
+    {
+      "name": "combined-presence-3",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "100.1234567890123456",
+        "offPeak": "50.00000000000000001",
+        "unpaidEnergy": null,
+        "revenue": "-12.3450",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "125",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "15012345678901234561",
+          "d": "12000000000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "15012345678901234561",
+          "d": "1200000000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "15012345678901234561",
+          "d": "1500000000000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "15012345678901234561",
+          "d": "1000000000000000000000"
+        },
+        "insolationRatio": {
+          "n": "5",
+          "d": "6"
+        },
+        "productionProjectionRatio": {
+          "n": "15012345678901234561",
+          "d": "1200000000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "15012345678901234561",
+          "d": "1000000000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-2469",
+          "d": "200000"
+        },
+        "iapr": {
+          "n": "15012345678901234561",
+          "d": "1000000000000000000000"
+        },
+        "iar": {
+          "n": "-7407",
+          "d": "500000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "1.25",
+        "specificYieldRatio": "1%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "1%",
+        "performanceRatioRatio": "2%",
+        "insolationRatio": "83%",
+        "productionProjectionRatio": "1%",
+        "productionExpectedRatio": "2%",
+        "revenueRatio": "-1%",
+        "iapr": "2%",
+        "iar": "-1%"
+      }
+    },
+    {
+      "name": "combined-presence-4",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": null,
+        "offPeak": null,
+        "unpaidEnergy": "25.6250",
+        "revenue": "-12.3450",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "125",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "41",
+          "d": "192"
+        },
+        "specificYieldRatio": {
+          "n": "41",
+          "d": "19200"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "41",
+          "d": "24000"
+        },
+        "performanceRatioRatio": {
+          "n": "41",
+          "d": "16000"
+        },
+        "insolationRatio": {
+          "n": "5",
+          "d": "6"
+        },
+        "productionProjectionRatio": {
+          "n": "41",
+          "d": "19200"
+        },
+        "productionExpectedRatio": {
+          "n": "41",
+          "d": "16000"
+        },
+        "revenueRatio": {
+          "n": "-2469",
+          "d": "200000"
+        },
+        "iapr": {
+          "n": "41",
+          "d": "16000"
+        },
+        "iar": {
+          "n": "-7407",
+          "d": "500000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "0.21",
+        "specificYieldRatio": "0%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "0%",
+        "performanceRatioRatio": "0%",
+        "insolationRatio": "83%",
+        "productionProjectionRatio": "0%",
+        "productionExpectedRatio": "0%",
+        "revenueRatio": "-1%",
+        "iapr": "0%",
+        "iar": "-1%"
+      }
+    },
+    {
+      "name": "combined-presence-5",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "100.1234567890123456",
+        "offPeak": null,
+        "unpaidEnergy": "25.6250",
+        "revenue": "-12.3450",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "125",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "6549398791094393",
+          "d": "6250000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "6549398791094393",
+          "d": "625000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "6549398791094393",
+          "d": "781250000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "19648196373283179",
+          "d": "1562500000000000000"
+        },
+        "insolationRatio": {
+          "n": "5",
+          "d": "6"
+        },
+        "productionProjectionRatio": {
+          "n": "6549398791094393",
+          "d": "625000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "19648196373283179",
+          "d": "1562500000000000000"
+        },
+        "revenueRatio": {
+          "n": "-2469",
+          "d": "200000"
+        },
+        "iapr": {
+          "n": "19648196373283179",
+          "d": "1562500000000000000"
+        },
+        "iar": {
+          "n": "-7407",
+          "d": "500000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "1.05",
+        "specificYieldRatio": "1%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "1%",
+        "performanceRatioRatio": "1%",
+        "insolationRatio": "83%",
+        "productionProjectionRatio": "1%",
+        "productionExpectedRatio": "1%",
+        "revenueRatio": "-1%",
+        "iapr": "1%",
+        "iar": "-1%"
+      }
+    },
+    {
+      "name": "combined-presence-6",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": null,
+        "offPeak": "50.00000000000000001",
+        "unpaidEnergy": "25.6250",
+        "revenue": "-12.3450",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "125",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "7562500000000000001",
+          "d": "12000000000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "7562500000000000001",
+          "d": "1200000000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "7562500000000000001",
+          "d": "1500000000000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "7562500000000000001",
+          "d": "1000000000000000000000"
+        },
+        "insolationRatio": {
+          "n": "5",
+          "d": "6"
+        },
+        "productionProjectionRatio": {
+          "n": "7562500000000000001",
+          "d": "1200000000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "7562500000000000001",
+          "d": "1000000000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-2469",
+          "d": "200000"
+        },
+        "iapr": {
+          "n": "7562500000000000001",
+          "d": "1000000000000000000000"
+        },
+        "iar": {
+          "n": "-7407",
+          "d": "500000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "0.63",
+        "specificYieldRatio": "1%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "1%",
+        "performanceRatioRatio": "1%",
+        "insolationRatio": "83%",
+        "productionProjectionRatio": "1%",
+        "productionExpectedRatio": "1%",
+        "revenueRatio": "-1%",
+        "iapr": "1%",
+        "iar": "-1%"
+      }
+    },
+    {
+      "name": "combined-presence-7",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "100.1234567890123456",
+        "offPeak": "50.00000000000000001",
+        "unpaidEnergy": "25.6250",
+        "revenue": "-12.3450",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "125",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "5858281892967078187",
+          "d": "4000000000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "5858281892967078187",
+          "d": "400000000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "5858281892967078187",
+          "d": "500000000000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "17574845678901234561",
+          "d": "1000000000000000000000"
+        },
+        "insolationRatio": {
+          "n": "5",
+          "d": "6"
+        },
+        "productionProjectionRatio": {
+          "n": "5858281892967078187",
+          "d": "400000000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "17574845678901234561",
+          "d": "1000000000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-2469",
+          "d": "200000"
+        },
+        "iapr": {
+          "n": "17574845678901234561",
+          "d": "1000000000000000000000"
+        },
+        "iar": {
+          "n": "-7407",
+          "d": "500000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "1.46",
+        "specificYieldRatio": "1%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "1%",
+        "performanceRatioRatio": "2%",
+        "insolationRatio": "83%",
+        "productionProjectionRatio": "1%",
+        "productionExpectedRatio": "2%",
+        "revenueRatio": "-1%",
+        "iapr": "2%",
+        "iar": "-1%"
+      }
+    },
+    {
+      "name": "combined-unpaid-zero",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": null,
+        "offPeak": null,
+        "unpaidEnergy": "0.0000",
+        "revenue": "-12.3450",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "125",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "0",
+          "d": "1"
+        },
+        "specificYieldRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "performanceRatioRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "insolationRatio": {
+          "n": "5",
+          "d": "6"
+        },
+        "productionProjectionRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "productionExpectedRatio": {
+          "n": "0",
+          "d": "1"
+        },
+        "revenueRatio": {
+          "n": "-2469",
+          "d": "200000"
+        },
+        "iapr": {
+          "n": "0",
+          "d": "1"
+        },
+        "iar": {
+          "n": "-7407",
+          "d": "500000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "0.00",
+        "specificYieldRatio": "0%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "0%",
+        "performanceRatioRatio": "0%",
+        "insolationRatio": "83%",
+        "productionProjectionRatio": "0%",
+        "productionExpectedRatio": "0%",
+        "revenueRatio": "-1%",
+        "iapr": "0%",
+        "iar": "-1%"
+      }
+    },
+    {
+      "name": "combined-rounding-0.334999999999999999",
+      "modules": [
+        [
+          "1000",
+          1
+        ]
+      ],
+      "capacity": {
+        "n": "1",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "1",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "1",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "0.33",
+        "offPeak": "0.33",
+        "unpaidEnergy": "0.334999999999999999",
+        "revenue": "-0.995",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "1",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualPerformanceRatio": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "productionProjectionRatio": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-199",
+          "d": "200"
+        },
+        "iapr": {
+          "n": "994999999999999999",
+          "d": "1000000000000000000"
+        },
+        "iar": {
+          "n": "-199",
+          "d": "200"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "1.00",
+        "actualSpecificYield": "0.99",
+        "specificYieldRatio": "99%",
+        "budgetedPerformanceRatio": "100%",
+        "actualPerformanceRatio": "99%",
+        "performanceRatioRatio": "99%",
+        "insolationRatio": "100%",
+        "productionProjectionRatio": "99%",
+        "productionExpectedRatio": "99%",
+        "revenueRatio": "-100%",
+        "iapr": "99%",
+        "iar": "-100%"
+      }
+    },
+    {
+      "name": "combined-rounding-0.335",
+      "modules": [
+        [
+          "1000",
+          1
+        ]
+      ],
+      "capacity": {
+        "n": "1",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "1",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "1",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "0.33",
+        "offPeak": "0.33",
+        "unpaidEnergy": "0.335",
+        "revenue": "-0.995",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "1",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "199",
+          "d": "200"
+        },
+        "specificYieldRatio": {
+          "n": "199",
+          "d": "200"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualPerformanceRatio": {
+          "n": "199",
+          "d": "200"
+        },
+        "performanceRatioRatio": {
+          "n": "199",
+          "d": "200"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "productionProjectionRatio": {
+          "n": "199",
+          "d": "200"
+        },
+        "productionExpectedRatio": {
+          "n": "199",
+          "d": "200"
+        },
+        "revenueRatio": {
+          "n": "-199",
+          "d": "200"
+        },
+        "iapr": {
+          "n": "199",
+          "d": "200"
+        },
+        "iar": {
+          "n": "-199",
+          "d": "200"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "1.00",
+        "actualSpecificYield": "1.00",
+        "specificYieldRatio": "100%",
+        "budgetedPerformanceRatio": "100%",
+        "actualPerformanceRatio": "100%",
+        "performanceRatioRatio": "100%",
+        "insolationRatio": "100%",
+        "productionProjectionRatio": "100%",
+        "productionExpectedRatio": "100%",
+        "revenueRatio": "-100%",
+        "iapr": "100%",
+        "iar": "-100%"
+      }
+    },
+    {
+      "name": "combined-rounding-0.335000000000000001",
+      "modules": [
+        [
+          "1000",
+          1
+        ]
+      ],
+      "capacity": {
+        "n": "1",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "1",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "1",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "0.33",
+        "offPeak": "0.33",
+        "unpaidEnergy": "0.335000000000000001",
+        "revenue": "-0.995",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "1",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "995000000000000001",
+          "d": "1000000000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "995000000000000001",
+          "d": "1000000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "actualPerformanceRatio": {
+          "n": "995000000000000001",
+          "d": "1000000000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "995000000000000001",
+          "d": "1000000000000000000"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "1"
+        },
+        "productionProjectionRatio": {
+          "n": "995000000000000001",
+          "d": "1000000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "995000000000000001",
+          "d": "1000000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-199",
+          "d": "200"
+        },
+        "iapr": {
+          "n": "995000000000000001",
+          "d": "1000000000000000000"
+        },
+        "iar": {
+          "n": "-199",
+          "d": "200"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "1.00",
+        "actualSpecificYield": "1.00",
+        "specificYieldRatio": "100%",
+        "budgetedPerformanceRatio": "100%",
+        "actualPerformanceRatio": "100%",
+        "performanceRatioRatio": "100%",
+        "insolationRatio": "100%",
+        "productionProjectionRatio": "100%",
+        "productionExpectedRatio": "100%",
+        "revenueRatio": "-100%",
+        "iapr": "100%",
+        "iar": "-100%"
+      }
+    },
+    {
+      "name": "combined-http-before",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "8000.0000",
+        "offPeak": "4000.000000000000000",
+        "unpaidEnergy": "12.6250",
+        "revenue": "1200.000000000000000",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "96101",
+          "d": "960"
+        },
+        "specificYieldRatio": {
+          "n": "96101",
+          "d": "96000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "96101",
+          "d": "960"
+        },
+        "performanceRatioRatio": {
+          "n": "96101",
+          "d": "640"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "150"
+        },
+        "productionProjectionRatio": {
+          "n": "96101",
+          "d": "96000"
+        },
+        "productionExpectedRatio": {
+          "n": "96101",
+          "d": "80000"
+        },
+        "revenueRatio": {
+          "n": "6",
+          "d": "5"
+        },
+        "iapr": {
+          "n": "96101",
+          "d": "640"
+        },
+        "iar": {
+          "n": "180",
+          "d": "1"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "100.11",
+        "specificYieldRatio": "100%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "10011%",
+        "performanceRatioRatio": "15016%",
+        "insolationRatio": "1%",
+        "productionProjectionRatio": "100%",
+        "productionExpectedRatio": "120%",
+        "revenueRatio": "120%",
+        "iapr": "15016%",
+        "iar": "18000%"
+      }
+    },
+    {
+      "name": "combined-http-after",
+      "modules": [
+        [
+          "400",
+          300
+        ]
+      ],
+      "capacity": {
+        "n": "120",
+        "d": "1"
+      },
+      "month": "2026-01",
+      "projection": {
+        "month": "2026-01",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "12000",
+          "d": "1"
+        },
+        "revenue": {
+          "n": "1000",
+          "d": "1"
+        },
+        "insolation": {
+          "n": "150",
+          "d": "1"
+        }
+      },
+      "configuration": null,
+      "utility": {
+        "onPeak": "8000.0000",
+        "offPeak": "4000.000000000000000",
+        "unpaidEnergy": "23.125000000000001",
+        "revenue": "1200.000000000000000",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "10000",
+        "d": "1"
+      },
+      "insolation": {
+        "n": "1",
+        "d": "1"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "100",
+          "d": "1"
+        },
+        "actualSpecificYield": {
+          "n": "12023125000000000001",
+          "d": "120000000000000000"
+        },
+        "specificYieldRatio": {
+          "n": "12023125000000000001",
+          "d": "12000000000000000000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2",
+          "d": "3"
+        },
+        "actualPerformanceRatio": {
+          "n": "12023125000000000001",
+          "d": "120000000000000000"
+        },
+        "performanceRatioRatio": {
+          "n": "12023125000000000001",
+          "d": "80000000000000000"
+        },
+        "insolationRatio": {
+          "n": "1",
+          "d": "150"
+        },
+        "productionProjectionRatio": {
+          "n": "12023125000000000001",
+          "d": "12000000000000000000"
+        },
+        "productionExpectedRatio": {
+          "n": "12023125000000000001",
+          "d": "10000000000000000000"
+        },
+        "revenueRatio": {
+          "n": "6",
+          "d": "5"
+        },
+        "iapr": {
+          "n": "12023125000000000001",
+          "d": "80000000000000000"
+        },
+        "iar": {
+          "n": "180",
+          "d": "1"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "100.00",
+        "actualSpecificYield": "100.19",
+        "specificYieldRatio": "100%",
+        "budgetedPerformanceRatio": "67%",
+        "actualPerformanceRatio": "10019%",
+        "performanceRatioRatio": "15029%",
+        "insolationRatio": "1%",
+        "productionProjectionRatio": "100%",
+        "productionExpectedRatio": "120%",
+        "revenueRatio": "120%",
+        "iapr": "15029%",
+        "iar": "18000%"
+      }
+    },
+    {
+      "name": "combined-prorated-and-degraded-2024-03",
+      "modules": [
+        [
+          "450.123456789012345678",
+          1234
+        ],
+        [
+          "3.75e2",
+          321
+        ]
+      ],
+      "capacity": {
+        "n": "168956836419410308641663",
+        "d": "250000000000000000000"
+      },
+      "month": "2024-03",
+      "projection": {
+        "month": "2024-03",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "620024691357802469",
+          "d": "387500000000000"
+        },
+        "revenue": {
+          "n": "48456790123283179",
+          "d": "302734375000000"
+        },
+        "insolation": {
+          "n": "3112345678901234567",
+          "d": "193750000000000000"
+        }
+      },
+      "configuration": {
+        "operationsStart": "2024-03-16",
+        "degradation": "0.123456789012345678",
+        "irradianceChannelId": null,
+        "baselines": {
+          "1": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "2": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "3": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "4": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "5": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "6": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "7": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "8": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "9": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "10": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "11": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "12": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          }
+        }
+      },
+      "utility": {
+        "onPeak": "123.1234567890123456",
+        "offPeak": "0.000000000000000001",
+        "unpaidEnergy": "17.99999999999999999",
+        "revenue": "-0.12345678901234567",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "36407",
+        "d": "4"
+      },
+      "insolation": {
+        "n": "743",
+        "d": "2"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "12400493827156049380000000",
+          "d": "5237661929001719567891553"
+        },
+        "actualSpecificYield": {
+          "n": "1306698673972336533250",
+          "d": "6257660608126307727469"
+        },
+        "specificYieldRatio": {
+          "n": "4374827160459382713321",
+          "d": "49601975308624197520000"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "77503086419725308625000000000000000000000",
+          "d": "525852079750774410721662968686519511964921"
+        },
+        "actualPerformanceRatio": {
+          "n": "2613397347944673066500",
+          "d": "4649441831837846641509467"
+        },
+        "performanceRatioRatio": {
+          "n": "439224980928887669161579957334359244097",
+          "d": "115169586419711808616750000000000000000000"
+        },
+        "insolationRatio": {
+          "n": "71978125000000000000",
+          "d": "3112345678901234567"
+        },
+        "productionProjectionRatio": {
+          "n": "4374827160459382713321",
+          "d": "49601975308624197520000"
+        },
+        "productionExpectedRatio": {
+          "n": "141123456789012345591",
+          "d": "9101750000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-382716045938271577",
+          "d": "496197530862419752960"
+        },
+        "iapr": {
+          "n": "439224980928887669161579957334359244097",
+          "d": "115169586419711808616750000000000000000000"
+        },
+        "iar": {
+          "n": "-183846987470619837538404769165921",
+          "d": "5512481540531965856000000000000000000"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "2.37",
+        "actualSpecificYield": "0.21",
+        "specificYieldRatio": "9%",
+        "budgetedPerformanceRatio": "15%",
+        "actualPerformanceRatio": "0%",
+        "performanceRatioRatio": "0%",
+        "insolationRatio": "2313%",
+        "productionProjectionRatio": "9%",
+        "productionExpectedRatio": "2%",
+        "revenueRatio": "0%",
+        "iapr": "0%",
+        "iar": "0%"
+      }
+    },
+    {
+      "name": "combined-prorated-and-degraded-2026-03",
+      "modules": [
+        [
+          "450.123456789012345678",
+          1234
+        ],
+        [
+          "3.75e2",
+          321
+        ]
+      ],
+      "capacity": {
+        "n": "168956836419410308641663",
+        "d": "250000000000000000000"
+      },
+      "month": "2026-03",
+      "projection": {
+        "month": "2026-03",
+        "operationalDays": 31,
+        "days": 31,
+        "production": {
+          "n": "2997625595517739977510474598566524801597827606708852684949",
+          "d": "968750000000000000000000000000000000000000000000000000"
+        },
+        "revenue": {
+          "n": "234273435195117522663464993189764723405961285748316908859",
+          "d": "756835937500000000000000000000000000000000000000000000"
+        },
+        "insolation": {
+          "n": "3112345678901234567",
+          "d": "100000000000000000"
+        }
+      },
+      "configuration": {
+        "operationsStart": "2024-03-16",
+        "degradation": "0.123456789012345678",
+        "irradianceChannelId": null,
+        "baselines": {
+          "1": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "2": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "3": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "4": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "5": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "6": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "7": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "8": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "9": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "10": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "11": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          },
+          "12": {
+            "production": "3100.123456789012345",
+            "revenue": "310.1234567890123456",
+            "insolation": "31.12345678901234567"
+          }
+        }
+      },
+      "utility": {
+        "onPeak": "123.1234567890123456",
+        "offPeak": "0.000000000000000001",
+        "unpaidEnergy": "17.99999999999999999",
+        "revenue": "-0.12345678901234567",
+        "energyUsed": "0",
+        "invoiceCost": "-0.0001"
+      },
+      "expected": {
+        "n": "36407",
+        "d": "4"
+      },
+      "insolation": {
+        "n": "743",
+        "d": "2"
+      },
+      "values": {
+        "budgetedSpecificYield": {
+          "n": "2997625595517739977510474598566524801597827606708852684949",
+          "d": "654707741125214945986444125000000000000000000000000000000"
+        },
+        "actualSpecificYield": {
+          "n": "1306698673972336533250",
+          "d": "6257660608126307727469"
+        },
+        "specificYieldRatio": {
+          "n": "136713348764355709791281250000000000000000000000000000000",
+          "d": "2997625595517739977510474598566524801597827606708852684949"
+        },
+        "budgetedPerformanceRatio": {
+          "n": "2997625595517739977510474598566524801597827606708852684949",
+          "d": "20376768090342508415464440036602631088640688750000000000000"
+        },
+        "actualPerformanceRatio": {
+          "n": "2613397347944673066500",
+          "d": "4649441831837846641509467"
+        },
+        "performanceRatioRatio": {
+          "n": "8509984005497198590005611673353210354379375000000000000000",
+          "d": "2227235817469680803290282626734927927587185911784677544917107"
+        },
+        "insolationRatio": {
+          "n": "37150000000000000000",
+          "d": "3112345678901234567"
+        },
+        "productionProjectionRatio": {
+          "n": "136713348764355709791281250000000000000000000000000000000",
+          "d": "2997625595517739977510474598566524801597827606708852684949"
+        },
+        "productionExpectedRatio": {
+          "n": "141123456789012345591",
+          "d": "9101750000000000000000"
+        },
+        "revenueRatio": {
+          "n": "-93436534652898334228515625000000000000000000000000000",
+          "d": "234273435195117522663464993189764723405961285748316908859"
+        },
+        "iapr": {
+          "n": "8509984005497198590005611673353210354379375000000000000000",
+          "d": "2227235817469680803290282626734927927587185911784677544917107"
+        },
+        "iar": {
+          "n": "-27828401423775463689895253145232182617187500000000000",
+          "d": "832847666746279039899303779617201863591527441679423269293"
+        }
+      },
+      "formatted": {
+        "budgetedSpecificYield": "4.58",
+        "actualSpecificYield": "0.21",
+        "specificYieldRatio": "5%",
+        "budgetedPerformanceRatio": "15%",
+        "actualPerformanceRatio": "0%",
+        "performanceRatioRatio": "0%",
+        "insolationRatio": "1194%",
+        "productionProjectionRatio": "5%",
+        "productionExpectedRatio": "2%",
+        "revenueRatio": "0%",
+        "iapr": "0%",
+        "iar": "0%"
+      }
+    }
+  ]
+}

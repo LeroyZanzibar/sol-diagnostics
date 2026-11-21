@@ -85,7 +85,7 @@ async function fixture(t) {
       assert.equal(config.revision, expected.monthly.revision);
       assert.deepEqual(JSON.parse(config.configuration_json), expected.monthly.configuration);
       const rows = db.prepare('SELECT * FROM monthly_utility WHERE site_id=? ORDER BY month').all(expected.siteId);
-      assert.deepEqual(Object.fromEntries(rows.map(row => [row.month, {onPeak: row.on_peak, offPeak: row.off_peak,
+      assert.deepEqual(Object.fromEntries(rows.map(row => [row.month, {onPeak: row.on_peak, offPeak: row.off_peak, unpaidEnergy: row.unpaid_energy,
         revenue: row.revenue, energyUsed: row.energy_used, invoiceCost: row.invoice_cost}])), expected.monthly.utility);
       const rollup = db.prepare('SELECT source_revision,payload_json FROM monthly_rollups WHERE site_id=?').get(expected.siteId);
       assert.equal(rollup.source_revision, 2);
@@ -115,18 +115,27 @@ async function fixture(t) {
   return {root, start, stop, request, api, verifyStore};
 }
 
-test('native-container monthly smoke scenario: exact inputs, approved projections, corrected telemetry and real production-server restart', {timeout: 90000}, async t => {
+test('native-container monthly smoke scenario: exact inputs, approved projections, calculated metrics, corrected telemetry and real production-server restart', {timeout: 90000}, async t => {
   const f = await fixture(t);
   await f.start();
   const scenario = await runMonthlyPersistenceSmoke({api: f.api, request: f.request});
+  assert.ok(Object.isFrozen(scenario.expected));
+  assert.ok(Object.isFrozen(scenario.expected.monthly.calculated));
+  assert.ok(Object.isFrozen(scenario.expected.monthly.calculated['2026-01'].iapr.value));
   const snapshot = join(f.root, 'monthly-expected.json');
   writeFileSync(snapshot, JSON.stringify(scenario.expected));
   const bytes = readFileSync(snapshot, 'utf8');
   const expected = JSON.parse(bytes);
   assert.equal(expected.monthly.revision, 2);
+  assert.equal(expected.monthly.utility['2026-04'].unpaidEnergy, '12.6250');
+  assert.equal(expected.monthly.utility['2026-03'].unpaidEnergy, '12.6250');
+  assert.equal(expected.monthly.utility['2026-01'].unpaidEnergy, null);
   assert.equal(Object.keys(expected.monthly.utility).length, 4);
   assert.equal(Object.keys(expected.monthly.configuration.baselines).length, 12);
   assert.equal(expected.monthly.projections.length, 300);
+  assert.deepEqual(expected.monthly.capacity, {dcKwp: {n: '120', d: '1'}, unavailableReason: null});
+  assert.equal(Object.keys(expected.monthly.calculated).length, 300);
+  for (const row of Object.values(expected.monthly.calculated)) assert.equal(Object.keys(row).length, 12);
   assert.equal(expected.monthly.telemetry.sourceRevision, 2);
   await verifyMonthlyPersistence({api: f.api, expected});
   f.verifyStore(expected);
@@ -142,5 +151,5 @@ test('native-container monthly smoke scenario: exact inputs, approved projection
     writeFileSync(join(process.env.SOL_MONTHLY_SMOKE_EVIDENCE_DIR, 'monthly-after-restart.json'),
       JSON.stringify(await f.api(`/api/monthly-data?siteId=${encodeURIComponent(expected.siteId)}`)));
   }
-  t.diagnostic('Verified exact 4 utility rows, 12 baselines, operations/date/rate, all 300 preview-approved projections, 4 canonical readings at 2 revisions and persisted monthly rollups before/after a real server restart; no analysis/review records. Native image hardening and recreation remain CI checks.');
+  t.diagnostic('Verified exact 4 utility rows, 12 baselines, operations/date/rate, all 300 preview-approved projections, 120 kWp module DC capacity, all 12 calculated fractions/statuses/reasons in every month, 4 canonical readings at 2 revisions and persisted monthly rollups before/after a real server restart; no analysis/review records. Native image hardening and recreation remain CI checks.');
 });

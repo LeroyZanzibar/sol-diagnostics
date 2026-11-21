@@ -1,0 +1,1 @@
+ALTER TABLE `monthly_utility` ADD `unpaid_energy` text;

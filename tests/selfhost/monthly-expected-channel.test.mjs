@@ -65,7 +65,7 @@ test('competing eligible expected series fail closed without suppressing insolat
  assert.equal(month.expected.value,null);assert.equal(month.expected.state,'missing');assert.equal(month.expected.coveredMilliseconds,0);
  assert.equal(result.telemetry.expectedChannelId,null);assert.match(result.telemetry.expectedUnavailableReason,/multiple.*Expected Production channels/i);
  assert.equal(formatValue(month.insolation.value,2),'1.00');assert.equal(result.telemetry.selectionRequired,false);
- f.service.inputs.saveUtility('site',0,[{month:'2026-01',onPeak:'5.1250',offPeak:null,revenue:null,energyUsed:null,invoiceCost:null}]);
+ f.service.inputs.saveUtility('site',0,[{month:'2026-01',onPeak:'5.1250',offPeak:null,unpaidEnergy:null,revenue:null,energyUsed:null,invoiceCost:null}]);
  assert.equal((await f.service.read('site')).utility['2026-01'].onPeak,'5.1250');assert.equal(expectedRows(f,1).length,4);
 });
 

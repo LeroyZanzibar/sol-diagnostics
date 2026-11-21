@@ -8,6 +8,7 @@ function gate(){let release,enter;const held=new Promise(r=>release=r),reached=n
 async function editing(t,fetch){const h=harness(fetch);t.after(()=>h.dispose());h.render();await h.flush();h.render().edit();h.render();return h;}
 function attemptEdits(h){
  field(h.tree('utility'),'2024-04 Off-peak production').props.onChange({target:{value:'456.875'}});
+ field(h.tree('utility'),'2024-04 Unpaid energy').props.onChange({target:{value:'12.6250'}});
  field(h.tree('settings'),'Operations start date').props.onChange({target:{value:'2025-01-01'}});
  field(h.tree('settings'),'Annual degradation (%)').props.onChange({target:{value:'9'}});
  field(h.tree('baselines'),'Baseline 3 production').props.onChange({target:{value:'987.625'}});
@@ -94,7 +95,7 @@ test('SPEC-B2 real editor saves partial baseline/start, zero, precise rate and i
 
 test('SPEC-06 negative control: near-bound raw value, reopen, unchanged save and exact total',async t=>{
  const f=fixture(t);configured(f);const value='999999999998.9999999';
- f.service.inputs.saveUtility('review-site',1,[{month:'2024-03',onPeak:value,offPeak:'0.000000000000000001',revenue:null,energyUsed:null,invoiceCost:'000.0100'}]);await f.reopen();
+ f.service.inputs.saveUtility('review-site',1,[{month:'2024-03',onPeak:value,offPeak:'0.000000000000000001',unpaidEnergy:null,revenue:null,energyUsed:null,invoiceCost:'000.0100'}]);await f.reopen();
  const h=await editing(t,adapter(f));assert.equal(field(h.tree('utility'),'2024-03 On-peak production').props.value,value);
  await h.current.save('utility');h.render();assert.equal(f.service.inputs.read('review-site').utility['2024-03'].onPeak,value);
  assert.deepEqual(utilityTotal(value,'0.000000000000000001'),{n:'999999999998999999900000000001',d:'1000000000000000000'});
