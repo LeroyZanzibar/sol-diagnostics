@@ -2,9 +2,10 @@
 
 ## 2026.11.21.2 — pending publication
 
+- Add editable Unpaid energy (kWh) between Off-peak and Total production. Include it in both utility totals and every production-based calculated metric, with exact input precision, blank/zero handling and unchanged revenue. Add nullable storage through migration `0022_unpaid_energy.sql`; existing rows retain their values with the new field blank.
 - Add twelve read-only monthly calculated columns: budgeted/actual specific yield and their ratio; budgeted/actual performance ratio and their ratio; actual/projected insolation; utility production versus projected and Expected Production; utility revenue versus budget; IAPR; and IAR.
 - Calculate yield from saved DC module nameplate capacity and utility production. Use the existing prorated/degraded projections and selected insolation reporting source. Recalculate from saved inputs on reads, including capacity edits, without rewriting utility inputs, telemetry or saved analyses.
-- Preserve exact underlying fractions. Display specific yield with two decimals and ratios as whole percentages; do not cap above 100%. Show unavailable denominators and visibly retain partial telemetry coverage. No schema migration, new imports or automatic analysis.
+- Preserve exact underlying fractions. Display specific yield with two decimals and ratios as whole percentages; do not cap above 100%. Show unavailable denominators and visibly retain partial telemetry coverage. Calculated metrics add no stored rounded values, new imports or automatic analysis.
 
 See the feature PR checks for verification. Release publication and installed-app deployment remain separate.
 

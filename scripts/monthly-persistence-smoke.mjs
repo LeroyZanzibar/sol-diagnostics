@@ -87,19 +87,20 @@ function checkCalculated(calculated, projections, phase) {
     iapr: hasTelemetry ? partial('1596757330232503857', '645859375000000000', partialInsolation) : missing(noInsolation),
     iar: hasTelemetry ? partial('-204927', '82670', partialInsolation) : missing(noInsolation),
   }, `Independent exact first-month calculated contract (${phase})`);
-  // A sole off-peak entry, a tiny positive total, explicit zero revenue and
-  // missing totals must remain distinct; none may be rounded or zero-filled.
+  // Sole off-peak, a tiny component plus unpaid, unpaid-only, zero revenue and
+  // missing totals remain distinct; no component may be rounded or zero-filled.
   assert.deepEqual(calculated['2026-02'].actualSpecificYield, hasModel ? available('152263', '400000') : missing(noCapacity));
   assert.deepEqual(calculated['2026-02'].productionProjectionRatio, available('152263', '10333750'));
   assert.deepEqual(calculated['2026-02'].revenueRatio, missing('Utility actual revenue is missing.'));
-  assert.deepEqual(calculated['2026-03'].actualSpecificYield, hasModel ? available('1', '120000000000000000000') : missing(noCapacity));
-  assert.deepEqual(calculated['2026-03'].productionProjectionRatio, available('1', '3100125000000000000000'));
+  assert.deepEqual(calculated['2026-03'].actualSpecificYield, hasModel ? available('12625000000000000001', '120000000000000000000') : missing(noCapacity));
+  assert.deepEqual(calculated['2026-03'].productionProjectionRatio, available('12625000000000000001', '3100125000000000000000'));
   assert.deepEqual(calculated['2026-03'].revenueRatio, available('0'));
   const noProduction = 'Utility actual production total is missing.';
-  assert.deepEqual(calculated['2026-04'].actualSpecificYield, missing(hasModel ? noProduction : `${noProduction} ${noCapacity}`));
-  assert.deepEqual(calculated['2026-04'].productionProjectionRatio, missing(noProduction));
+  assert.deepEqual(calculated['2026-04'].actualSpecificYield, hasModel ? available('101', '960') : missing(noCapacity));
+  assert.deepEqual(calculated['2026-04'].productionProjectionRatio, available('101', '24801'));
   assert.deepEqual(calculated['2026-04'].revenueRatio, available('-100', '24801'));
   assert.deepEqual(calculated['2026-05'].productionProjectionRatio, missing(noProduction));
+  assert.deepEqual(calculated['2026-05'].actualSpecificYield, missing(hasModel ? noProduction : `${noProduction} ${noCapacity}`));
   assert.deepEqual(calculated['2026-05'].revenueRatio, missing('Utility actual revenue is missing.'));
   if (hasTelemetry) {
     assert.deepEqual(calculated['2026-02'].productionExpectedRatio, missing('Hourly Expected Production is missing for this month.'));
@@ -169,18 +170,26 @@ export async function runMonthlyPersistenceSmoke({api, request}) {
   assert.equal(denied.status, 403, await denied.text());
   assert.deepEqual(await api(pathFor(siteId)), initial);
 
-  // Single on-peak, single off-peak, both present (including zero), both absent;
+  // Single on-peak, single off-peak, all three (including zero), unpaid-only;
   // accepted decimal strings and signed utility-money credits remain unrounded.
   const rows = [
-    {month: '2026-01', onPeak: '123.1234567890123456', offPeak: null, revenue: '-12.3450', energyUsed: '0', invoiceCost: null},
-    {month: '2026-02', onPeak: null, offPeak: '45.67890', revenue: null, energyUsed: null, invoiceCost: '0'},
-    {month: '2026-03', onPeak: '0', offPeak: '0.000000000000000001', revenue: '0', energyUsed: '7.1250', invoiceCost: '-0.1250'},
-    {month: '2026-04', onPeak: null, offPeak: null, revenue: '-1.25', energyUsed: null, invoiceCost: '000.01230'},
+    {month: '2026-01', onPeak: '123.1234567890123456', offPeak: null, unpaidEnergy: null, revenue: '-12.3450', energyUsed: '0', invoiceCost: null},
+    {month: '2026-02', onPeak: null, offPeak: '45.67890', unpaidEnergy: null, revenue: null, energyUsed: null, invoiceCost: '0'},
+    {month: '2026-03', onPeak: '0', offPeak: '0.000000000000000001', unpaidEnergy: '12.6250', revenue: '0', energyUsed: '7.1250', invoiceCost: '-0.1250'},
+    {month: '2026-04', onPeak: null, offPeak: null, unpaidEnergy: '12.6250', revenue: '-1.25', energyUsed: null, invoiceCost: '000.01230'},
   ];
   const utility = Object.fromEntries(rows.map(({month, ...values}) => [month, values]));
   const afterUtility = {...initial, revision: 1, utility};
   assert.deepEqual(await post({action: 'utility', revision: 0, rows}), afterUtility);
   assert.deepEqual(await api(pathFor(siteId)), afterUtility, 'An unrelated utility save must not invent degradation');
+
+  // Missing or invalid new fields must not erase an already stored value.
+  for (const unpaidEnergy of [undefined, '-1', '1e3', '999999999999.1', '0.0000000000000000001']) {
+    const response = await request(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({siteId, action: 'utility', revision: 1, rows: [{...rows[3], unpaidEnergy}]})});
+    assert.equal(response.status, 400, await response.text());
+    assert.deepEqual(await api(pathFor(siteId)), afterUtility);
+  }
 
   const configuration = {operationsStart: '2026-01-16', degradation: '0.50', irradianceChannelId: null,
     baselines: Object.fromEntries(Array.from({length: 12}, (_, i) => [i + 1,

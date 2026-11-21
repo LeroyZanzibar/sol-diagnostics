@@ -1,10 +1,10 @@
 # Monthly calculated metrics
 
-The **Projections → Monthly comparison** table adds twelve read-only calculated columns for each site. The monthly API returns the same calculations as exact rational values (`{n, d}`), together with their availability/partial-data status. They are recalculated from saved inputs on reads, not stored as independently editable or rounded copies. No database migration or historical-input rewrite is required.
+The **Projections → Monthly comparison** table adds twelve read-only calculated columns for each site. The monthly API returns the same calculations as exact rational values (`{n, d}`), together with their availability/partial-data status. They are recalculated from saved inputs on reads, not stored as independently editable or rounded copies. The calculations require no new stored columns; the accompanying Unpaid energy input uses the additive migration described below.
 
 ## Inputs and units
 
-- **Utility production**: the existing total of present on-peak and off-peak production entries, in kWh. Either category alone is valid; all-blank is unavailable and explicit zero is retained.
+- **Utility production**: the exact total of present on-peak, off-peak and **Unpaid energy** entries, in kWh. Any category alone is valid; all-blank is unavailable and explicit zero is retained. The utility ledger, comparison total and every production-dependent metric use this same total.
 - **Projected production, budgeted revenue and projected insolation**: the existing monthly projections after start-month proration and the configured degradation rules, not the raw undegraded calendar-month baselines.
 - **Actual insolation**: the existing selected monthly reporting series, integrated to kWh/m², with its retained coverage and source provenance. Expected Production is the existing monthly sum of the imported site-level Expected Production series, in kWh.
 - **DC capacity**: the site's connected module nameplate watts × module quantity, summed and divided by 1,000 to obtain kWp. Do not substitute inverter AC capacity, inverter maximum-DC input limits or export limits, and do not reduce nameplate capacity for degradation or delivery losses. Missing/incomplete module capacity makes dependent metrics unavailable rather than silently using an understated total.
@@ -31,6 +31,14 @@ All division uses unrounded values. Percent ratios are dimensionless; multiplica
 | IAR — Irradiance Adjusted Revenue | (Utility revenue / budgeted revenue) / (actual insolation / projected insolation) | Whole % |
 
 When their inputs are available, actual/budgeted specific yield equals utility/projected production, and actual/budgeted PR equals IAPR. Both requested columns remain visible. Unlike absolute yield and PR, IAPR and IAR do not require DC capacity.
+
+## Unpaid energy input and upgrade
+
+Unpaid energy is an editable kWh column between Off-peak production and Total production. Like other energy inputs, it accepts nonnegative plain-decimal strings within the existing magnitude and 20-character limits. It displays whole kWh while retaining the original decimal string for storage, editing and calculations. Sum all unrounded components before formatting the total.
+
+Migration `0022_unpaid_energy.sql` adds nullable `unpaid_energy TEXT`. Existing rows retain their old values, with Unpaid energy initially blank; no zeros or historical unpaid values are fabricated. Full-row API saves must explicitly include `unpaidEnergy`, using `null` for blank, so an omitted field cannot silently erase saved data.
+
+Changing Unpaid energy updates the actual specific yield, yield ratio, actual PR, PR ratio, utility/projected production, utility/Expected Production and IAPR. It does not create revenue or change budgeted yield/PR, insolation, revenue comparisons or IAR when all other inputs are unchanged.
 
 ## Availability and precision
 

@@ -22,7 +22,7 @@ test('built authenticated named expected import/Apply/readback and correction pr
  const get=()=>f.request(`/api/monthly-data?siteId=${f.siteId}`),post=body=>f.request('/api/monthly-data',{siteId:f.siteId,...body});
  const configuration={...emptyConfiguration(),operationsStart:'2026-01-01',degradation:'0'};configuration.baselines[1]={production:'1000.1250',revenue:'100',insolation:'31'};
  const impact=await post({action:'preview',revision:0,configuration});await post({action:'configuration',revision:0,configuration,previewToken:impact.token});
- await post({action:'utility',revision:1,rows:[{month:'2026-01',onPeak:'5.1250',offPeak:null,revenue:'-1.25',energyUsed:'0',invoiceCost:null}]});
+ await post({action:'utility',revision:1,rows:[{month:'2026-01',onPeak:'5.1250',offPeak:null,unpaidEnergy:'12.6250',revenue:'-1.25',energyUsed:'0',invoiceCost:null}]});
  const monthlyBefore=await get(),events=[];
  async function apply(readings,approveOverlap){
   const previewBody={action:'preview',siteId:f.siteId,timezone:'UTC',timestampConvention:'start',intervalMinutes:60,readings};
@@ -51,7 +51,7 @@ test('built authenticated named expected import/Apply/readback and correction pr
 test('built HTTP absent degradation: unrelated utility save, partial setup, exact zero and clear survive restart',{timeout:90000},async t=>{
  const f=await monthlyFixture(t);await f.start();const get=()=>f.request(`/api/monthly-data?siteId=${f.siteId}`),post=body=>f.request('/api/monthly-data',{siteId:f.siteId,...body});
  let current=await get();assert.equal(current.configuration.degradation,null);assert.equal(f.inspect(db=>db.prepare('SELECT COUNT(*) n FROM monthly_configuration').get().n),0);
- const actual={month:'2024-03',onPeak:'123.1250',offPeak:null,revenue:'-5.75',energyUsed:'0',invoiceCost:null};
+ const actual={month:'2024-03',onPeak:'123.1250',offPeak:null,unpaidEnergy:null,revenue:'-5.75',energyUsed:'0',invoiceCost:null};
  current=await post({action:'utility',revision:0,rows:[actual]});await f.stop();await f.start();current=await get();assert.equal(current.configuration.degradation,null);
  const readbacks=[current];async function save(configuration){const preview=await post({action:'preview',revision:current.revision,configuration});assert.equal((await get()).revision,current.revision);await post({action:'configuration',revision:current.revision,configuration,previewToken:preview.token});current=await get();readbacks.push(current);}
  const partial=structuredClone(current.configuration);partial.baselines[3]={production:'3100.1250',revenue:null,insolation:'31.1250'};await save(partial);assert.equal(current.configuration.operationsStart,null);assert.equal(current.configuration.degradation,null);
@@ -71,7 +71,7 @@ test('built authenticated HTTP: populated setup, exact monthly saves, preview/im
  const preview=await post({action:'preview',revision:0,configuration:config});assert.equal(preview.impact.length,300);assert.equal((await get()).revision,0);
  let saved=await post({action:'configuration',revision:0,configuration:config,previewToken:preview.token});assert.equal(saved.projections.length,300);assert.equal(saved.configuration.degradation,config.degradation);
  assert.equal(saved.projections[0].operationalDays,16);assert.equal(saved.projections.at(-1).month,'2050-12');
- const rows=[{month:'2026-01',onPeak:'123.1234567890123456',offPeak:'0.000000000000000001',revenue:'-123.123456789012345',energyUsed:'0',invoiceCost:'000.01230'},{month:'2026-02',onPeak:null,offPeak:'123.45',revenue:null,energyUsed:null,invoiceCost:'0'}];
+ const rows=[{month:'2026-01',onPeak:'123.1234567890123456',offPeak:'0.000000000000000001',unpaidEnergy:null,revenue:'-123.123456789012345',energyUsed:'0',invoiceCost:'000.01230'},{month:'2026-02',onPeak:null,offPeak:'123.45',unpaidEnergy:null,revenue:null,energyUsed:null,invoiceCost:'0'}];
  saved=await post({action:'utility',revision:1,rows});assert.equal(saved.revision,2);
  for(const {month,...values} of rows)assert.deepEqual(saved.utility[month],values);
  await post({action:'utility',revision:1,rows},409);await post({action:'utility',revision:2,rows:[...rows,{...rows[0],month:'2026-03',onPeak:'1e3'}]},400);

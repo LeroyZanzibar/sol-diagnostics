@@ -15,7 +15,7 @@ async function rendered(t,s){const h=harness(async()=>Response.json(s));t.after(
 const cells=h=>nodes(h.tree('comparison')).filter(n=>n.type==='td'&&n.props['data-calculated-field']);
 
 test('real comparison component renders twelve ordered read-only columns, complete labels/formulas, all exact display formats',async t=>{
- for(const c of oracle.cases){const h=await rendered(t,snapshot(c)),tree=h.tree('comparison'),html=renderToStaticMarkup(tree),computed=cells(h);
+ for(const c of [...oracle.cases,...oracle.combinedCases]){const h=await rendered(t,snapshot(c)),tree=h.tree('comparison'),html=renderToStaticMarkup(tree),computed=cells(h);
   assert.deepEqual(computed.map(n=>n.props['data-calculated-field']),oracle.keys);
   for(const [i,cell] of computed.entries())assert.match(renderToStaticMarkup(cell).replaceAll(',',''),new RegExp(`<span[^>]*>${c.formatted[oracle.keys[i]].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}</span>`),oracle.keys[i]);
   const headers=nodes(tree).filter(n=>n.type==='th'&&n.props['data-calculated-field']);assert.equal(headers.length,12);

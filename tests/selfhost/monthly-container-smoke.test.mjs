@@ -85,7 +85,7 @@ async function fixture(t) {
       assert.equal(config.revision, expected.monthly.revision);
       assert.deepEqual(JSON.parse(config.configuration_json), expected.monthly.configuration);
       const rows = db.prepare('SELECT * FROM monthly_utility WHERE site_id=? ORDER BY month').all(expected.siteId);
-      assert.deepEqual(Object.fromEntries(rows.map(row => [row.month, {onPeak: row.on_peak, offPeak: row.off_peak,
+      assert.deepEqual(Object.fromEntries(rows.map(row => [row.month, {onPeak: row.on_peak, offPeak: row.off_peak, unpaidEnergy: row.unpaid_energy,
         revenue: row.revenue, energyUsed: row.energy_used, invoiceCost: row.invoice_cost}])), expected.monthly.utility);
       const rollup = db.prepare('SELECT source_revision,payload_json FROM monthly_rollups WHERE site_id=?').get(expected.siteId);
       assert.equal(rollup.source_revision, 2);
@@ -127,6 +127,9 @@ test('native-container monthly smoke scenario: exact inputs, approved projection
   const bytes = readFileSync(snapshot, 'utf8');
   const expected = JSON.parse(bytes);
   assert.equal(expected.monthly.revision, 2);
+  assert.equal(expected.monthly.utility['2026-04'].unpaidEnergy, '12.6250');
+  assert.equal(expected.monthly.utility['2026-03'].unpaidEnergy, '12.6250');
+  assert.equal(expected.monthly.utility['2026-01'].unpaidEnergy, null);
   assert.equal(Object.keys(expected.monthly.utility).length, 4);
   assert.equal(Object.keys(expected.monthly.configuration.baselines).length, 12);
   assert.equal(expected.monthly.projections.length, 300);

@@ -12,7 +12,7 @@ test('production migration, atomic edit-set CAS, exact reopen/readback, impact a
  db.sqlite.prepare('INSERT INTO site_settings(id,name) VALUES (?,?)').run('other','Other');
  let store=new MonthlyStore(db);assert.equal(store.read('exact-Site').revision,0);
  assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM monthly_utility').get().n,0);
- const values={onPeak:'123.1234567890123456',offPeak:null,revenue:'-0.12345678901234567',energyUsed:'0',invoiceCost:'000.0100'};
+ const values={onPeak:'123.1234567890123456',offPeak:null,unpaidEnergy:null,revenue:'-0.12345678901234567',energyUsed:'0',invoiceCost:'000.0100'};
  const saved=store.saveUtility('exact-Site',0,[{month:'2024-03',...values}]);assert.deepEqual(saved.utility['2024-03'],values);
  assert.throws(()=>store.saveUtility('exact-Site',0,[{month:'2024-04',...values}]),e=>e.status===409);
  assert.throws(()=>store.saveUtility('exact-Site',1,[{month:'2024-04',...values},{month:'2024-05',...values,onPeak:'1e3'}]),e=>e.status===400);
@@ -39,7 +39,7 @@ test('native save/reopen preserves absent rate, partial setup, exact zero and ex
  const root=mkdtempSync(join(tmpdir(),'monthly-absence-')),path=join(root,'shared.sqlite');let db=new LocalDatabase(path,resolve('drizzle')),store=new MonthlyStore(db);t.after(()=>db.close());
  db.sqlite.exec("INSERT INTO site_settings(id,name) VALUES ('partial','Synthetic partial setup')");
  const fresh=store.read('partial');assert.equal(fresh.configuration.degradation,null);assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM monthly_configuration').get().n,0);
- const actual={month:'2024-03',onPeak:'123.1250',offPeak:null,revenue:'-5.75',energyUsed:'0',invoiceCost:null};
+ const actual={month:'2024-03',onPeak:'123.1250',offPeak:null,unpaidEnergy:null,revenue:'-5.75',energyUsed:'0',invoiceCost:null};
  store.saveUtility('partial',0,[actual]);
  function reopen(){db.close();db=new LocalDatabase(path,resolve('drizzle'));store=new MonthlyStore(db);return store.read('partial');}
  let current=reopen();assert.equal(current.configuration.degradation,null);

@@ -1,5 +1,5 @@
 export type Fraction = {n:string;d:string};
-export type UtilityField = 'onPeak'|'offPeak'|'revenue'|'energyUsed'|'invoiceCost';
+export type UtilityField = 'onPeak'|'offPeak'|'unpaidEnergy'|'revenue'|'energyUsed'|'invoiceCost';
 export type UtilityValues = Record<UtilityField,string|null>;
 export type BaselineField = 'production'|'revenue'|'insolation';
 export type Baseline = Record<BaselineField,string|null>;
@@ -23,7 +23,7 @@ export function multiply(...values:Fraction[]):Fraction;
 export function validateDecimal(value:unknown,signed?:boolean,max?:string):string;
 export function nullableDecimal(value:unknown,signed?:boolean):string|null;
 export function formatValue(value:string|Fraction|null|undefined,places?:number,group?:boolean):string;
-export function utilityTotal(onPeak:string|null|undefined,offPeak:string|null|undefined):Fraction|null;
+export function utilityTotal(onPeak:string|null|undefined,offPeak:string|null|undefined,unpaidEnergy?:string|null):Fraction|null;
 export function emptyConfiguration():MonthlyConfiguration;
 export function daysInMonth(year:number,month:number):number;
 export function validateMonth(month:unknown):string;

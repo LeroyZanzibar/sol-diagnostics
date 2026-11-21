@@ -1,5 +1,5 @@
 /** Exact decimal inputs and rational calculations. No input passes through Number. */
-export const utilityFields = ['onPeak','offPeak','revenue','energyUsed','invoiceCost'];
+export const utilityFields = ['onPeak','offPeak','unpaidEnergy','revenue','energyUsed','invoiceCost'];
 export const baselineFields = ['production','revenue','insolation'];
 export class MonthlyError extends Error {
   constructor(message, status=400, code='invalid-monthly-input') {super(message);this.name='MonthlyError';this.status=status;this.code=code;}
@@ -29,7 +29,7 @@ export function formatValue(value,places=0,group=false){
   let whole=places?digits.slice(0,-places):digits;if(group)whole=whole.replace(/\B(?=(\d{3})+(?!\d))/g,',');
   return `${number<0n&&rounded!==0n?'-':''}${whole}${places?'.'+digits.slice(-places):''}`;
 }
-export function utilityTotal(onPeak,offPeak){const values=[onPeak,offPeak].filter(x=>x!==null&&x!==undefined&&x!=='');return values.length?add(...values.map(fraction)):null;}
+export function utilityTotal(onPeak,offPeak,unpaidEnergy=null){const values=[onPeak,offPeak,unpaidEnergy].filter(x=>x!==null&&x!==undefined&&x!=='');return values.length?add(...values.map(fraction)):null;}
 export function emptyConfiguration(){return {operationsStart:null,degradation:null,irradianceChannelId:null,baselines:Object.fromEntries(Array.from({length:12},(_,i)=>[String(i+1),{production:null,revenue:null,insolation:null}]))};}
 export function daysInMonth(year,month){return new Date(Date.UTC(year,month,0)).getUTCDate();}
 export function validateMonth(month){demand(typeof month==='string'&&/^\d{4}-(0[1-9]|1[0-2])$/.test(month)&&month>='1900-01'&&month<='2100-12','Use a calendar month from 1900-01 through 2100-12.');return month;}
@@ -148,7 +148,7 @@ function ratio(numerator,denominator,denominatorLabel){
 export function calculatedRows(projections,utility,telemetry,capacity){
   const dc=capacity?.dcKwp&&BigInt(capacity.dcKwp.n)>0n?availableInput(capacity.dcKwp,'DC capacity'):missingCalculated(capacity?.unavailableReason||'DC capacity is unavailable.');
   return Object.fromEntries(projections.map(row=>{
-    const actual=utility[row.month],production=availableInput(utilityTotal(actual?.onPeak,actual?.offPeak),'Utility actual production total');
+    const actual=utility[row.month],production=availableInput(utilityTotal(actual?.onPeak,actual?.offPeak,actual?.unpaidEnergy),'Utility actual production total');
     const projected=availableInput(row.production,'Projected production'),budget=availableInput(row.revenue,'Budgeted revenue');
     const projectedInsolation=availableInput(row.insolation,'Projected insolation'),actualInsolation=telemetryInput(telemetry,row.month,'insolation');
     const budgetedSpecificYield=ratio(projected,dc,'DC capacity'),actualSpecificYield=ratio(production,dc,'DC capacity');

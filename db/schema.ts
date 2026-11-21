@@ -78,7 +78,7 @@ export const monthlyConfiguration = sqliteTable('monthly_configuration', {
 },table=>[check('monthly_revision',sql`${table.revision} >= 0`)]);
 export const monthlyUtility = sqliteTable('monthly_utility', {
   siteId:text('site_id').notNull().references(()=>siteSettings.id),month:text('month').notNull(),
-  onPeak:text('on_peak'),offPeak:text('off_peak'),revenue:text('revenue'),energyUsed:text('energy_used'),invoiceCost:text('invoice_cost'),
+  onPeak:text('on_peak'),offPeak:text('off_peak'),unpaidEnergy:text('unpaid_energy'),revenue:text('revenue'),energyUsed:text('energy_used'),invoiceCost:text('invoice_cost'),
 },table=>[primaryKey({columns:[table.siteId,table.month]})]);
 export const monthlyRollups = sqliteTable('monthly_rollups', {
   siteId:text('site_id').primaryKey().notNull().references(()=>siteSettings.id),sourceRevision:integer('source_revision').notNull(),

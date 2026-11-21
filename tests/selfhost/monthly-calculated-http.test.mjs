@@ -36,7 +36,7 @@ test('built HTTP calculated metrics: saved scientific DC ratings, exact inputs, 
  const otherEquipment=equipment.map(a=>({...a,id:'other-'+a.id,siteId:other,parentId:a.parentId?'other-'+a.parentId:null,...(a.type==='module_group'?{moduleRatedCapacityW:'500',quantity:300}:{})}));
  await saveModel(other,otherEquipment);
  const config={...emptyConfiguration(),operationsStart:'2026-01-01',degradation:'0'};config.baselines[1]={production:'12000',revenue:'1000',insolation:'150'};
- const raw={onPeak:'8000.0000',offPeak:'4000.000000000000000',revenue:'1200.000000000000000',energyUsed:'0',invoiceCost:'-0.00000000000000001'};
+ const raw={onPeak:'8000.0000',offPeak:'4000.000000000000000',unpaidEnergy:null,revenue:'1200.000000000000000',energyUsed:'0',invoiceCost:'-0.00000000000000001'};
  for(const site of [f.siteId,other]){await saveConfiguration(site,config);await post(site,{action:'utility',revision:1,rows:[{month:'2026-01',...raw}]});assert.deepEqual((await get(site)).utility['2026-01'],raw);}
  const beforeImport=await get(),otherBefore=await get(other),savedModel=await f.request(`/api/equipment?siteId=${f.siteId}`);
  assert.deepEqual(beforeImport.capacity,expected.capacity?{dcKwp:expected.capacity,unavailableReason:null}:null);assert.deepEqual(otherBefore.capacity.dcKwp,{n:'300',d:'1'});
@@ -59,6 +59,37 @@ test('built HTTP calculated metrics: saved scientific DC ratings, exact inputs, 
  // Save the same accepted values, rather than any formatted display string.
  await post(f.siteId,{action:'utility',revision:current.revision,rows:[{month:'2026-01',...raw}]});
  current=await get();assert.deepEqual(current.utility,exactSaved.utility);assert.deepEqual(current.calculated,exactSaved.calculated);
+ // Combined regression: only unpaid changes, but every production metric must
+ // change exactly. Python Fraction expectations never call application math.
+ const controls=['budgetedSpecificYield','budgetedPerformanceRatio','insolationRatio','revenueRatio','iar'];
+ const productionFields=oracle.keys.filter(field=>!controls.includes(field));
+ let combinedBefore,combinedAfter;
+ for(const name of ['combined-http-before','combined-http-after']){
+  const c=oracle.combinedCases.find(c=>c.name===name),prior=structuredClone(current),values={...raw,unpaidEnergy:c.utility.unpaidEnergy};
+  const saved=await post(f.siteId,{action:'utility',revision:current.revision,rows:[{month:'2026-01',...values}]});
+  current=await get();assert.deepEqual(current,saved);assert.deepEqual(current.utility['2026-01'],values);
+  assert.equal(current.revision,prior.revision+1);assert.deepEqual(current.configuration,prior.configuration);assert.deepEqual(current.projections,prior.projections);assert.deepEqual(current.capacity,prior.capacity);assert.deepEqual(current.telemetry,prior.telemetry);
+  for(const field of oracle.keys){assert.deepEqual(current.calculated['2026-01'][field].value,c.values[field],`${name} ${field}`);assert.equal(current.calculated['2026-01'][field].state,prior.calculated['2026-01'][field].state);assert.equal(current.calculated['2026-01'][field].reason,prior.calculated['2026-01'][field].reason);}
+  for(const field of controls)assert.deepEqual(current.calculated['2026-01'][field],prior.calculated['2026-01'][field],field+' control');
+  for(const field of productionFields)assert.notDeepEqual(current.calculated['2026-01'][field].value,prior.calculated['2026-01'][field].value,field+' must include unpaid');
+  for(const month of Object.keys(current.calculated).filter(m=>m!=='2026-01'))assert.deepEqual(current.calculated[month],prior.calculated[month]);
+  assert.deepEqual({...f.inspect(shared=>shared.prepare('SELECT unpaid_energy,typeof(unpaid_energy) type FROM monthly_utility WHERE site_id=? AND month=?').get(f.siteId,'2026-01'))},{unpaid_energy:values.unpaidEnergy,type:'text'});
+  assert.deepEqual(await get(other),otherBefore);assert.deepEqual(protectedState(),protectedBefore);
+  assert.deepEqual(f.inspect(shared=>shared.prepare('SELECT * FROM monthly_rollups WHERE site_id=?').get(f.siteId)),cached);
+  assert.deepEqual(await f.request(`/api/performance-data?siteId=${f.siteId}`),imported);
+  if(name==='combined-http-before')combinedBefore=structuredClone(current);else combinedAfter=structuredClone(current);
+ }
+ // Full-row omission must reject rather than erase a saved unpaid value; CAS
+ // still rejects an otherwise valid stale edit without affecting metrics.
+ const {unpaidEnergy:omitted,...missingUnpaid}=current.utility['2026-01'];assert.ok(omitted);
+ await f.request('/api/monthly-data',{siteId:f.siteId,action:'utility',revision:current.revision,rows:[{month:'2026-01',...missingUnpaid}]},400);
+ await f.request('/api/monthly-data',{siteId:f.siteId,action:'utility',revision:current.revision-1,rows:[{month:'2026-01',...current.utility['2026-01'],unpaidEnergy:'0'}]},409);
+ assert.deepEqual(await get(),combinedAfter);
+ await f.stop();await f.start();current=await get();assert.deepEqual(current,combinedAfter,'populated unpaid and all twelve metrics survive restart');assert.deepEqual(await get(other),otherBefore);
+ assert.deepEqual(await f.request(`/api/performance-data?siteId=${f.siteId}`),imported);assert.deepEqual(protectedState(),protectedBefore);
+ // Restore the original control row and retain every preexisting model/config
+ // edit assertion below rather than replacing those cases with the new case.
+ await post(f.siteId,{action:'utility',revision:current.revision,rows:[{month:'2026-01',...raw}]});current=await get();assert.deepEqual(current.calculated,exactSaved.calculated);assert.deepEqual(current.utility,exactSaved.utility);
  // Model-only change: no reimport, analysis, AC-capacity readiness or rollup rewrite.
  equipment=await saveModel(f.siteId,equipment.map(a=>({...a,acRatedCapacityKw:'',maxDcCapacityKw:'',nameplateKva:'',acLineLossPercent:'',transformerLossPercent:'',...(a.type==='module_group'?{quantity:300}:{})})));
  current=await get();assert.deepEqual(current.capacity.dcKwp,{n:'240',d:'1'});assert.deepEqual(current.calculated['2026-01'].actualSpecificYield.value,{n:'50',d:'1'});assert.deepEqual(current.calculated['2026-01'].iapr.value,expected.values.iapr);assert.equal(current.telemetry.sourceRevision,1);
@@ -78,6 +109,6 @@ test('built HTTP calculated metrics: saved scientific DC ratings, exact inputs, 
  assert.deepEqual(current.utility,beforeRestart.utility);assert.deepEqual(current.telemetry,beforeRestart.telemetry);assert.deepEqual(protectedState(),protectedBefore);
  await f.stop();const reopened=new LocalDatabase(join(f.directory,'sol-diagnostics.sqlite'),resolve('drizzle')),performance=new PerformanceStoreManager(join(f.directory,'performance'));
  try{assert.equal(await(await new LocalBucket(reopened,join(f.directory,'objects')).get(key)).text(),bytes);const rows=Array.from(performance.site(f.siteId).rows(1));assert.equal(rows.length,6);assert.deepEqual(rows.filter(r=>r.channel.equipmentId==='meter').map(r=>r.value),[1,1]);assert.equal(performance.site(f.siteId).describe().revision,1);}finally{performance.close();reopened.close();}
- writeFileSync(join(f.directory,'verified-calculated-metrics.json'),JSON.stringify({exactSaved,beforeRestart,final:current,otherBefore,retainedResultsUnchanged:true},null,2));
+ writeFileSync(join(f.directory,'verified-calculated-metrics.json'),JSON.stringify({exactSaved,combinedBefore,combinedAfter,beforeRestart,final:current,otherBefore,retainedResultsUnchanged:true},null,2));
  console.log('Calculated metrics HTTP evidence:',f.directory);
 });

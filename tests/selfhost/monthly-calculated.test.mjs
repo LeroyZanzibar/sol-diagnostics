@@ -23,7 +23,7 @@ test('native saved read-time metrics: site isolation, utility/model/config edits
  async function close(){await service.stop();manager.close();db.close();}
  open();t.after(close);seed(db,'site',300);seed(db,'other',600);
  const config={...emptyConfiguration(),operationsStart:'2026-01-01',degradation:'0'};config.baselines[1]={production:'12000',revenue:'1000',insolation:'150'};
- const utility={month:'2026-01',onPeak:'8000.0000',offPeak:'4000.000000000000001',revenue:'1200',energyUsed:'0',invoiceCost:'-0.01'};
+ const utility={month:'2026-01',onPeak:'8000.0000',offPeak:'4000.000000000000001',unpaidEnergy:null,revenue:'1200',energyUsed:'0',invoiceCost:'-0.01'};
  for(const site of ['site','other']){
   const p=service.inputs.preview(site,0,config);service.inputs.saveConfiguration(site,0,config,p.token);service.inputs.saveUtility(site,1,[utility]);
   const store=manager.site(site),stage=await store.stage({source:'csv',fileName:'Synthetic',timezone:'UTC',intervalMinutes:60,modelRevision:'fixture'},readings());
@@ -62,7 +62,7 @@ test('native saved read-time metrics: site isolation, utility/model/config edits
 test('capacity and monthly inputs share one synchronous SQLite snapshot across a competing saved edit',t=>{
  const root=mkdtempSync(join(tmpdir(),'monthly-capacity-snapshot-')),path=join(root,'shared.sqlite'),db=new LocalDatabase(path,resolve('drizzle')),writer=new DatabaseSync(path);
  t.after(()=>{writer.close();db.close();});seed(db,'site',300);
- const store=new MonthlyStore(db);store.saveUtility('site',0,[{month:'2026-01',onPeak:'10',offPeak:null,revenue:null,energyUsed:null,invoiceCost:null}]);
+ const store=new MonthlyStore(db);store.saveUtility('site',0,[{month:'2026-01',onPeak:'10',offPeak:null,unpaidEnergy:null,revenue:null,energyUsed:null,invoiceCost:null}]);
  let changed=false,reads=0;
  const observed=new MonthlyStore({withSynchronousRead:callback=>{reads++;return db.withSynchronousRead(read=>callback({
   first(sql,...args){const row=read.first(sql,...args);if(sql.includes('monthly_configuration')&&!changed){changed=true;assert.throws(()=>writer.exec("UPDATE equipment_assets SET quantity=600 WHERE id='site-mod'"),/locked/);}return row;},
