@@ -1,13 +1,13 @@
 # Changelog
 
-## 2026.11.21.2 — pending publication
+## 2026.11.21.2 — published November 21, 2026
 
 - Add editable Unpaid energy (kWh) between Off-peak and Total production. Include it in both utility totals and every production-based calculated metric, with exact input precision, blank/zero handling and unchanged revenue. Add nullable storage through migration `0022_unpaid_energy.sql`; existing rows retain their values with the new field blank.
 - Add twelve read-only monthly calculated columns: budgeted/actual specific yield and their ratio; budgeted/actual performance ratio and their ratio; actual/projected insolation; utility production versus projected and Expected Production; utility revenue versus budget; IAPR; and IAR.
 - Calculate yield from saved DC module nameplate capacity and utility production. Use the existing prorated/degraded projections and selected insolation reporting source. Recalculate from saved inputs on reads, including capacity edits, without rewriting utility inputs, telemetry or saved analyses.
 - Preserve exact underlying fractions. Display specific yield with two decimals and ratios as whole percentages; do not cap above 100%. Show unavailable denominators and visibly retain partial telemetry coverage. Calculated metrics add no stored rounded values, new imports or automatic analysis.
 
-See the feature PR checks for verification. Release publication and installed-app deployment remain separate.
+Published source `4f0d09f1b6c0c4b5026c4c5c04b89cf6f1775b83` as `v2026.11.21.2`. Combined local and tagged-release builds passed 942/942 tests; native AMD64/ARM64 hardened persistence checks and separate anonymous native pulls passed. The immutable two-platform image index is `sha256:57fcd0578375cce22e8346cf0cf33747ac6192ef0244aba92811851d5a4c8f65`. Public source/checksum assets were downloaded and byte-verified. Independent combined-feature specification, quality and integration reviews passed; real desktop/mobile browser checks verified unpaid edits and all twelve exact metrics. Six authenticated pre-existing standalone TypeScript diagnostics remain, with no new diagnostics. This publication-only documentation does not move the source tag or replace its images. Community-store publication and installed-app deployment are separate; back up complete app data before upgrading.
 
 ## 2026.11.21.1 — published November 21, 2026
 
