@@ -1,12 +1,12 @@
 # Changelog
 
-## 2026.11.23.1 — pending publication
+## 2026.11.23.1 — published November 23, 2026
 
 - Add interactive monthly Charts under Visuals, with inclusive month ranges, line/bar/table views, metric presets and calendar-aligned comparisons against one or two prior years. Read the existing authoritative monthly snapshot; preserve exact values, missing versus zero, partial coverage and reporting-source details without changing formulas or saved inputs.
 - Add accessible hover, keyboard and touch details plus named My views. Save the selected range, chart type, ordered metrics and comparison settings in the app profile through additive migration `0023_chart_views.sql`; restoring a setup does not change the selected site. Preserve existing settings, imports, analyses and reviews.
 - Extend the native-image persistence smoke with independently checked saved chart setups and one detached expected snapshot reused after restart and recreation. Reuse the scenario in real production-HTTP restart tests without replacing the existing monthly, canonical-data, authentication or hardening checks.
 
-Publication pending. The approved feature checkpoint passed 996 tests and 76 browser checks with independent specification, quality and integration approval. Final release build/full-suite validation, native AMD64/ARM64 image checks and publication verification remain release gates; the six existing standalone TypeScript diagnostics are unchanged at the feature checkpoint. This update does not automatically import data or rerun analyses. Community-store publication and installed-app deployment are separate backed-up stages.
+Published source `f1dbe9fd470ce6b4c50c11e4171748a429ab0fc5` as `v2026.11.23.1`. Final local, merged-source and tagged-release production builds passed 998/998 tests; native AMD64/ARM64 hardened saved-view/monthly/canonical persistence checks and separate anonymous native pulls passed. The immutable two-platform index is `sha256:d9ffbff5f074ce014cbfe1424af4990a66087c5ba44e5c103a66cf57be5bd1ac`. Public source/checksum assets were downloaded and byte-verified. The approved feature checkpoint passed 996 tests and 76 browser checks with independent specification, quality and integration approval; the release-only metadata/smoke delta also passed independent review. Six pre-existing standalone TypeScript diagnostics remain unchanged. This documentation does not move the tag or replace its images. No automatic imports or analysis runs are introduced. Community-store publication and installed-app deployment remain separate backed-up stages.
 
 ## 2026.11.21.2 — published November 21, 2026
 
