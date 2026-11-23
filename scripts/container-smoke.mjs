@@ -9,6 +9,7 @@ import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {runPerformancePersistenceSmoke} from './performance-persistence-smoke.mjs';
 import {runMonthlyPersistenceSmoke, verifyMonthlyPersistence} from './monthly-persistence-smoke.mjs';
+import {runChartViewsPersistenceSmoke, verifyChartViewsPersistence} from './chart-views-persistence-smoke.mjs';
 
 const image = process.argv[2];
 assert.ok(image, 'Usage: node scripts/container-smoke.mjs IMAGE');
@@ -60,7 +61,7 @@ async function start() {
   await ready();
 }
 async function protectedEndpoints() {
-  for (const path of ['/', '/api/site-settings', '/api/user-settings']) {
+  for (const path of ['/', '/api/site-settings', '/api/user-settings', '/api/chart-views']) {
     const response = await request(path, {authenticated: false});
     assert.equal(response.status, 401, `${path} must require authentication`);
     assert.match(response.headers.get('www-authenticate'), /^Basic /);
@@ -99,10 +100,13 @@ try {
   assert.equal(uploaded.status, 201, await uploaded.text());
   const performance = await runPerformancePersistenceSmoke({api, request, siteId: site.id});
   const monthly = await runMonthlyPersistenceSmoke({api, request});
+  const chartViews = await runChartViewsPersistenceSmoke({api, request});
   // Keep the approved expectation outside the image and /data. Every lifecycle
   // readback uses these same bytes, never a new snapshot from the restarted app.
   const monthlySnapshot = join(root, 'monthly-expected.json');
   writeFileSync(monthlySnapshot, JSON.stringify(monthly.expected));
+  const chartViewsSnapshot = join(root, 'chart-views-expected.json');
+  writeFileSync(chartViewsSnapshot, JSON.stringify(chartViews.expected));
   const objectCheck = `
     import assert from 'node:assert/strict';
     import {LocalDatabase,LocalBucket} from './selfhost/storage.mjs';
@@ -122,21 +126,22 @@ try {
     docker('exec', name, 'node', '--input-type=module', '-e', objectCheck, uploadId, csv);
     await performance.verify();
     await verifyMonthlyPersistence({api, expected: JSON.parse(readFileSync(monthlySnapshot, 'utf8'))});
+    await verifyChartViewsPersistence({api, expected: JSON.parse(readFileSync(chartViewsSnapshot, 'utf8'))});
     await protectedEndpoints();
   };
   await persisted();
-  console.log('PASS: initial auth, SQLite state, uploaded bytes, canonical readings/receipts, exact monthly inputs, 300 projections and corrected monthly telemetry.');
+  console.log('PASS: initial auth, SQLite state, uploaded bytes, canonical readings/receipts, exact monthly inputs, 300 projections, corrected monthly telemetry and exact saved chart views.');
   docker('restart', '--time', '120', name);
   await ready();
   await persisted();
-  console.log('PASS: canonical readings/receipts, exact monthly inputs, 300 projections and corrected monthly telemetry after restart.');
+  console.log('PASS: canonical readings/receipts, exact monthly inputs, 300 projections, corrected monthly telemetry and exact saved chart views after restart.');
   // Recreate as well as restart: persistence must live on /data, not a layer.
   docker('stop', '--time', '120', name);
   assert.equal(docker('inspect', '--format={{.State.ExitCode}}', name), '0');
   docker('rm', name);
   await start();
   await persisted();
-  console.log('PASS: canonical readings/receipts, exact monthly inputs, 300 projections and corrected monthly telemetry after container recreation.');
+  console.log('PASS: canonical readings/receipts, exact monthly inputs, 300 projections, corrected monthly telemetry and exact saved chart views after container recreation.');
   for (let i = 0; i < 90; i++) {
     const status = docker('inspect', '--format={{.State.Health.Status}}', name);
     if (status === 'healthy') break;
@@ -144,7 +149,7 @@ try {
     if (i === 89) throw Error('Image HEALTHCHECK did not become healthy');
     await delay(1000);
   }
-  console.log('PASS: non-root/read-only startup, healthcheck, HTTP auth, CSRF rejection, SQLite, uploaded bytes, canonical readings/receipts and monthly data survive restart and recreation.');
+  console.log('PASS: non-root/read-only startup, healthcheck, HTTP auth, CSRF rejection, SQLite, uploaded bytes, canonical readings/receipts, monthly data and saved chart views survive restart and recreation.');
 } catch (error) {
   console.error('Container smoke failure:', error);
   try { console.error(docker('logs', '--tail', '150', name)); } catch {}

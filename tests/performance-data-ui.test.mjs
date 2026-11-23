@@ -113,6 +113,33 @@ test('navigation uses Analysis, Findings and Data management; history management
  const manage=button(tree,'Manage Analyses');manage.props.onClick();assert.equal(h.state.view,'manage-analyses');
 });
 
+test('Visuals navigation opens Charts with the selected site and closes the mobile menu',()=>{
+ const closed=[],h=home({},'current',true,{
+  useMobileNavigation:()=>({isMobile:false,mobileMenuOpen:true,setMobileMenuOpen:value=>closed.push(value),navigationRef:{current:null},menuButtonRef:{current:null}}),
+ });
+ let tree=h.render();assert.match(html(tree),/> Visuals</);
+ const charts=button(tree,'Charts');assert.ok(charts);charts.props.onClick();
+ assert.equal(h.state.view,'charts');assert.equal(h.state.activeSiteId,'site');assert.equal(closed.at(-1),false);
+ tree=h.render();const workspace=nodes(tree).find(n=>n.props?.siteId==='site'&&typeof n.props.onSiteChange==='function'&&Array.isArray(n.props.sites));
+ assert.ok(workspace,'The actual Charts component must be mounted, not just a navigation label');
+ assert.equal(workspace.props.sites[0].id,'site');workspace.props.onSiteChange('other');assert.equal(h.state.activeSiteId,'other');
+ assert.match(html(tree),/aria-current="page"[^>]*>[\s\S]*?Charts/);
+});
+
+test('Charts navigation preserves monthly dirty/busy guards and existing menus',()=>{
+ const h=home({view:'settings'},'current',true,{confirmMonthlyNavigation:()=>false});
+ const tree=h.render(),charts=button(tree,'Charts');assert.ok(charts);charts.props.onClick();assert.equal(h.state.view,'settings');
+ assert.match(html(tree),/Data management/);assert.match(html(tree),/Site configuration/);assert.match(html(tree),/User Settings/);
+});
+
+test('Visuals navigation expands from a collapsed sidebar and Charts handles an empty site list',()=>{
+ const h=home({sidebarCollapsed:true,visualsMenuOpen:false}),parent=button(h.render(),'Visuals');
+ assert.ok(parent);parent.props.onClick();assert.equal(h.state.sidebarCollapsed,false);assert.equal(h.state.visualsMenuOpen,true);
+ const empty=home({view:'charts',activeSiteId:'',configs:{}}),tree=empty.render();
+ const workspace=nodes(tree).find(n=>n.props?.siteId===''&&typeof n.props.onSiteChange==='function'&&Array.isArray(n.props.sites));
+ assert.ok(workspace);assert.equal(workspace.props.sites.length,0);
+});
+
 test('freshness filters precede totals, hidden and dismissed audits, summary/timeline membership and XLSX',()=>{
  for(const status of ['current','older','unknown'])for(const filter of ['all','current','older']){
   const h=home({freshnessFilter:filter},status),tree=h.render(),allowed=filter==='all'||filter===status;
