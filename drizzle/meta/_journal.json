@@ -162,6 +162,13 @@
       "when": 1795273508793,
       "tag": "0022_unpaid_energy",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1795445707521,
+      "tag": "0023_chart_views",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,7 @@
 "use client";
 import './monthly.css';
 import MonthlySettings from './MonthlySettings';
+import MonthlyCharts from './MonthlyCharts';
 import {confirmMonthlyNavigation} from './monthly-client';
 
 
@@ -373,6 +374,7 @@ export default function Home() {
     | "uploads"
     | "maintenance-uploads"
     | "manage-analyses"
+    | "charts"
     | "array"
     | "user"
     | "issue-visibility"
@@ -414,6 +416,7 @@ export default function Home() {
   const [sitesMenuOpen, setSitesMenuOpen] = useState(true);
   const [issuesMenuOpen, setIssuesMenuOpen] = useState(true);
   const [uploadsMenuOpen, setUploadsMenuOpen] = useState(true);
+  const [visualsMenuOpen, setVisualsMenuOpen] = useState(true);
   const [maintenanceRevision,setMaintenanceRevision]=useState(0);
   const [performance, setPerformance] = useState<PerformanceData | null>(null);
   const performanceCacheRef = useRef(new Map<string, { data: PerformanceData; etag: string; bytes: number }>());
@@ -864,6 +867,7 @@ export default function Home() {
   function goTo(next: typeof view) {
     if(next!==view&&!confirmMonthlyNavigation())return;
     if(next==='user'||next==='issue-visibility')setUserMenuOpen(true);
+    if(next==='charts')setVisualsMenuOpen(true);
     if(next==='uploads'||next==='maintenance-uploads'||next==='manage-analyses')setUploadsMenuOpen(true);
     setMobileMenuOpen(false);
     setView(next);
@@ -1410,7 +1414,7 @@ export default function Home() {
   return (
     <main data-theme={activeTheme} className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       <header className="mobile-header" inert={isMobile && mobileMenuOpen}>
-        <div><strong>Sol Diagnostics</strong><span>{({ map: "Map", issues: "Findings", summaries: "Summaries", timeline: "Timeline", uploads: "Performance data", "maintenance-uploads":"Maintenance data", "manage-analyses":"Manage Analyses", settings: "Site settings", array: "Array model", user: "User settings", "issue-visibility":"Issue visibility" })[view]}</span></div>
+        <div><strong>Sol Diagnostics</strong><span>{({ map: "Map", issues: "Findings", summaries: "Summaries", timeline: "Timeline", charts: "Charts", uploads: "Performance data", "maintenance-uploads":"Maintenance data", "manage-analyses":"Manage Analyses", settings: "Site settings", array: "Array model", user: "User settings", "issue-visibility":"Issue visibility" })[view]}</span></div>
         <button ref={menuButtonRef} className="mobile-menu-button" aria-label="Open navigation menu" aria-controls="site-navigation" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><span aria-hidden="true">☰</span> Menu</button>
       </header>
       {isMobile && mobileMenuOpen && <div className="mobile-nav-backdrop" aria-hidden="true" onClick={() => setMobileMenuOpen(false)} />}
@@ -1481,8 +1485,17 @@ export default function Home() {
               </div>
             )}
           </div>
+          <div className={`nav-group ${view === 'charts' ? 'active' : ''}`}>
+            <button className="nav-item nav-parent" aria-expanded={visualsMenuOpen} onClick={() => {
+              if (sidebarCollapsed) { setSidebarCollapsed(false); setVisualsMenuOpen(true); }
+              else setVisualsMenuOpen(open => !open);
+            }}><span>03</span> Visuals<i className="nav-chevron">{visualsMenuOpen ? '⌄' : '›'}</i></button>
+            {visualsMenuOpen && <div className="nav-children">
+              <button className={`nav-sub-item ${view === 'charts' ? 'active' : ''}`} aria-current={view === 'charts' ? 'page' : undefined} onClick={() => goTo('charts')}><span>C</span> Charts</button>
+            </div>}
+          </div>
           <div className={`nav-group ${view==='uploads'||view==='maintenance-uploads'||view==='manage-analyses'?'active':''}`}>
-            <button className="nav-item nav-parent" aria-expanded={uploadsMenuOpen} onClick={()=>{if(sidebarCollapsed){setSidebarCollapsed(false);setUploadsMenuOpen(true);}else setUploadsMenuOpen(value=>!value);}}><span>03</span> Data management<i className="nav-chevron">{uploadsMenuOpen?'⌄':'›'}</i></button>
+            <button className="nav-item nav-parent" aria-expanded={uploadsMenuOpen} onClick={()=>{if(sidebarCollapsed){setSidebarCollapsed(false);setUploadsMenuOpen(true);}else setUploadsMenuOpen(value=>!value);}}><span>04</span> Data management<i className="nav-chevron">{uploadsMenuOpen?'⌄':'›'}</i></button>
             {uploadsMenuOpen&&<div className="nav-children"><button className={`nav-sub-item ${view==='uploads'?'active':''}`} onClick={()=>goTo('uploads')}><span>P</span>Performance data</button><button className={`nav-sub-item ${view==='maintenance-uploads'?'active':''}`} onClick={()=>goTo('maintenance-uploads')}><span>M</span>Maintenance data</button><button className={`nav-sub-item ${view==='manage-analyses'?'active':''}`} onClick={()=>goTo('manage-analyses')}><span>A</span>Manage Analyses</button></div>}
           </div>
           <div
@@ -1498,7 +1511,7 @@ export default function Home() {
                 } else setSitesMenuOpen((value) => !value);
               }}
             >
-              <span>04</span> Site configuration{" "}
+              <span>05</span> Site configuration{" "}
               <i className="nav-chevron">{sitesMenuOpen ? "⌄" : "›"}</i>
             </button>
             {sitesMenuOpen && (
@@ -1519,7 +1532,7 @@ export default function Home() {
             )}
           </div>
           <div className={`nav-group ${view==='user'||view==='issue-visibility'?'active':''}`}>
-            <button className="nav-item nav-parent" aria-expanded={userMenuOpen} onClick={()=>{if(sidebarCollapsed){setSidebarCollapsed(false);setUserMenuOpen(true);}else setUserMenuOpen(open=>!open);}}><span>05</span> User Settings<i className="nav-chevron">{userMenuOpen?'⌄':'›'}</i></button>
+            <button className="nav-item nav-parent" aria-expanded={userMenuOpen} onClick={()=>{if(sidebarCollapsed){setSidebarCollapsed(false);setUserMenuOpen(true);}else setUserMenuOpen(open=>!open);}}><span>06</span> User Settings<i className="nav-chevron">{userMenuOpen?'⌄':'›'}</i></button>
             {userMenuOpen&&<div className="nav-children"><button className={`nav-sub-item ${view==='user'?'active':''}`} onClick={()=>goTo('user')}><span>P</span> Profile & preferences</button><button className={`nav-sub-item ${view==='issue-visibility'?'active':''}`} onClick={()=>goTo('issue-visibility')}><span>V</span> Issue visibility</button></div>}
           </div>
         </nav>
@@ -1957,6 +1970,10 @@ export default function Home() {
           <ManageAnalyses sites={managedSites} siteId={activeSiteId} runId={selectedRunId} revision={`${analysisRunId}:${performanceRevision}`} onSiteChange={changeAnalysisSite} onChange={selectAnalysis} onDeleted={deletedAnalysis} onFindings={()=>goTo('issues')}/>
         ) : view === "maintenance-uploads" ? (
           <MaintenanceUploads sites={managedSites} notify={notify} onImported={()=>setMaintenanceRevision(value=>value+1)} onTimeline={siteId=>{setActiveSiteId(siteId);goTo('timeline');}}/>
+        ) : view === "charts" ? (
+          <MonthlyCharts sites={managedSites} siteId={activeSiteId} onSiteChange={siteId => {
+            if (siteId !== activeSiteId && confirmMonthlyNavigation()) setActiveSiteId(siteId);
+          }} />
         ) : view === "uploads" ? (
           <TelemetryUploads
             sites={managedSites}

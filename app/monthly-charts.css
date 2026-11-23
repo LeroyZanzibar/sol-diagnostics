@@ -1,0 +1,206 @@
+/* Monthly charts live inside the existing app chrome. No global theme/layout overrides. */
+.monthly-charts{--mc-surface:var(--panel,var(--white));--mc-accent:var(--accent,var(--gold));color:var(--ink);min-width:0;max-width:100%;font-size:12px;line-height:1.5}
+.monthly-charts *{box-sizing:border-box}
+.monthly-charts h1,.monthly-charts h2,.monthly-charts h3,.monthly-charts p{margin:0}
+.monthly-charts h1{font-size:27px;line-height:1.3;letter-spacing:-.035em;text-transform:none}
+.monthly-charts h2{font-size:16px;text-transform:none;letter-spacing:0}
+.monthly-charts h3{font-size:12px;line-height:1.45;text-transform:none;letter-spacing:0}
+.monthly-charts p,.monthly-charts small{color:var(--muted)}
+.monthly-charts button,.monthly-charts input,.monthly-charts select,.monthly-charts summary{font:inherit;color:var(--ink);border-radius:4px}
+.monthly-charts button,.monthly-charts summary{min-height:34px;border:1px solid var(--line);background:var(--mc-surface);padding:6px 10px;cursor:pointer;line-height:1.5;letter-spacing:0;text-transform:none;box-shadow:none}
+.monthly-charts button:hover,.monthly-charts summary:hover{border-color:var(--muted);background:color-mix(in srgb,var(--mc-accent) 7%,var(--mc-surface))}
+.monthly-charts button[aria-pressed=true]{border-color:var(--mc-accent);background:color-mix(in srgb,var(--mc-accent) 10%,var(--mc-surface));color:var(--ink)}
+.monthly-charts button:disabled{opacity:.55;cursor:not-allowed}
+.monthly-charts :is(button,input,select,summary,[tabindex]):focus-visible{outline:2px solid var(--mc-accent);outline-offset:3px}
+.monthly-charts input,.monthly-charts select{min-width:0;max-width:100%;min-height:35px;border:1px solid var(--line);padding:6px 8px;background:var(--mc-surface);box-shadow:none}
+.monthly-charts input::placeholder{color:var(--muted);opacity:1}
+.monthly-charts input[type=checkbox]{width:15px;height:15px;min-height:15px;flex:0 0 15px;accent-color:var(--mc-accent);margin:2px 0 0}
+.monthly-charts input[aria-invalid=true]{border-color:var(--red,var(--ink))}
+.monthly-charts label{display:flex;flex-direction:column;gap:4px;min-width:0;color:var(--muted);font-size:10px}
+.monthly-charts .mc-pagehead{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:18px}
+.monthly-charts .mc-pagehead p{font-size:11px;margin-top:5px}
+.monthly-charts .mc-site{max-width:300px;min-width:190px}
+.monthly-charts .mc-site select{width:100%;font-size:12px}
+.monthly-charts .mc-site small{font-size:10px;overflow-wrap:anywhere}
+.monthly-charts .mc-workspace{border:1px solid var(--line);background:var(--mc-surface);border-radius:4px;min-width:0;max-width:100%}
+.monthly-charts .mc-views-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--mc-accent) 3%,var(--mc-surface));position:relative}
+.monthly-charts .mc-row-label{font-size:10px;color:var(--muted);white-space:nowrap}
+.monthly-charts .mc-presets{display:flex;flex-wrap:wrap;gap:5px}
+.monthly-charts .mc-presets button{font-size:11px;white-space:nowrap;min-height:33px;padding:6px 11px}
+.monthly-charts .mc-current-view{margin-left:auto;min-width:0;max-width:220px;font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.monthly-charts .mc-current-view.mc-modified{color:var(--ink)}
+.monthly-charts .mc-popup{position:relative;min-width:0}
+.monthly-charts .mc-popup>summary{display:list-item;list-style:disclosure-closed inside;white-space:nowrap;font-size:11px}
+.monthly-charts .mc-popup[open]>summary{list-style-type:disclosure-open}
+.monthly-charts .mc-popover{position:absolute;z-index:6;right:0;top:calc(100% + 7px);border:1px solid var(--muted);border-radius:4px;background:var(--mc-surface);box-shadow:0 10px 25px #0002;max-width:calc(100vw - 32px);max-height:min(640px,75dvh);overflow:auto}
+.monthly-charts .mc-views-popover{width:360px}
+.monthly-charts .mc-popover-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.monthly-charts .mc-popover-head strong{font-size:12px}
+.monthly-charts .mc-popover-head small{font-size:10px;font-weight:400;margin-left:5px}
+.monthly-charts .mc-popover-head button{font-size:10px;min-height:28px;padding:3px 7px}
+.monthly-charts .mc-views-popover>p{padding:10px 12px;font-size:11px}
+.monthly-charts .mc-saved-list{max-height:280px;overflow:auto;padding:5px}
+.monthly-charts .mc-view-entry{width:100%;display:flex;gap:8px;align-items:center;text-align:left;min-height:57px;padding:9px 7px;border-color:transparent;white-space:normal}
+.monthly-charts .mc-view-entry>span:last-child{min-width:0}
+.monthly-charts .mc-view-entry strong{font-size:11px;font-weight:600;overflow-wrap:anywhere}
+.monthly-charts .mc-view-entry small{display:block;margin-top:3px;font-size:10px;line-height:1.5}
+.monthly-charts .mc-view-check{width:13px;flex:0 0 13px;color:var(--mc-accent)}
+.monthly-charts .mc-save-area{border-top:1px solid var(--line);padding:9px}
+.monthly-charts .mc-save-current{width:100%;text-align:left;font-size:11px}
+.monthly-charts .mc-save-form{padding:4px}
+.monthly-charts .mc-save-form input{width:100%;font-size:12px}
+.monthly-charts .mc-save-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.monthly-charts .mc-save-actions button{font-size:11px}
+.monthly-charts .mc-primary{background:var(--mc-accent);border-color:var(--mc-accent);color:var(--nav,#13211d);font-weight:600}
+.monthly-charts .mc-primary:hover{background:var(--mc-accent);color:var(--nav,#13211d)}
+.monthly-charts .mc-views-help{font-size:10px!important;line-height:1.6}
+.monthly-charts .mc-filters{display:flex;flex-wrap:wrap;align-items:flex-start;gap:13px 22px;padding:14px 14px 11px}
+.monthly-charts .mc-date-group{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;min-width:0}
+.monthly-charts .mc-date-fields{display:flex;gap:9px;min-width:0}
+.monthly-charts .mc-date-fields input{width:145px;font-size:11px}
+.monthly-charts .mc-ranges{display:flex;gap:4px}
+.monthly-charts .mc-ranges button{font-size:10px;padding:6px 8px}
+.monthly-charts .mc-control{display:flex;flex-direction:column;gap:4px}
+.monthly-charts .mc-control>span{font-size:10px;color:var(--muted)}
+.monthly-charts .mc-segmented{display:flex;gap:0}
+.monthly-charts .mc-segmented button{font-size:11px;min-height:35px;white-space:nowrap;border-radius:0}
+.monthly-charts .mc-segmented button+button{margin-left:-1px}
+.monthly-charts .mc-segmented button:first-child{border-radius:4px 0 0 4px}
+.monthly-charts .mc-segmented button:last-child{border-radius:0 4px 4px 0}
+.monthly-charts .mc-segmented button[aria-pressed=true]{position:relative}
+.monthly-charts .mc-comparison{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.monthly-charts .mc-extra-year{font-size:10px;min-height:30px;padding:5px 7px}
+.monthly-charts .mc-metric-strip{display:flex;gap:9px;align-items:flex-start;padding:0 14px 12px;min-width:0}
+.monthly-charts .mc-chips{display:flex;flex-wrap:wrap;gap:5px;flex:1;min-width:0}
+.monthly-charts .mc-chip{display:flex;align-items:center;gap:7px;min-height:30px;font-size:10px;white-space:normal;text-align:left;padding:5px 7px;max-width:100%;overflow-wrap:anywhere}
+.monthly-charts .mc-chip>span:last-child{margin-left:auto;font-size:14px;color:var(--muted)}
+.monthly-charts .mc-swatch{display:inline-block;width:19px;height:0;flex:0 0 19px;border-top:2px solid var(--mc-accent);vertical-align:middle}
+.monthly-charts .mc-metric-picker{flex:none}
+.monthly-charts .mc-metric-picker>summary span{font-size:10px;color:var(--muted)}
+.monthly-charts .mc-metric-popover{width:650px}
+.monthly-charts .mc-metric-tools{display:flex;gap:6px;padding:10px 12px;align-items:center}
+.monthly-charts .mc-metric-tools input{width:100%;font-size:12px}
+.monthly-charts .mc-search{flex:1}
+.monthly-charts .mc-metric-tools button{font-size:10px;padding:6px 8px;white-space:nowrap}
+.monthly-charts .mc-metric-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 20px;max-height:340px;overflow:auto;padding:3px 12px 12px}
+.monthly-charts .mc-metric-groups fieldset{border:0;padding:0;margin:0;min-width:0}
+.monthly-charts .mc-metric-groups legend{font-size:10px;font-weight:600;color:var(--ink);border-bottom:1px solid var(--line);padding:3px 0 6px;margin-bottom:5px;width:100%}
+.monthly-charts .mc-metric-option{display:flex;flex-direction:row;gap:8px;align-items:flex-start;color:var(--ink);font-size:11px;padding:6px 0;cursor:pointer}
+.monthly-charts .mc-metric-option small{display:block;font-size:10px;margin-top:2px}
+.monthly-charts .mc-picker-help{border-top:1px solid var(--line);padding:9px 12px;font-size:10px}
+.monthly-charts .mc-error,.monthly-charts .mc-range-error{color:var(--red,var(--ink));font-size:11px;overflow-wrap:anywhere}
+.monthly-charts .mc-error:not(:empty){padding-top:8px}
+.monthly-charts .mc-range-error:not(:empty){border-top:1px solid var(--line);padding:11px 14px}
+.monthly-charts .mc-notice{padding:10px 14px;border-top:1px solid var(--line);color:var(--ink);font-size:11px}
+.monthly-charts .mc-data-error{padding:12px 14px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:11px}
+.monthly-charts .mc-data-error strong{color:var(--red,var(--ink))}
+.monthly-charts .mc-data-error p{font-size:11px;margin:4px 0 8px;max-width:85ch}
+.monthly-charts .mc-empty{padding:35px 16px;text-align:center;border-top:1px solid var(--line)}
+.monthly-charts .mc-empty p{font-size:11px;max-width:70ch;margin:7px auto 0}
+.monthly-charts .mc-range-readout{display:flex;justify-content:space-between;gap:15px;align-items:center;padding:13px 14px;border-top:1px solid var(--line)}
+.monthly-charts .mc-range-readout strong{font-size:12px}
+.monthly-charts .mc-range-readout p,.monthly-charts .mc-range-readout>span{font-size:10px;color:var(--muted);margin-top:3px}
+.monthly-charts .mc-range-readout>span{text-align:right}
+.monthly-charts .mc-chart-result{min-width:0;max-width:100%}
+.monthly-charts .mc-interaction-hint{padding:0 14px 8px;font-size:10px}
+.monthly-charts .mc-plot-panel{min-width:0;max-width:100%;border-top:1px solid var(--line)}
+.monthly-charts .mc-plot-heading{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:11px 14px 0}
+.monthly-charts .mc-plot-heading>span{font-size:10px;color:var(--muted)}
+.monthly-charts .mc-plot-scroll{width:100%;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+.monthly-charts .mc-svg{display:block;max-width:none;touch-action:pan-x pan-y}
+.monthly-charts .mc-svg text{font:10px var(--font,ui-monospace,monospace);fill:var(--muted)}
+.monthly-charts .mc-svg .mc-axis-title{font-size:10px;fill:var(--ink)}
+.monthly-charts .mc-grid-line{stroke:var(--line);stroke-width:1}
+.monthly-charts .mc-zero-line{stroke:var(--muted);stroke-width:.7;stroke-dasharray:3 4}
+.monthly-charts .mc-guide{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3;pointer-events:none}
+.monthly-charts .mc-hit{fill:transparent;cursor:crosshair;outline:none}
+.monthly-charts .mc-hit:focus-visible{outline:none;stroke:var(--mc-accent);stroke-width:1.5;stroke-dasharray:3 3}
+.monthly-charts .mc-legend{list-style:none;margin:0;padding:0 14px 12px;display:flex;flex-wrap:wrap;gap:8px 20px}
+.monthly-charts .mc-legend li{display:flex;align-items:flex-start;gap:7px;min-width:0;max-width:100%;font-size:10px;color:var(--ink)}
+.monthly-charts .mc-legend .mc-swatch{margin-top:10px}
+.monthly-charts .mc-legend button{font-size:10px;padding:3px 4px;text-align:left;min-height:30px;border-color:transparent;background:transparent;white-space:normal;overflow-wrap:anywhere}
+.monthly-charts .mc-legend small{display:block;font-size:9px;margin-top:2px}
+/* Detail layer 5 sits below selectors (6). Viewport bounds keep long metadata
+   reachable; it stays open while travelling from the chart into this region. */
+.monthly-charts .mc-month-details{position:fixed;z-index:5;right:16px;bottom:16px;width:min(540px,calc(100vw - 32px));max-height:min(520px,65dvh);display:flex;flex-direction:column;margin:0;border:1px solid var(--muted);border-radius:4px;background:var(--mc-surface);padding:11px;overflow-wrap:anywhere;box-shadow:0 8px 25px #0002}
+.monthly-charts .mc-month-details>header{display:flex;flex-shrink:0;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:11px}
+.monthly-charts .mc-month-details>header button{min-height:28px;font-size:10px;padding:3px 7px}
+.monthly-charts .mc-detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:12px 20px;min-height:0;overflow:auto;overscroll-behavior:contain}
+.monthly-charts .mc-detail-item{min-width:0;border-top:1px solid var(--line);padding-top:8px;font-size:11px}
+.monthly-charts .mc-detail-item>div{display:flex;align-items:center;gap:7px}
+.monthly-charts .mc-detail-item p{font-size:10px;margin-top:4px}
+.monthly-charts .mc-detail-item .mc-detail-value{font-size:14px;color:var(--ink);font-variant-numeric:tabular-nums}
+.monthly-charts .mc-detail-value span{font-size:10px;color:var(--muted)}
+.monthly-charts .mc-quality{display:inline-block;margin-top:5px;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:9px;color:var(--ink)}
+.monthly-charts .mc-point-reason{display:block;font-size:10px;color:var(--muted);margin-top:5px;white-space:normal}
+.monthly-charts .mc-provenance{font-size:10px;color:var(--muted);margin:5px 0 0;padding-left:16px;white-space:normal}
+.monthly-charts .mc-table-scroll{max-width:100%;overflow:auto;max-height:640px;overscroll-behavior:contain;border-top:1px solid var(--line)}
+.monthly-charts .mc-table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:11px;color:var(--ink)}
+.monthly-charts .mc-table caption{font-size:10px;color:var(--muted);text-align:left;padding:10px 13px}
+.monthly-charts .mc-table th,.monthly-charts .mc-table td{padding:10px 12px;border-bottom:1px solid var(--line);border-right:1px solid var(--line);text-align:left;vertical-align:top;max-width:270px;min-width:170px;white-space:normal;background:var(--mc-surface);font-variant-numeric:tabular-nums}
+.monthly-charts .mc-table th:first-child{position:sticky;left:0;z-index:1;min-width:125px;max-width:125px}
+.monthly-charts .mc-table thead th{position:sticky;top:0;z-index:2;font-size:10px;font-weight:600}
+.monthly-charts .mc-table thead th:first-child{z-index:3}
+.monthly-charts .mc-table small{display:block;font-size:9px;margin-top:5px;font-weight:400}
+.monthly-charts .mc-table-series{display:block;border-top:2px solid;padding-top:5px}
+.monthly-charts .mc-value-unit{color:var(--muted);font-size:9px}
+.monthly-charts .mc-cell-details{margin-top:6px}
+.monthly-charts .mc-cell-details summary{min-height:28px;padding:3px 5px;font-size:9px;white-space:normal}
+.monthly-charts .mc-summary-line{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px 16px;padding:10px 14px;border-top:1px solid var(--line);font-size:10px;color:var(--muted)}
+.monthly-charts .mc-source-notes{margin-top:13px;max-width:100%}
+.monthly-charts .mc-source-notes>summary{display:list-item;list-style:disclosure-closed inside;border:none;background:transparent;font-size:10px;padding:5px 0;min-height:30px;color:var(--muted)}
+.monthly-charts .mc-source-notes[open]>summary{list-style-type:disclosure-open}
+.monthly-charts .mc-source-notes p{font-size:10px;margin:6px 0;max-width:110ch;overflow-wrap:anywhere}
+.monthly-charts .mc-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:1150px){
+ .monthly-charts .mc-current-view{order:4;flex-basis:100%;max-width:100%;margin:0}
+ .monthly-charts .mc-my-views{margin-left:auto}
+ .monthly-charts .mc-filters{gap:12px 15px}
+}
+@media(max-width:760px){
+ .monthly-charts .mc-pagehead{gap:12px;margin-bottom:14px}
+ .monthly-charts h1{font-size:23px}
+ .monthly-charts .mc-pagehead p{font-size:10px;max-width:175px}
+ .monthly-charts .mc-site{min-width:0;width:160px;max-width:47%}
+ .monthly-charts .mc-site select{font-size:12px;width:100%}
+ .monthly-charts .mc-site small{font-size:9px}
+ .monthly-charts .mc-views-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:10px}
+ .monthly-charts .mc-row-label{grid-column:1;grid-row:1}
+ .monthly-charts .mc-my-views{grid-column:2;grid-row:1;margin:0}
+ .monthly-charts .mc-presets{grid-column:1/-1;grid-row:2;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+ .monthly-charts .mc-presets button{font-size:10px;padding:6px 3px;min-height:35px}
+ .monthly-charts .mc-current-view{grid-column:1/-1;grid-row:3;order:initial;max-width:100%;font-size:9px}
+ .monthly-charts .mc-popover{position:fixed;left:12px;right:12px;top:12dvh;width:auto;max-width:none;max-height:78dvh;z-index:6}
+ .monthly-charts .mc-saved-list{max-height:31dvh}
+ .monthly-charts .mc-save-form input,.monthly-charts .mc-metric-tools input{font-size:16px;min-height:42px}
+ .monthly-charts .mc-save-actions button,.monthly-charts .mc-save-current{min-height:38px}
+ .monthly-charts .mc-view-entry{min-height:59px}
+ .monthly-charts .mc-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;padding:11px 10px}
+ .monthly-charts .mc-date-group{grid-column:1/-1;display:flex;gap:9px;flex-wrap:wrap}
+ .monthly-charts .mc-date-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);width:100%;gap:9px}
+ .monthly-charts .mc-date-fields input{width:100%;font-size:13px;min-height:37px}
+ .monthly-charts .mc-segmented button{font-size:10px;padding:6px 8px;min-height:36px}
+ .monthly-charts .mc-extra-year{font-size:9px;min-height:29px}
+ .monthly-charts .mc-metric-strip{flex-wrap:wrap;padding:0 10px 11px;gap:8px}
+ .monthly-charts .mc-chips{flex-basis:100%;gap:5px}
+ .monthly-charts .mc-chip{min-height:34px;font-size:9px}
+ .monthly-charts .mc-metric-groups{grid-template-columns:minmax(0,1fr);max-height:39dvh;gap:12px}
+ .monthly-charts .mc-metric-option{padding:9px 0}
+ .monthly-charts .mc-range-readout{padding:11px 10px;gap:10px;align-items:flex-start}
+ .monthly-charts .mc-range-readout>span{max-width:95px;font-size:9px}
+ .monthly-charts .mc-interaction-hint{font-size:9px;padding:0 10px 9px}
+ .monthly-charts .mc-plot-heading{padding:10px 10px 0}
+ .monthly-charts .mc-legend{padding:0 10px 10px;gap:6px 12px}
+ .monthly-charts .mc-legend li{font-size:9px}
+ .monthly-charts .mc-legend button{font-size:9px;min-height:34px}
+ .monthly-charts .mc-month-details{left:12px;right:12px;bottom:12px;width:auto;margin:0;padding:10px}
+ .monthly-charts .mc-detail-grid{grid-template-columns:minmax(0,1fr)}
+ .monthly-charts .mc-summary-line{font-size:9px;padding:9px 10px}
+ .monthly-charts .mc-table-scroll{max-height:65dvh}
+}
+@media(max-width:360px){
+ .monthly-charts .mc-pagehead{flex-direction:column}
+ .monthly-charts .mc-site{width:100%;max-width:none}
+ .monthly-charts .mc-presets button{font-size:9px}
+ .monthly-charts .mc-segmented button{padding:6px}
+}
