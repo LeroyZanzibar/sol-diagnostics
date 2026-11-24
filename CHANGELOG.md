@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.11.24.1 — pending publication
+
+- Limit mouse-hover chart popups to selected metric values, units and enabled comparison periods. Hide unrelated values from source-data breakdowns while preserving explicit pinned, keyboard-focus and table source details. No data, calculation or storage changes.
+
 ## 2026.11.23.1 — published November 23, 2026
 
 - Add interactive monthly Charts under Visuals, with inclusive month ranges, line/bar/table views, metric presets and calendar-aligned comparisons against one or two prior years. Read the existing authoritative monthly snapshot; preserve exact values, missing versus zero, partial coverage and reporting-source details without changing formulas or saved inputs.
