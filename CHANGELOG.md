@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.11.25.1 — pending publication
+## 2026.11.25.1 — published November 25, 2026
 
 - Simplify Findings by removing its import shortcut, active-analysis and hidden-count notices, and maintenance panel. Place compact reporting From/Through controls between the site selector and reanalysis with aligned edges and responsive wrapping. Preserve date help, validation/reset, preference retry, bulk reviews and historical guards; Summaries/Timeline controls and maintenance exports/backend remain available.
 - Limit mouse-hover chart popups to selected metric values, units and enabled comparison periods. Hide unrelated values from source-data breakdowns while preserving explicit pinned, keyboard-focus and table source details. No data, calculation or storage changes.
