@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.11.25.3 — publication pending
+
+- Stop automatic Charts polling and background refresh on focus, visibility changes, or saved-preference changes. Charts load on page mount and site changes; explicit error Retry remains available.
+- Preserve chart controls, saved views, source details and all stored data. No backend, schema, dependency or configuration changes.
+
 ## 2026.11.25.2 — published November 25, 2026
 
 - Correct Actual Insolation in monthly data and charts to use uploaded hourly interval energy from the site’s mapped POA series. Sum Wh/m² by local calendar month and divide by 1,000; do not multiply by interval duration or exclude onsite, satellite, blended or generic uploaded readings based on provenance.
