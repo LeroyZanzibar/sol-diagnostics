@@ -16,8 +16,20 @@ function freeze(value) {
 const missingCapacity = {dcKwp: null, unavailableReason: 'DC capacity is unavailable: save a connected module model.'};
 const savedCapacity = {dcKwp: {n: '120', d: '1'}, unavailableReason: null}; // 400 W × 300 / 1000, not 100 kW AC or 150 kW max DC.
 const missingTelemetry = {state: 'missing', sourceRevision: 0, timezone: null, months: {}, candidates: [],
-  selectionRequired: false, selectedChannelId: null, expectedChannelId: null, expectedUnavailableReason: null};
-const emptyConfiguration = () => ({operationsStart: null, degradation: null, irradianceChannelId: null,
+  selectionRequired: false, selectedChannelId: null, expectedChannelId: null, expectedUnavailableReason: null,
+  poa:{state:'missing',selectedSourceId:null,candidates:[],reason:'No authenticated measured POA sensor data is available.'}};
+function checkMissingConfirmedLoss(value) {
+  assert.ok(value, 'Monthly snapshot includes confirmed estimated loss availability');
+  assert.deepEqual(Object.keys(value).sort(), ['analysisRunId', 'months', 'reason', 'state', 'timezone']);
+  assert.equal(value.state, 'missing');
+  assert.equal(value.analysisRunId, null);
+  assert.equal(value.timezone, null);
+  assert.deepEqual(value.months, {}, 'No published analysis must not fabricate zero-loss months');
+  assert.equal(typeof value.reason, 'string');
+  assert.ok(value.reason.length > 0);
+  return detached(value);
+}
+const emptyConfiguration = () => ({operationsStart: null, degradation: null, irradianceChannelId: null, poaSourceId:null,
   baselines: Object.fromEntries(Array.from({length: 12}, (_, i) => [i + 1, {production: null, revenue: null, insolation: null}]))});
 
 // These literals are independent spot checks, not another projection algorithm.
@@ -61,8 +73,8 @@ function checkCalculated(calculated, projections, phase) {
   const hasModel = phase !== 'no-model';
   const hasTelemetry = phase === 'seed' || phase === 'corrected';
   const noCapacity = missingCapacity.unavailableReason;
-  const noInsolation = 'Actual insolation is unavailable: telemetry is missing.';
-  const partialInsolation = 'Actual insolation has partial monthly coverage.';
+  const noInsolation = hasTelemetry ? 'No authenticated measured POA sensor is available. Satellite, GHI and generic imports are not substitutes.' : 'Actual insolation is unavailable: telemetry is missing.';
+  // Generic API imports intentionally have no authenticated physical sensor lineage.
   const partialExpected = 'Hourly Expected Production has partial monthly coverage.';
   // Python fractions.Fraction literals from the original decimal strings:
   // E=123.1234567890123456, R=-12.3450, P=3100.1250*16/31,
@@ -75,17 +87,15 @@ function checkCalculated(calculated, projections, phase) {
     actualSpecificYield: hasModel ? available('6412680041094393', '6250000000000000') : missing(noCapacity),
     specificYieldRatio: hasModel ? available('198793081273926183', '2583437500000000000') : missing(noCapacity),
     budgetedPerformanceRatio: hasModel ? available('8267', '9960') : missing(noCapacity),
-    actualPerformanceRatio: hasTelemetry ? partial('6412680041094393', '3125000000000000', partialInsolation)
-      : missing(hasModel ? noInsolation : `${noCapacity} ${noInsolation}`),
-    performanceRatioRatio: hasTelemetry ? partial('1596757330232503857', '645859375000000000', partialInsolation)
-      : missing(hasModel ? noInsolation : `${noCapacity} ${noInsolation} ${noCapacity}`),
-    insolationRatio: hasTelemetry ? partial('31', '996', partialInsolation) : missing(noInsolation),
+    actualPerformanceRatio: missing(hasModel ? noInsolation : `${noCapacity} ${noInsolation}`),
+    performanceRatioRatio: missing(hasModel ? noInsolation : `${noCapacity} ${noInsolation} ${noCapacity}`),
+    insolationRatio: missing(noInsolation),
     productionProjectionRatio: available('198793081273926183', '2583437500000000000'),
     productionExpectedRatio: hasTelemetry ? partial('6412680041094393', phase === 'corrected' ? '2207031250000000' : '1894531250000000', partialExpected)
       : missing('Hourly Expected Production is unavailable: telemetry is missing.'),
     revenueRatio: available('-25513', '330680'),
-    iapr: hasTelemetry ? partial('1596757330232503857', '645859375000000000', partialInsolation) : missing(noInsolation),
-    iar: hasTelemetry ? partial('-204927', '82670', partialInsolation) : missing(noInsolation),
+    iapr: missing(noInsolation),
+    iar: missing(noInsolation),
   }, `Independent exact first-month calculated contract (${phase})`);
   // Sole off-peak, a tiny component plus unpaid, unpaid-only, zero revenue and
   // missing totals remain distinct; no component may be rounded or zero-filled.
@@ -104,8 +114,8 @@ function checkCalculated(calculated, projections, phase) {
   assert.deepEqual(calculated['2026-05'].revenueRatio, missing('Utility actual revenue is missing.'));
   if (hasTelemetry) {
     assert.deepEqual(calculated['2026-02'].productionExpectedRatio, missing('Hourly Expected Production is missing for this month.'));
-    assert.deepEqual(calculated['2026-03'].insolationRatio, missing('Actual insolation is missing for this month.'));
-    assert.deepEqual(calculated['2026-03'].iar, missing('Actual insolation is missing for this month.'),
+    assert.deepEqual(calculated['2026-03'].insolationRatio, missing(noInsolation));
+    assert.deepEqual(calculated['2026-03'].iar, missing(noInsolation),
       'Zero revenue must not fabricate a zero IAR when its insolation denominator is missing');
   }
 }
@@ -123,14 +133,14 @@ function telemetryFor(dataset, weather, corrected) {
   const metric = value => ({value, coveredMilliseconds: 7200000, partialIntervals: 0,
     unknownQualityIntervals: 0, negativeIntervals: 0, state: 'partial'});
   return {state: 'current', sourceRevision: dataset.revision, revisionId: dataset.revisionId, timezone: 'UTC',
-    selectionKey: 'null', selectedChannelId: weather.id, selectionRequired: false, candidates: [weather],
+    selectionKey: '["measured-poa",1,null]', selectedChannelId: null, selectionRequired: false, candidates: [weather],
+    poa:{state:'missing',selectedSourceId:null,candidates:[],reason:'No authenticated measured POA sensor is available. Satellite, GHI and generic imports are not substitutes.'},
     expectedChannelId: '["@site","Expected Production","forecast"]', expectedUnavailableReason: null,
     months: {'2026-01': {
       expected: metric({n: corrected ? '339' : '291', d: '8'}),
-      insolation: {...metric({n: '1', d: '2'}), source: 'Imported irradiance; satellite/POA provenance unknown',
-        satelliteIntervals: 0, poaIntervals: 0, unknownSourceIntervals: 2},
+      insolation: {...metric(null),state:'missing',coveredMilliseconds:0,source:'Measured POA sensor only',poaIntervals:0,excludedIntervals:2,unavailableIntervals:0,reason:'No authenticated measured POA sensor is available. Satellite, GHI and generic imports are not substitutes.'},
       expectedMilliseconds: 2678400000,
-    }}, calculationVersion: 2};
+    }}, calculationVersion: 3,retryablePoa:false};
 }
 
 /** Read-only verification against a detached, JSON-serializable expectation. */
@@ -154,9 +164,10 @@ export async function runMonthlyPersistenceSmoke({api, request}) {
   const siteId = site.id;
   assert.ok(siteId);
   const post = body => api(endpoint, 'POST', {siteId, ...body});
+  const first = await api(pathFor(siteId));
   const initial = {siteId, revision: 0, configuration: emptyConfiguration(), utility: {}, projections: [], telemetry: missingTelemetry,
-    capacity: missingCapacity, calculated: {}};
-  assert.deepEqual(await api(pathFor(siteId)), initial, 'Monthly smoke must start on a fresh synthetic site');
+    capacity: missingCapacity, calculated: {}, confirmedLoss: checkMissingConfirmedLoss(first.confirmedLoss)};
+  assert.deepEqual(first, initial, 'Monthly smoke must start on a fresh synthetic site');
   const empty = await api(performancePath(siteId));
   assert.equal(empty.dataset.revision, 0);
   assert.equal(empty.dataset.readingCount, 0);
@@ -191,7 +202,7 @@ export async function runMonthlyPersistenceSmoke({api, request}) {
     assert.deepEqual(await api(pathFor(siteId)), afterUtility);
   }
 
-  const configuration = {operationsStart: '2026-01-16', degradation: '0.50', irradianceChannelId: null,
+  const configuration = {operationsStart: '2026-01-16', degradation: '0.50', irradianceChannelId: null, poaSourceId:null,
     baselines: Object.fromEntries(Array.from({length: 12}, (_, i) => [i + 1,
       {production: '3100.1250', revenue: '310.01250', insolation: '31.1250'}]))};
   const preview = await post({action: 'preview', revision: 1, configuration});
@@ -215,7 +226,7 @@ export async function runMonthlyPersistenceSmoke({api, request}) {
   assert.deepEqual(await api(pathFor(siteId)), afterUtility, 'Preview must not save configuration or projections');
   const configured = captureCalculated(
     await post({action: 'configuration', revision: 1, configuration, previewToken: preview.token}),
-    {siteId, revision: 2, configuration, utility, projections, telemetry: missingTelemetry}, 'no-model');
+    {siteId, revision: 2, configuration, utility, projections, telemetry: missingTelemetry, confirmedLoss: initial.confirmedLoss}, 'no-model');
   assert.deepEqual(await api(pathFor(siteId)), configured, 'Explicit save must match approved preview and exact input strings');
 
   const id = suffix => `monthly-${siteId}-${suffix}`;

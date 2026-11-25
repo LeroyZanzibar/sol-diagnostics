@@ -2,7 +2,9 @@
 
 ## 2026.11.24.1 — pending publication
 
+- Simplify Findings by removing its import shortcut, active-analysis and hidden-count notices, and maintenance panel. Place compact reporting From/Through controls between the site selector and reanalysis with aligned edges and responsive wrapping. Preserve date help, validation/reset, preference retry, bulk reviews and historical guards; Summaries/Timeline controls and maintenance exports/backend remain available.
 - Limit mouse-hover chart popups to selected metric values, units and enabled comparison periods. Hide unrelated values from source-data breakdowns while preserving explicit pinned, keyboard-focus and table source details. No data, calculation or storage changes.
+- Add read-only Confirmed estimated loss (kWh) to Monthly comparison, derived from the current published analysis and effective analyst reviews. Allocate counted losses to saved site-local months without counting historical runs or recurring summaries twice. Review/publication changes refresh automatically, including at unchanged monthly-input revisions; missing or unquantifiable losses remain explicit rather than zero. Preserve monthly drafts, exact input precision and saved analysis/review data; no schema migration, import or detector rerun is required.
 
 ## 2026.11.23.1 — published November 23, 2026
 

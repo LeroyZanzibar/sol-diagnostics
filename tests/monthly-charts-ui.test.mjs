@@ -151,7 +151,7 @@ test('explicit pin, keyboard focus and table retain full source details for a se
 test('month details expose source/quality and support focus, arrows, touch pinning and dismissal',async t=>{
  const h=await mount(t,{plotOnly:true},{series:[],type:'line'});const series=h.model.buildChartSeries(snapshot(),{...settings,metrics:['actualInsolation'],comparisonYears:1});h.render({series,type:'line'});await h.flush();
  let hit=nodes(h.tree).find(n=>n.props?.['data-chart-hit']==='0:0');assert.equal(hit.props.tabIndex,0);const dom=[...h.dom.values()].find(n=>n.props?.['data-chart-hit']==='0:0');
- hit.props.onFocus({currentTarget:dom});h.render();assert.match(html(h.tree),/provenance unknown/);assert.match(html(h.tree),/partial/i);assert.match(html(h.tree),/Jan 2025/);
+ hit.props.onFocus({currentTarget:dom});h.render();assert.match(html(h.tree),/Measured POA/);assert.match(html(h.tree),/partial/i);assert.match(html(h.tree),/Jan 2025/);
  hit=nodes(h.tree).find(n=>n.props?.['data-chart-hit']==='0:0');hit.props.onKeyDown({...event(),key:'ArrowRight',currentTarget:dom});h.render();assert.equal(h.document.activeElement.props['data-chart-hit'],'0:1');
  hit=nodes(h.tree).find(n=>n.props?.['data-chart-hit']==='0:0');hit.props.onClick({currentTarget:dom});h.render();assert.ok(button(h.tree,'Dismiss month details'));click(h,'Dismiss month details');assert.equal(nodes(h.tree).some(n=>n.props?.['data-month-details']),false);
 });

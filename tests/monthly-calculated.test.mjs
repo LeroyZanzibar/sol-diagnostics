@@ -1,3 +1,4 @@
+import {selectedPoa} from './monthly-poa-unit-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -14,7 +15,7 @@ const model=(modules=[['400',300]])=>[
 ];
 function inputs(c=oracle.cases[0]){
  const metric=value=>({value,state:'complete',coveredMilliseconds:2678400000,partialIntervals:0,unknownQualityIntervals:0,negativeIntervals:0});
- return {projections:[structuredClone(c.projection)],utility:{[c.month]:structuredClone(c.utility)},capacity:{dcKwp:c.capacity,unavailableReason:null},telemetry:{state:'current',months:{[c.month]:{expected:metric(c.expected),insolation:{...metric(c.insolation),source:'Imported irradiance; satellite/POA provenance unknown'}}}}};
+ return {projections:[structuredClone(c.projection)],utility:{[c.month]:structuredClone(c.utility)},capacity:{dcKwp:c.capacity,unavailableReason:null},telemetry:{poa:selectedPoa(),state:'current',months:{[c.month]:{expected:metric(c.expected),insolation:{...metric(c.insolation),source:'Measured POA sensor only'}}}}};
 }
 const calculate=f=>domain.calculatedRows(f.projections,f.utility,f.telemetry,f.capacity)[f.projections[0].month];
 function freeze(value){if(value&&typeof value==='object'){Object.freeze(value);Object.values(value).forEach(freeze);}return value;}
@@ -90,7 +91,7 @@ test('partial/unknown telemetry propagates only to its dependent metrics; stale 
  f.telemetry.months['2026-01'].expected.state='partial';f.telemetry.months['2026-01'].expected.partialIntervals=2;
  result=calculate(f);assert.equal(result.productionExpectedRatio.state,'partial');assert.match(result.productionExpectedRatio.reason,/Expected Production.*partial/i);
  for(const state of ['refreshing','missing']){f.telemetry.state=state;result=calculate(f);for(const key of telemetryFields)missing(result[key],/telemetry/i);assert.equal(result.actualSpecificYield.state,'available');assert.equal(result.revenueRatio.state,'available');}
- f.telemetry.state='current';f.telemetry.selectionRequired=true;result=calculate(f);for(const key of telemetryFields.filter(k=>k!=='productionExpectedRatio'))missing(result[key],/select.*irradiance/i);
- f.telemetry.selectionRequired=false;f.telemetry.expectedUnavailableReason='Multiple Expected Production channels; no series selected.';missing(calculate(f).productionExpectedRatio,/Multiple Expected Production/);
+ f.telemetry.state='current';f.telemetry.selectionRequired=true;f.telemetry.poa.state='selection-required';result=calculate(f);for(const key of telemetryFields.filter(k=>k!=='productionExpectedRatio'))missing(result[key],/select.*POA/i);
+ f.telemetry.selectionRequired=false;f.telemetry.poa.state='selected';f.telemetry.expectedUnavailableReason='Multiple Expected Production channels; no series selected.';missing(calculate(f).productionExpectedRatio,/Multiple Expected Production/);
  delete f.telemetry.months['2026-01'];for(const key of telemetryFields)missing(calculate(f)[key],/missing|Expected Production/);
 });

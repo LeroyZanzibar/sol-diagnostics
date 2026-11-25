@@ -109,7 +109,7 @@ test('reselecting the current or historical analysis is idempotent and preserves
 test('navigation uses Analysis, Findings and Data management; history management is not in Findings',()=>{
  const h=home(),tree=h.render(),markup=html(tree);
  assert.match(markup,/> Analysis</);assert.match(markup,/Data management/);assert.match(markup,/Manage Analyses/);assert.match(markup,/>Findings</);
- assert.doesNotMatch(markup,/Performance issues|Data uploads|Current performance file/);assert.match(markup,/Active analysis/);assert.match(markup,/Published current analysis/);assert.match(markup,/Data freshness/);
+ assert.doesNotMatch(markup,/Performance issues|Data uploads|Current performance file/);assert.doesNotMatch(markup,/Active analysis|Published current analysis/);assert.match(markup,/Data freshness/);
  const manage=button(tree,'Manage Analyses');manage.props.onClick();assert.equal(h.state.view,'manage-analyses');
 });
 
@@ -153,7 +153,7 @@ test('freshness filters precede totals, hidden and dismissed audits, summary/tim
  }
  const pending=home({freshnessFilter:'current'},'current',false),tree=pending.render();assert.equal(button(tree,'Export XLSX').props.disabled,true);button(tree,'Export XLSX').props.onClick();assert.equal(pending.getBook(),undefined);
  assert.match(html(home({},'older').render()),/Based on older data/);assert.match(html(home({},'unknown').render()),/Unknown data freshness/);
- const historical=home({analysisSelection:{siteId:'site',runId:'old'}});const historicTree=historical.render();assert.match(html(historicTree),/Selected historical snapshot/);button(historicTree,'Manage Analyses').props.onClick();const manager=nodes(historical.render()).find(n=>n.props?.onFindings);assert.equal(manager.props.runId,'old');manager.props.onChange('');assert.equal(historical.state.analysisSelection.runId,'');assert.equal(historical.state.performance,null);
+ const historical=home({analysisSelection:{siteId:'site',runId:'old'}});const historicTree=historical.render();assert.doesNotMatch(html(historicTree),/Selected historical snapshot/);assert.equal(button(historicTree,'Reanalyze current data').props.disabled,true);button(historicTree,'Manage Analyses').props.onClick();const manager=nodes(historical.render()).find(n=>n.props?.onFindings);assert.equal(manager.props.runId,'old');manager.props.onChange('');assert.equal(historical.state.analysisSelection.runId,'');assert.equal(historical.state.performance,null);
 });
 
 test('shared freshness selection resets selected rows and page without rewriting saved review state',()=>{

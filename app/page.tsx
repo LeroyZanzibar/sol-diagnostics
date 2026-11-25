@@ -1384,14 +1384,14 @@ export default function Home() {
   }
 
   const reviewControls=<div className="review-reporting-controls">
-    <div className="active-analysis" role="status"><div><strong>Active analysis: {selectedRunId?'Selected historical snapshot':'Published current analysis'}</strong><p>{analysisRunId||'No saved analysis'}{performance?.import?.timestampStart&&` · ${performance.import.timestampStart} – ${performance.import.timestampEnd||'Unknown'}`}. {selectedRunId?'Viewing a saved snapshot does not change the published current analysis.':''}</p></div><button className="secondary-btn" onClick={()=>goTo('manage-analyses')}>Manage Analyses</button></div>
+    {view!=='issues'&&<div className="active-analysis" role="status"><div><strong>Active analysis: {selectedRunId?'Selected historical snapshot':'Published current analysis'}</strong><p>{analysisRunId||'No saved analysis'}{performance?.import?.timestampStart&&` · ${performance.import.timestampStart} – ${performance.import.timestampEnd||'Unknown'}`}. {selectedRunId?'Viewing a saved snapshot does not change the published current analysis.':''}</p></div><button className="secondary-btn" onClick={()=>goTo('manage-analyses')}>Manage Analyses</button></div>}
     <div className="freshness-controls"><label>Data freshness<select aria-label="Data freshness" value={freshnessFilter} onChange={event=>changeFreshness(event.target.value as DataFreshnessFilter)}>{freshnessOptions.map(option=><option key={option.value} value={option.value}>{option.label}</option>)}</select></label><div role="status"><strong className={`freshness-badge ${freshness.assessment.status}`}>{freshness.loading?'Assessing data freshness…':freshnessLabel(freshness.assessment.status)}</strong><p>Analysis-range assessment: all findings in this run share this status. {freshness.assessment.reasons.join(' ')}{freshness.assessment.comparedRevision!==null&&` Compared with data revision ${freshness.assessment.comparedRevision}.`}{freshness.assessment.assessedAt&&` Assessed ${freshness.assessment.assessedAt}.`}</p>{!freshnessReady&&<p>Waiting for a valid freshness assessment before showing this filtered view or exporting.</p>}</div></div>
     <div className="review-toolbar"><label>Analyst review<select value={reviewFilter} onChange={e=>setReviewFilter(e.target.value)}>{["Exclude dismissed","All findings","Confirmed","Unreviewed","Needs review","Dismissed"].map(v=><option key={v} value={v}>{v==="Exclude dismissed"?"Reported findings (excludes dismissed)":v==="All findings"?"All findings (audit view)":v==="Dismissed"?"Dismissed (audit view)":v}</option>)}</select></label>
       <div className="review-counts">{["Confirmed","Unreviewed","Needs review","Dismissed"].map(status=>{const matched=enabledPeriodIssues.filter(i=>reviewStatus(i)===status);return <span key={status}><strong>{status}: {reportingReady?matched.length:"—"}</strong>{reportingReady?formatKwh(matched.reduce((n,i)=>n+(i.estimatedLossKwh||0),0)):"Loading…"}</span>;})}</div>
       <button className="secondary-btn" onClick={()=>goTo('issue-visibility')}>Issue visibility{hiddenTypeCount?` · ${hiddenTypeCount} hidden ${hiddenTypeCount===1?'type':'types'}`:''}</button>
     </div>
     {reportingReady?<p className="review-loss-treatment">Reporting period, enabled issue types and data freshness filter, before table filters: <strong>{formatKwh(reviewTotals.adjusted)} after review</strong> · {formatKwh(reviewTotals.dismissed)} dismissed · {formatKwh(reviewTotals.detected)} originally detected. Included provisional loss: {formatKwh(reviewTotals.provisional)} (unreviewed or needs review). Resolved issues retain their historical loss.{(reviewFilter==="All findings"||reviewFilter==="Dismissed")&&<strong> Audit view: displayed losses include dismissed findings.</strong>}</p>:<p className="review-loss-treatment" role="status">{!freshnessReady?'Assessing data freshness before showing filtered totals…':!userSettingsReady?'Saved issue visibility preferences must load before findings and exports are available.':reviewError?`Reviews unavailable: ${reviewError}. Review-adjusted totals and exports are unavailable until reviews load.`:"Loading analyst decisions before showing reported losses…"}</p>}
-    {reportingReady&&hiddenTypeCount>0&&<div className="issue-visibility-notice" role="status"><p><strong>{visibilityHidden.count.toLocaleString()} findings hidden · {formatKwh(visibilityHidden.knownLossKwh)} known loss</strong>{visibilityHidden.unknownLossCount>0&&` · ${visibilityHidden.unknownLossCount} with unknown loss`}. Within the reporting period, data freshness and analyst review filters, before table filters. Hidden findings remain in the analysis.</p></div>}
+    {view!=='issues'&&reportingReady&&hiddenTypeCount>0&&<div className="issue-visibility-notice" role="status"><p><strong>{visibilityHidden.count.toLocaleString()} findings hidden · {formatKwh(visibilityHidden.knownLossKwh)} known loss</strong>{visibilityHidden.unknownLossCount>0&&` · ${visibilityHidden.unknownLossCount} with unknown loss`}. Within the reporting period, data freshness and analyst review filters, before table filters. Hidden findings remain in the analysis.</p></div>}
   </div>;
   function selectFindings(ids:string[],checked:boolean){
     if(selectedRunId||!reviewsReady)return;
@@ -1568,7 +1568,7 @@ export default function Home() {
       </aside>
 
       <section className="workspace" inert={isMobile && mobileMenuOpen}>
-        {userSettingsError&&view!=='issue-visibility'&&<div className="issue-visibility-notice" role="alert"><p>Unable to load saved user preferences: {userSettingsError}</p><button className="secondary-btn" onClick={()=>setUserSettingsRevision(value=>value+1)}>Retry loading preferences</button></div>}
+        {userSettingsError&&view!=='issue-visibility'&&<div className={view==='issues'?'preferences-load-error':'issue-visibility-notice'} role="alert"><p>Unable to load saved user preferences: {userSettingsError}</p><button className="secondary-btn" onClick={()=>setUserSettingsRevision(value=>value+1)}>Retry loading preferences</button></div>}
         {view === "map" ? (
           <SiteMap sites={Object.values(configs)} />
         ) : view === "issues" ? (
@@ -1584,7 +1584,7 @@ export default function Home() {
                     : "Complete the array model to capacity-adjust analysis"}
                 </p>
               </div>
-              <div className="top-actions">
+              <div className="top-actions findings-actions">
                 <label className="region-select">
                   <span>ANALYSIS SITE</span>
                   <select
@@ -1598,15 +1598,12 @@ export default function Home() {
                     ))}
                   </select>
                 </label>
-                {(performance?.hasData || performance?.analysisRequired || performance?.publicationSkipped) && <button className="secondary-btn" disabled={Boolean(analysisAction)||analysisInProgress||!!selectedRunId} onClick={() => void reanalyze()}>{performance.hasData ? "Reanalyze current data" : "Run analysis"}</button>}
-                <button className="primary-btn" onClick={() => goTo("uploads")}>
-                  Import performance data <span>↗</span>
-                </button>
+                <ReportingPeriod compact range={reportRange} onChange={setReportRange} timezone={reportTimezone} />
+                {(performance?.hasData || performance?.analysisRequired || performance?.publicationSkipped) && <button className="secondary-btn findings-reanalyze" disabled={Boolean(analysisAction)||analysisInProgress||!!selectedRunId} onClick={() => void reanalyze()}>{performance.hasData ? "Reanalyze current data" : "Run analysis"}</button>}
               </div>
             </header>
             {outageOnlyAnalysis&&(performance?.analysis.thresholdExcludedLossKwh || 0) > 0 && <div className="status-strip analysis-period-note" role="status"><strong>Full saved analysis (all issue types and freshness statuses; context only):</strong> {formatKwh(performance!.analysis.unfilteredTotalLossKwh ?? performance!.analysis.totalLossKwh)}; {formatKwh(performance!.analysis.thresholdExcludedLossKwh!)} excluded by your issue threshold.</div>}
 
-            <ReportingPeriod range={reportRange} onChange={setReportRange} timezone={reportTimezone} />
             {performance?.hasData && !selectedRunId && performance.lastAttempt && ["canceled", "failed", "interrupted"].includes(performance.lastAttempt.status) && <div className="analysis-selection-note" role="status">
               <strong>Latest analysis {performance.lastAttempt.status}</strong>
               <p>The previous published analysis is still shown. Its findings and review history have not been replaced.</p>
@@ -1615,7 +1612,7 @@ export default function Home() {
               {analysisControlError && <p role="alert">{analysisControlError}</p>}
             </div>}
             {reviewControls}
-            <ReviewWorkbench key={`${activeSiteId}:${analysisRunId}`} siteId={activeSiteId} runId={analysisRunId} visible={visibleIssues} originals={issues} reviews={reviews} selected={selectedFindings} onSelect={selectFindings} onClear={()=>setSelectedFindings([])} onUpdated={savedBulkReviews} readOnly={!!selectedRunId||!reviewsReady} maintenance={maintenance}/>
+            <ReviewWorkbench key={`${activeSiteId}:${analysisRunId}`} siteId={activeSiteId} runId={analysisRunId} visible={visibleIssues} originals={issues} reviews={reviews} selected={selectedFindings} onClear={()=>setSelectedFindings([])} onUpdated={savedBulkReviews} readOnly={!!selectedRunId||!reviewsReady}/>
             {(reportRange.from || reportRange.through) && reportIssues.some(issue => issue.reportClipped && issue.estimatedLossKwh === null) && <p role="status">Some overlapping issues lack reliable interval loss evidence. Their loss within this reporting period is shown as Unknown; reanalyze the latest upload to refresh the evidence.</p>}
             <div
               className={`status-strip ${performance?.hasData ? "" : "empty"}`}

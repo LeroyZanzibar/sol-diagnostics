@@ -1,3 +1,4 @@
+import {selectedPoa} from './monthly-poa-unit-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -8,7 +9,7 @@ const oracle=JSON.parse(readFileSync(new URL('./monthly-calculated-oracle.json',
 const labels=['Budgeted specific yield','Actual specific yield','Actual / budgeted specific yield','Budgeted performance ratio','Actual performance ratio','Actual / budgeted performance ratio','Actual / projected insolation','Utility actual production total / projected production','Utility actual production total / expected production','Utility actual revenue / budgeted revenue','IAPR','IAR'];
 function snapshot(c=oracle.cases[0]){
  const metric=value=>({value,state:'complete',coveredMilliseconds:2678400000,partialIntervals:0,unknownQualityIntervals:0,negativeIntervals:0});
- const s={siteId:'review-site',revision:1,configuration:{...emptyConfiguration(),operationsStart:'2026-01-01',degradation:'0'},utility:{[c.month]:c.utility},projections:[c.projection],capacity:{dcKwp:c.capacity,unavailableReason:null},telemetry:{state:'current',sourceRevision:1,timezone:'UTC',selectedChannelId:'selected-irradiance',selectionRequired:false,expectedChannelId:'expected',expectedUnavailableReason:null,candidates:[],months:{[c.month]:{expected:metric(c.expected),insolation:{...metric(c.insolation),source:'Imported irradiance; satellite/POA provenance unknown'}}}}};
+ const s={siteId:'review-site',revision:1,configuration:{...emptyConfiguration(),operationsStart:'2026-01-01',degradation:'0'},utility:{[c.month]:c.utility},projections:[c.projection],capacity:{dcKwp:c.capacity,unavailableReason:null},telemetry:{poa:selectedPoa(),state:'current',sourceRevision:1,timezone:'UTC',selectedChannelId:'selected-irradiance',selectionRequired:false,expectedChannelId:'expected',expectedUnavailableReason:null,candidates:[],months:{[c.month]:{expected:metric(c.expected),insolation:{...metric(c.insolation),source:'Measured POA sensor only'}}}}};
  s.calculated=calculatedRows(s.projections,s.utility,s.telemetry,s.capacity);return s;
 }
 async function rendered(t,s){const h=harness(async()=>Response.json(s));t.after(()=>h.dispose());h.render();await h.flush();h.render();return h;}
@@ -21,7 +22,7 @@ test('real comparison component renders twelve ordered read-only columns, comple
   const headers=nodes(tree).filter(n=>n.type==='th'&&n.props['data-calculated-field']);assert.equal(headers.length,12);
   for(const [i,header] of headers.entries()){assert.equal(header.props.scope,'col');assert.ok(header.props.title.includes(' / '));assert.match(renderToStaticMarkup(header),new RegExp(labels[i]));assert.ok(nodes(header).some(n=>n.props?.tabIndex===0&&n.props['aria-label']?.includes(header.props.title)));}
   assert.ok(!nodes(tree).some(n=>n.type==='input'||n.type==='select'),'comparison is read-only');
-  assert.match(html,/kWh\/kWp/);assert.match(html,/POA/);assert.match(html,/1 kW\/m²/);assert.match(html,/provenance unknown/);assert.match(html,/utility.*total/i);
+  assert.match(html,/kWh\/kWp/);assert.match(html,/POA/);assert.match(html,/1 kW\/m²/);assert.match(html,/Measured POA/);assert.match(html,/utility.*total/i);
   assert.ok(nodes(tree).some(n=>n.props?.className?.includes('comparison-scroll')&&n.props.tabIndex===0));
  }
 });

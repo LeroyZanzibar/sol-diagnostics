@@ -106,8 +106,8 @@ async function fixture(t) {
           ['2026-01-01T13:00:00.000Z', '["@site","Expected Production","forecast"]', 24.25],
         ]);
         assert.deepEqual(rows.filter(row => row.channel.measurement === 'Irradiance').map(row => [row.timestamp, row.channel.id, row.value]), [
-          ['2026-01-01T12:00:00.000Z', expected.monthly.telemetry.selectedChannelId, 500],
-          ['2026-01-01T13:00:00.000Z', expected.monthly.telemetry.selectedChannelId, 0],
+          ['2026-01-01T12:00:00.000Z', expected.monthly.telemetry.candidates[0].id, 500],
+          ['2026-01-01T13:00:00.000Z', expected.monthly.telemetry.candidates[0].id, 0],
         ]);
       }
     } finally { manager.close(); }
@@ -121,7 +121,7 @@ test('native-container monthly smoke scenario: exact inputs, approved projection
   const scenario = await runMonthlyPersistenceSmoke({api: f.api, request: f.request});
   assert.ok(Object.isFrozen(scenario.expected));
   assert.ok(Object.isFrozen(scenario.expected.monthly.calculated));
-  assert.ok(Object.isFrozen(scenario.expected.monthly.calculated['2026-01'].iapr.value));
+  assert.equal(scenario.expected.monthly.calculated['2026-01'].iapr.value,null,'Generic imports cannot supply measured POA');assert.ok(Object.isFrozen(scenario.expected.monthly.calculated['2026-01'].productionExpectedRatio.value));
   const snapshot = join(f.root, 'monthly-expected.json');
   writeFileSync(snapshot, JSON.stringify(scenario.expected));
   const bytes = readFileSync(snapshot, 'utf8');

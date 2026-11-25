@@ -186,7 +186,7 @@ test('partial telemetry retains numeric values, source reasons, coverage, qualit
   row.insolation = {...row.insolation, state: 'partial', coveredMilliseconds: 1339200000,
     partialIntervals: 3, unknownQualityIntervals: 7, negativeIntervals: 2,
     satelliteIntervals: 100, poaIntervals: 40, unknownSourceIntervals: 7,
-    source: 'Satellite-first with selected POA filling; legacy provenance unknown'};
+    source: 'Measured POA sensor; some evidence unavailable'};
   s.calculated = calculatedRows(s.projections, s.utility, s.telemetry, s.capacity);
   for (const id of ['actualInsolation', 'actualPerformanceRatio', 'iapr', 'iar']) {
     const p = first(m, s, id), text = `${p.reason} ${p.details.join(' ')}`;
@@ -194,7 +194,7 @@ test('partial telemetry retains numeric values, source reasons, coverage, qualit
     assert.notEqual(p.plotValue, null, id);
     for (const pattern of [/partial/i, /3/, /7/, /2/, /quality.*unknown|unknown.*quality/i,
       /negative/i, /coverage/i, /1339200000/, /2678400000/, /America\/New_York/,
-      /23/, /site\|selected-irradiance/, /Satellite-first/, /POA/, /provenance unknown/i,
+      /23/, /measured-poa/, /Measured/, /POA/, /evidence unavailable/i,
       /Satellite intervals: 100/, /POA intervals: 40/, /Unknown source intervals: 7/]) assert.match(text, pattern, id);
   }
   const expected = first(m, s, 'expectedProduction');
@@ -231,7 +231,7 @@ test('refresh/error or noncurrent telemetry suppress every dependent value, reta
 test('source selection/missing reasons stay explicit and exact unit groups share or split without normalization', () => {
   const m = loadChartModel(), s = snapshot();
   s.telemetry.expectedUnavailableReason = 'Multiple expected channels; reporting source is ambiguous.';
-  s.telemetry.selectionRequired = true;
+  s.telemetry.selectionRequired = true; s.telemetry.poa.state = 'selection-required';
   assert.equal(first(m, s, 'expectedProduction').plotValue, null);
   assert.match(first(m, s, 'expectedProduction').reason, /ambiguous/);
   assert.equal(first(m, s, 'actualInsolation').plotValue, null);

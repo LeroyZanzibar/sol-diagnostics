@@ -20,14 +20,14 @@ export const chartMetrics: readonly ChartMetricDefinition[] = [
   {id: 'revenue', label: 'Utility revenue', unit: '$', group: 'Revenue', telemetry: false, color: '#32736b', description: 'Saved utility revenue; signed values are retained.'},
   {id: 'invoiceCost', label: 'Invoice energy used cost', unit: '$', group: 'Revenue', telemetry: false, color: '#ab6051', description: 'Saved invoice energy used cost; signed values are retained.'},
   {id: 'budgetRevenue', label: 'Budgeted revenue', unit: '$', group: 'Revenue', telemetry: false, color: '#c18d49', description: 'Saved revenue projection after operations-start proration and annual degradation.'},
-  {id: 'actualInsolation', label: 'Actual insolation', unit: 'kWh/m²', group: 'Insolation', telemetry: true, color: '#ae6e2d', description: 'Monthly insolation from the selected reporting irradiance series, with its retained source and coverage.'},
+  {id: 'actualInsolation', label: 'Actual insolation', unit: 'kWh/m²', group: 'Insolation', telemetry: true, color: '#ae6e2d', description: 'Monthly insolation from the selected measured physical POA sensor only; satellite, GHI and blended values are never substituted.'},
   {id: 'projectedInsolation', label: 'Projected insolation', unit: 'kWh/m²', group: 'Insolation', telemetry: false, color: '#8e8a35', description: 'Saved insolation projection, prorated for operations start but never degraded.'},
   {id: 'budgetedSpecificYield', label: 'Budgeted specific yield', unit: 'kWh/kWp', group: 'Performance', telemetry: false, color: '#526e9c', description: 'Projected production / saved connected module DC kWp.'},
   {id: 'actualSpecificYield', label: 'Actual specific yield', unit: 'kWh/kWp', group: 'Performance', telemetry: false, color: '#8466a8', description: 'Utility actual production total / saved connected module DC kWp.'},
   {id: 'specificYieldRatio', label: 'Actual / budgeted specific yield', unit: '%', group: 'Performance', telemetry: false, color: '#c07084', description: 'Actual specific yield / budgeted specific yield.'},
   {id: 'budgetedPerformanceRatio', label: 'Budgeted performance ratio', unit: '%', group: 'Performance', telemetry: false, color: '#607a45', description: 'Budgeted specific yield / projected insolation × reference irradiance (1 kW/m²). Conventional PR expects matching POA insolation.'},
   {id: 'actualPerformanceRatio', label: 'Actual performance ratio', unit: '%', group: 'Performance', telemetry: true, color: '#3d8c84', description: 'Actual specific yield / actual insolation × reference irradiance (1 kW/m²). Conventional PR expects matching POA insolation.'},
-  {id: 'performanceRatioRatio', label: 'Actual / budgeted performance ratio', unit: '%', group: 'Performance', telemetry: true, color: '#9771b3', description: 'Actual performance ratio / budgeted performance ratio; reporting insolation may have a mixed or unknown POA basis.'},
+  {id: 'performanceRatioRatio', label: 'Actual / budgeted performance ratio', unit: '%', group: 'Performance', telemetry: true, color: '#9771b3', description: 'Actual performance ratio / budgeted performance ratio; actual insolation uses measured POA only.'},
   {id: 'insolationRatio', label: 'Actual / projected insolation', unit: '%', group: 'Performance', telemetry: true, color: '#a59b43', description: 'Actual insolation / projected insolation.'},
   {id: 'productionProjectionRatio', label: 'Utility actual production total / projected production', unit: '%', group: 'Performance', telemetry: false, color: '#a45b83', description: 'Utility actual production total / projected production.'},
   {id: 'productionExpectedRatio', label: 'Utility actual production total / expected production', unit: '%', group: 'Performance', telemetry: true, color: '#587cb5', description: 'Utility actual production total / imported hourly Expected Production monthly total.'},
@@ -167,7 +167,7 @@ const projectionFields = {projectedProduction: 'production', budgetRevenue: 'rev
 
 function telemetryBlock(snapshot: MonthlySnapshot, kind: TelemetryKind): string | null {
   if (kind === 'expected') return snapshot.telemetry.expectedUnavailableReason || null;
-  return snapshot.telemetry.selectionRequired ? 'Select an available reporting irradiance channel for Actual insolation.' : null;
+  return snapshot.telemetry.poa?.state === 'selected' ? null : snapshot.telemetry.poa?.reason || 'Select an available measured POA sensor for Actual insolation.';
 }
 function staleReason(snapshot: MonthlySnapshot, read: ChartReadState): string | null {
   if (read.error) return `Telemetry freshness is unavailable: ${read.error}`;
@@ -180,7 +180,7 @@ function telemetryDetails(snapshot: MonthlySnapshot, month: string, kind: Teleme
   const details = [
     `Telemetry state: ${t.state}; source revision: ${t.sourceRevision}.`,
     `Reporting timezone: ${t.timezone || 'unknown (not yet pinned)'}.`,
-    `${kind === 'expected' ? 'Expected Production' : 'Irradiance'} channel: ${(kind === 'expected' ? t.expectedChannelId : t.selectedChannelId) || 'unavailable'}.`,
+    kind === 'expected' ? `Expected Production channel: ${t.expectedChannelId || 'unavailable'}.` : `Measured POA sensor: ${t.poa?.selectedSourceId || 'unavailable'}.`,
   ];
   if (value) {
     details.push(`Coverage: ${value.coveredMilliseconds} / ${row.expectedMilliseconds} milliseconds (${value.state}).`,
@@ -191,8 +191,9 @@ function telemetryDetails(snapshot: MonthlySnapshot, month: string, kind: Teleme
     }
   }
   if (value?.source) details.push(value.source);
-  else if (kind === 'insolation') details.push('Imported irradiance; satellite/POA provenance unknown.');
-  if (kind === 'insolation') details.push('Reporting insolation may have a mixed or unknown POA basis; conventional PR expects matching POA insolation.');
+  else if (kind === 'insolation') details.push('Measured POA only; no verified sensor readings are available.');
+  if (value?.reason) details.push(value.reason);
+  if (kind === 'insolation') details.push('Actual insolation uses measured POA only; conventional PR expects matching projected POA insolation.');
   else details.push('Imported Expected Production monthly total; not a budget projection or a newly calculated weather adjustment.');
   const blocked = telemetryBlock(snapshot, kind);
   if (blocked) details.push(blocked);
@@ -249,7 +250,7 @@ function chartPoint(snapshot: MonthlySnapshot, metric: ChartMetricDefinition, an
     const value = snapshot.telemetry.months[sourceMonth]?.[dependencies.telemetry];
     raw = value?.value ?? null;
     state = value?.state === 'complete' ? 'available' : value?.state ?? 'missing';
-    if (state === 'partial') reason = `${metric.label} has partial monthly coverage; numeric totals remain partial.`;
+    reason = value?.reason ?? (state === 'partial' ? `${metric.label} has partial monthly coverage; numeric totals remain partial.` : null);
   }
   if (raw === '') raw = null;
   if (raw === null) {

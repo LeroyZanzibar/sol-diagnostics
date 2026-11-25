@@ -1,9 +1,10 @@
 import {createHash} from 'node:crypto';
 import {setImmediate as yieldNow} from 'node:timers/promises';
 import {MonthlyStore} from './monthly-store.mjs';
+import {MeasuredPoaReader} from './monthly-poa.mjs';
 import {fraction,add,multiply,projectionRows,calculatedRows,MonthlyError} from '../app/monthly-domain.mjs';
 
-const VERSION=2,HOUR=3600000;
+const VERSION=3,HOUR=3600000;
 const isExpected=channel=>channel.equipmentId==='@site'&&channel.measurement==='Expected Production'&&channel.unit==='kWh';
 const IRRADIANCE=new Set(['Irradiance','POA irradiance','GHI irradiance']);
 const formatters=new Map();
@@ -73,7 +74,7 @@ class QualityReader {
 
 export class MonthlyService {
   constructor({database,bucket,performance}){Object.assign(this,{database,bucket,performance});this.inputs=new MonthlyStore(database);this.inflight=new Map();this.stopped=false;}
-  selectionKey(configuration){return JSON.stringify(configuration.irradianceChannelId);}
+  selectionKey(configuration){return JSON.stringify(['measured-poa',1,configuration.poaSourceId??null]);}
   async calculate(siteId,configuration,dataset){
     const store=this.performance.site(siteId),revision=dataset.revision,selectionKey=this.selectionKey(configuration),channels=new Map(),expectedChannels=new Map();
     const scope={start:dataset.timestampStart,end:dataset.timestampEnd,measurements:['Expected Production',...IRRADIANCE]};
@@ -85,38 +86,72 @@ export class MonthlyService {
     // Competing series have no approved selection policy: never guess or sum.
     const expectedChannelId=expectedChannels.size===1?expectedChannels.keys().next().value:null;
     const expectedUnavailableReason=expectedChannels.size>1?'Hourly Expected Production is unavailable: multiple site-level Expected Production channels are imported. No series is selected or combined. Insolation and manual monthly data are unaffected.':null;
-    const candidates=[...channels.values()].sort((a,b)=>a.id.localeCompare(b.id)),selected=configuration.irradianceChannelId??(candidates.length===1?candidates[0].id:null);
-    const selectionRequired=candidates.length>1&&!configuration.irradianceChannelId||!!selected&&!channels.has(selected);
-    const months={},bounds=new Map(),quality=new QualityReader(this.database,this.bucket,siteId);let count=0;
+    const candidates=[...channels.values()].sort((a,b)=>a.id.localeCompare(b.id));
+    const reader=new MeasuredPoaReader(this.database,this.bucket,siteId),sensors=new Map();let count=0;
+    // Discover from effective owners only. Two streaming passes bound memory and
+    // resolve selection before integrating; neither scans superseded revisions.
     for(const row of store.reportingRows(revision,scope)){
       if(++count%1000===0)await yieldNow();
-      const kind=row.channel.id===expectedChannelId?'expected':row.channel.id===selected&&!selectionRequired?'insolation':null;
-      if(!kind)continue;
-      const start=Date.parse(row.timestamp),end=start+dataset.intervalMinutes*60000;
-      const valid=typeof row.value==='number'&&Number.isFinite(row.value),q=valid?await quality.inspect(row):null;
+      const evidence=await reader.inspect(row);
+      for(const source of evidence.candidates)if(!sensors.has(source.id))sensors.set(source.id,source);
+    }
+    const sources=[...sensors.values()].sort((a,b)=>a.id.localeCompare(b.id));
+    const selected=configuration.poaSourceId??(sources.length===1?sources[0].id:null);
+    const selectionRequired=!!configuration.poaSourceId&&!sensors.has(configuration.poaSourceId)||!configuration.poaSourceId&&sources.length>1;
+    const poa={state:selectionRequired?'selection-required':selected?'selected':reader.retryable?'unavailable':'missing',selectedSourceId:selected,candidates:sources,reason:selectionRequired?'Select an available measured POA sensor; multiple sensors are never combined.':selected?null:reader.retryable?'Measured POA evidence is unavailable or inconsistent; a later read will retry.':'No authenticated measured POA sensor is available. Satellite, GHI and generic imports are not substitutes.'};
+    const months={},bounds=new Map(),quality=new QualityReader(this.database,this.bucket,siteId);
+    function integrate(timestamp,kind,value,q){
+      const start=Date.parse(timestamp),end=start+dataset.intervalMinutes*60000;
       for(let t=start;t<end;){
         const month=localMonth(t,dataset.timezone);if(!bounds.has(month))bounds.set(month,monthBounds(month,dataset.timezone));const b=bounds.get(month),to=Math.min(end,b.end),duration=to-t;
         if(duration<=0)throw Error('Invalid reporting interval');
-        const target=months[month]??={expected:emptyMetric(),insolation:{...emptyMetric(),source:UNKNOWN_SOURCE,satelliteIntervals:0,poaIntervals:0,unknownSourceIntervals:0},expectedMilliseconds:b.end-b.start};
-        const metric=target[kind];
-        if(valid){
-          // For an interval crossing a month boundary, allocate energy uniformly
-          // by elapsed overlap. Irradiance integrates only that covered overlap.
-          const value=multiply(numericFraction(row.value),kind==='expected'?{n:String(duration),d:String(end-start)}:{n:String(duration),d:String(HOUR*1000)});
-          metric.value=metric.value===null?value:add(metric.value,value);
-          metric.coveredMilliseconds+=duration*q.coverage;
-          if(q.unknown)metric.unknownQualityIntervals++;else if(q.coverage<1)metric.partialIntervals++;
-          if(row.value<0)metric.negativeIntervals++;
-          if(kind==='insolation'){if(q.chosen==='satellite')metric.satelliteIntervals++;else if(q.chosen==='poa')metric.poaIntervals++;else metric.unknownSourceIntervals++;}
+        const target=months[month]??={expected:emptyMetric(),insolation:{...emptyMetric(),source:'Measured POA sensor only',poaIntervals:0,excludedIntervals:0,unavailableIntervals:0,reason:null},expectedMilliseconds:b.end-b.start},metric=target[kind];
+        if(value!==null){
+          const part=multiply(numericFraction(value),kind==='expected'?{n:String(duration),d:String(end-start)}:{n:String(duration),d:String(HOUR*1000)});
+          metric.value=metric.value===null?part:add(metric.value,part);metric.coveredMilliseconds+=duration*q.coverage;
+          if(value<0)metric.negativeIntervals++;
+          if(kind==='insolation')metric.poaIntervals++;
+        }
+        if(q.unknown)metric.unknownQualityIntervals++;else if(q.coverage<1&&value!==null)metric.partialIntervals++;
+        if(kind==='insolation'){
+          if(value===null)metric.excludedIntervals++;
+          if(q.unavailable)metric.unavailableIntervals++;
+          if(q.reason&&(q.unavailable||!metric.unavailableIntervals))metric.reason=q.reason;
         }
         t=to;
       }
     }
-    for(const m of Object.values(months))for(const kind of ['expected','insolation']){
-      const x=m[kind];x.state=x.value===null?'missing':x.coveredMilliseconds>=m.expectedMilliseconds&&!x.unknownQualityIntervals&&!x.partialIntervals?'complete':'partial';
-      if(kind==='insolation')x.source=x.unknownSourceIntervals?UNKNOWN_SOURCE:x.satelliteIntervals+x.poaIntervals?'Satellite-first with selected POA gap filling':UNKNOWN_SOURCE;
+    // At most one timestamp's carriers are buffered. Agreeing measured values
+    // count once; contradictory authenticated values exclude that interval.
+    let timestamp=null,pending=[];
+    const flush=()=>{
+      if(timestamp===null)return;
+      const matching=pending.filter(e=>e.sourceId===selected&&e.value!==null),values=new Set(matching.map(e=>e.value));
+      const conflict=values.size>1,unknown=pending.some(e=>e.unavailable),allowed=poa.state==='selected';
+      const value=allowed&&!conflict&&values.size===1?values.values().next().value:null;
+      integrate(timestamp,'insolation',value,{coverage:value===null?0:1,unknown,unavailable:conflict||unknown,reason:!allowed?poa.reason:conflict?'Conflicting measured POA readings for the same sensor and interval are unavailable.':unknown?'Some measured POA evidence is unavailable or inconsistent; excluded intervals will be retried.':value===null?'No verified reading from the selected measured POA sensor for this interval.':null});
+      pending=[];
+    };
+    for(const row of store.reportingRows(revision,scope)){
+      if(++count%1000===0)await yieldNow();
+      if(row.channel.id===expectedChannelId){
+        const valid=typeof row.value==='number'&&Number.isFinite(row.value),q=valid?await quality.inspect(row):{coverage:0};
+        integrate(row.timestamp,'expected',valid?row.value:null,q);
+      }
+      if(!IRRADIANCE.has(row.channel.measurement))continue;
+      if(timestamp!==row.timestamp){flush();timestamp=row.timestamp;}
+      pending.push(await reader.inspect(row));
     }
-    return {state:'current',sourceRevision:revision,revisionId:dataset.revisionId,timezone:dataset.timezone,selectionKey,selectedChannelId:selected,selectionRequired,candidates,expectedChannelId,expectedUnavailableReason,months,calculationVersion:VERSION};
+    flush();
+    for(const m of Object.values(months))for(const kind of ['expected','insolation']){
+      const x=m[kind];x.state=x.value===null?'missing':x.coveredMilliseconds>=m.expectedMilliseconds&&!x.unknownQualityIntervals&&!x.partialIntervals&&!x.unavailableIntervals?'complete':'partial';
+      if(kind==='insolation'){
+        const sensor=sensors.get(selected);x.source=sensor?`Measured POA sensor: ${sensor.name} (${sensor.systemKey} / ${sensor.deviceId} / SRAD)`:'Measured POA sensor only';
+        if(x.state==='missing')x.reason??=poa.reason||'No verified measured POA readings for this month.';
+        else if(x.state==='partial')x.reason=`Measured POA subtotal has partial monthly coverage.${x.reason?' '+x.reason:''}`;
+      }
+    }
+    return {state:'current',sourceRevision:revision,revisionId:dataset.revisionId,timezone:dataset.timezone,selectionKey,selectedChannelId:null,selectionRequired,candidates,poa,expectedChannelId,expectedUnavailableReason,months,calculationVersion:VERSION,retryablePoa:reader.retryable};
   }
   async refresh(siteId){
     if(this.inflight.has(siteId))return this.inflight.get(siteId);
@@ -124,10 +159,10 @@ export class MonthlyService {
   }
   async refreshOnce(siteId){
     const config=this.inputs.read(siteId).configuration;
-    if(!this.performance.hasData(siteId))return {state:'missing',sourceRevision:0,timezone:null,months:{},candidates:[],selectionRequired:false,selectedChannelId:null,expectedChannelId:null,expectedUnavailableReason:null};
+    if(!this.performance.hasData(siteId))return {state:'missing',sourceRevision:0,timezone:null,months:{},candidates:[],poa:{state:config.poaSourceId?'selection-required':'missing',selectedSourceId:config.poaSourceId??null,candidates:[],reason:config.poaSourceId?'The saved measured POA sensor is unavailable. Select an available sensor.':'No authenticated measured POA sensor data is available.'},selectionRequired:!!config.poaSourceId,selectedChannelId:null,expectedChannelId:null,expectedUnavailableReason:null};
     const dataset=this.performance.site(siteId).describe(),key=this.selectionKey(config);
     const cached=await this.database.prepare('SELECT * FROM monthly_rollups WHERE site_id=?').bind(siteId).first();
-    if(cached?.source_revision===dataset.revision&&cached.selection_key===key&&cached.calculation_version===VERSION)return JSON.parse(cached.payload_json);
+    if(cached?.source_revision===dataset.revision&&cached.selection_key===key&&cached.calculation_version===VERSION){const saved=JSON.parse(cached.payload_json);if(saved.poa&&!saved.retryablePoa)return saved;}
     const payload=await this.calculate(siteId,config,dataset);
     // Shared settings and canonical revisions have separate commit boundaries.
     // Never publish an old generation over corrected inputs; a missed wake is
@@ -149,8 +184,8 @@ export class MonthlyService {
     return {...current,projections,telemetry,calculated:calculatedRows(projections,current.utility,telemetry,current.capacity)};
   }
   async validateSelection(siteId,configuration){
-    if(configuration.irradianceChannelId===null)return;
-    const view=await this.read(siteId);if(!view.telemetry.candidates.some(c=>c.id===configuration.irradianceChannelId))throw new MonthlyError('The selected reporting channel is not available. Reload channels.',409,'reporting-source-missing');
+    if(configuration.poaSourceId===null||configuration.poaSourceId===undefined)return;
+    const view=await this.read(siteId);if(!view.telemetry.poa.candidates.some(c=>c.id===configuration.poaSourceId))throw new MonthlyError('The selected measured POA sensor is not available for this site. Reload sensors.',409,'reporting-source-missing');
   }
   start(){this.stopped=false;const tick=()=>{if(!this.sweeping&&!this.stopped)this.sweeping=this.sweep().catch(error=>console.error('Monthly refresh:',error.message)).finally(()=>{this.sweeping=null;});};this.timer=setInterval(tick,15000);this.timer.unref();tick();}
   async sweep(){const sites=await this.database.prepare('SELECT id FROM site_settings ORDER BY id').all();for(const {id} of sites.results){if(this.stopped)return;if(this.performance.hasData(id))await this.refresh(id);}}
