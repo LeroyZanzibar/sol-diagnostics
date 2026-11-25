@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.11.25.2 — pending publication
+
+- Correct Actual Insolation in monthly data and charts to use uploaded hourly interval energy from the site’s mapped POA series. Sum Wh/m² by local calendar month and divide by 1,000; do not multiply by interval duration or exclude onsite, satellite, blended or generic uploaded readings based on provenance.
+- Resolve historical irradiance-name aliases on the same equipment without double-counting; preserve explicit series selection, missing/zero distinctions and partial coverage. Refresh prior derived rollups without changing canonical readings, utility inputs, analyses or reviews.
+
 ## 2026.11.25.1 — published November 25, 2026
 
 - Simplify Findings by removing its import shortcut, active-analysis and hidden-count notices, and maintenance panel. Place compact reporting From/Through controls between the site selector and reanalysis with aligned edges and responsive wrapping. Preserve date help, validation/reset, preference retry, bulk reviews and historical guards; Summaries/Timeline controls and maintenance exports/backend remain available.
