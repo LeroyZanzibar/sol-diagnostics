@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.11.25.3 — publication pending
+## 2026.11.25.3 — published November 25, 2026
 
 - Stop automatic Charts polling and background refresh on focus, visibility changes, or saved-preference changes. Charts load on page mount and site changes; explicit error Retry remains available.
 - Preserve chart controls, saved views, source details and all stored data. No backend, schema, dependency or configuration changes.
