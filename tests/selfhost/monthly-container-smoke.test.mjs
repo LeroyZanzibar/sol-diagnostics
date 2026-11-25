@@ -121,7 +121,7 @@ test('native-container monthly smoke scenario: exact inputs, approved projection
   const scenario = await runMonthlyPersistenceSmoke({api: f.api, request: f.request});
   assert.ok(Object.isFrozen(scenario.expected));
   assert.ok(Object.isFrozen(scenario.expected.monthly.calculated));
-  assert.equal(scenario.expected.monthly.calculated['2026-01'].iapr.value,null,'Generic imports cannot supply measured POA');assert.ok(Object.isFrozen(scenario.expected.monthly.calculated['2026-01'].productionExpectedRatio.value));
+  assert.deepEqual(scenario.expected.monthly.calculated['2026-01'].iapr.value,{n:'1596757330232503857',d:'645859375000000000'},'Generic uploaded intervals supply Actual insolation');assert.ok(Object.isFrozen(scenario.expected.monthly.calculated['2026-01'].productionExpectedRatio.value));
   const snapshot = join(f.root, 'monthly-expected.json');
   writeFileSync(snapshot, JSON.stringify(scenario.expected));
   const bytes = readFileSync(snapshot, 'utf8');

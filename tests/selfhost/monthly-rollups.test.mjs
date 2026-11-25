@@ -22,7 +22,7 @@ test('real immutable imports → monthly refresh, historical correction, owner, 
  assert.equal((monthBounds('2024-11','America/New_York').end-monthBounds('2024-11','America/New_York').start)/3600000,721);
  const readings=[];for(let t=bounds.start;t<bounds.end;t+=3600000)for(const c of [expected,irradiance])readings.push({timestamp:new Date(t).toISOString(),channel:c,value:c===expected?12.25:500});
  const seed=await seedMeasuredPoa({database:db,bucket:monthly.bucket,performance:manager,root,timezone:'America/New_York',samples:readings.filter(r=>r.channel===irradiance).map(r=>({timestamp:r.timestamp,poa:500,satellite:900,expected:12.25}))});let result=await monthly.read('site');let march=result.telemetry.months['2024-03'];
- assert.equal(result.telemetry.sourceRevision,1);assert.equal(formatValue(march.expected.value,2),'9101.75');assert.equal(formatValue(march.insolation.value,2),'371.50');assert.equal(march.expected.state,'complete');assert.match(march.insolation.source,/Measured POA/);assert.equal(march.insolation.state,'complete');
+ assert.equal(result.telemetry.sourceRevision,1);assert.equal(formatValue(march.expected.value,2),'9101.75');assert.equal(formatValue(march.insolation.value,2),'668.70');assert.equal(march.expected.state,'complete');assert.match(march.insolation.source,/Uploaded POA/);assert.equal(march.insolation.state,'complete');
  const timestamp=readings[0].timestamp;await seedMeasuredPoa({database:db,bucket:monthly.bucket,performance:manager,root,timezone:'America/New_York',samples:[{timestamp,poa:0,satellite:0,expected:0}]});
  result=await monthly.read('site');assert.equal(result.telemetry.sourceRevision,2);assert.equal(formatValue(result.telemetry.months['2024-03'].expected.value,2),'9089.50');
  await commit(store,[{timestamp,channel:expected,value:null}]);assert.equal([...store.reportingRows(3)].find(r=>r.timestamp===timestamp&&r.channel.id===expected.id).owner.revision,2);
@@ -30,11 +30,11 @@ test('real immutable imports → monthly refresh, historical correction, owner, 
  result=await monthly.read('site');assert.equal(result.telemetry.sourceRevision,3);assert.equal(result.telemetry.state,'current');
  assert.equal((await monthly.read('other')).telemetry.state,'missing');
  store=manager.site('site');const second=channel('weather2','POA irradiance','W/m²');await commit(store,[{timestamp,channel:second,value:123}]);
- result=await monthly.read('site');assert.equal(result.telemetry.selectionRequired,false,'Generic POA labels are not sensor candidates');
+ result=await monthly.read('site');assert.equal(result.telemetry.selectionRequired,true,'Different mapped equipment requires explicit selection');
  await seedMeasuredPoa({database:db,bucket:monthly.bucket,performance:manager,root,timezone:'America/New_York',equipmentId:'weather2',deviceId:'302',samples:[{timestamp,poa:123,satellite:900,expected:null}]});
  result=await monthly.read('site');assert.equal(result.telemetry.selectionRequired,true);assert.equal(result.telemetry.months['2024-03'].insolation.value,null);
  const config={...result.configuration,irradianceChannelId:irradiance.id,poaSourceId:seed.sourceId};const p=monthly.inputs.preview('site',result.revision,config);monthly.inputs.saveConfiguration('site',result.revision,config,p.token);
- result=await monthly.read('site');assert.equal(result.telemetry.selectionRequired,false);assert.equal(formatValue(result.telemetry.months['2024-03'].insolation.value,2),'371.00');
+ result=await monthly.read('site');assert.equal(result.telemetry.selectionRequired,false);assert.equal(formatValue(result.telemetry.months['2024-03'].insolation.value,2),'667.80');
  assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM monthly_utility').get().n,0);assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM performance_summaries').get().n,0);
  await monthly.stop();manager.close();db.close();
 });

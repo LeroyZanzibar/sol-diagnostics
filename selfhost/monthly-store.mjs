@@ -32,7 +32,7 @@ export class MonthlyStore {
     const months=[...new Set([...before.keys(),...after.keys()])].sort();
     const impact=months.filter(month=>JSON.stringify(before.get(month))!==JSON.stringify(after.get(month))).map(month=>({month,before:before.get(month)??null,after:after.get(month)??null}));
     const displayed=new Set(horizon(configuration.operationsStart));
-    return {siteId,revision,configuration,token:this.token(siteId,revision,configuration),impact,retainedOutsideWindow:Object.keys(current.utility).filter(month=>!displayed.has(month)),sourceChanged:current.configuration.poaSourceId!==configuration.poaSourceId};
+    return {siteId,revision,configuration,token:this.token(siteId,revision,configuration),impact,retainedOutsideWindow:Object.keys(current.utility).filter(month=>!displayed.has(month)),sourceChanged:current.configuration.irradianceChannelId!==configuration.irradianceChannelId};
   }
   saveConfiguration(siteId,revision,input,token){
     const configuration=validateConfiguration(input);

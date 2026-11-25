@@ -269,7 +269,7 @@ export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
     </div>
     {snapshot && <details className="mc-source-notes"><summary>Monthly sources & calculation notes</summary>
       <p>Expected Production is the monthly total of imported hourly Expected Production, not projected production. Partial totals remain partial; missing values are not zero.</p>
-      <p>Actual insolation uses the selected measured physical POA sensor only. Satellite, GHI and blended values are never substituted. Missing readings stay missing; numeric subtotals remain partial. Conventional performance ratio expects matching projected POA insolation.</p>
+      <p>Actual insolation sums the selected uploaded POA interval energy / 1000 by local month, regardless of source labels. Missing readings stay missing; numeric subtotals remain partial. Conventional performance ratio expects matching projected POA insolation.</p>
       <p>Specific yield and performance ratio use saved connected module DC capacity, not AC limits or losses. {snapshot.capacity.unavailableReason || 'Capacity-dependent metrics use the saved model.'}</p>
       <p>Reporting timezone: {snapshot.telemetry.timezone || 'not yet pinned (UTC used for current-year shortcuts)'}. Telemetry source revision: {snapshot.telemetry.sourceRevision}. Status: {data.error ? 'freshness unavailable' : data.refreshing ? 'refreshing' : snapshot.telemetry.state}.</p>
       {snapshot.telemetry.expectedUnavailableReason && <p>{snapshot.telemetry.expectedUnavailableReason}</p>}

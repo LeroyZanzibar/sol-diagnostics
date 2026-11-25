@@ -14,13 +14,13 @@ import {emptyConfiguration} from '../../app/monthly-domain.mjs';
 import {home,harness,nodes,html,button,loadSource,React,periods,finding,performance as homePerformance} from '../outage-only-ui-harness.mjs';
 import {harness as chartHarness,nodes as chartNodes,html as chartHtml} from '../monthly-charts-ui-fixture.mjs';
 
-// Independent exact expectations: hourly W/m² / 1000; site-local January
+// Independent exact expectations: interval Wh/m² / 1000; site-local January
 // loss = 123.25 + 10.25, February = counted 30.25 (not raw 100.25).
 const samples=[
- {timestamp:'2026-01-15T17:00:00.000Z',poa:800,satellite:900,expected:12.25},
- {timestamp:'2026-01-20T17:00:00.000Z',poa:0,satellite:750,expected:0},
- {timestamp:'2026-01-31T23:00:00.000Z',poa:-25,satellite:650,expected:6},
- {timestamp:'2026-02-07T17:00:00.000Z',poa:200,satellite:800,expected:8.5},
+ {timestamp:'2026-01-15T17:00:00.000Z',poa:800,satellite:800,expected:12.25},
+ {timestamp:'2026-01-20T17:00:00.000Z',poa:0,satellite:0,expected:0},
+ {timestamp:'2026-01-31T23:00:00.000Z',poa:-25,satellite:-25,expected:6},
+ {timestamp:'2026-02-07T17:00:00.000Z',poa:200,satellite:200,expected:8.5},
 ];
 const expected={
  months:{'2026-01':{insolation:{n:'31',d:'40'},expected:{n:'73',d:'4'}},'2026-02':{insolation:{n:'1',d:'5'},expected:{n:'17',d:'2'}}},
@@ -56,7 +56,7 @@ test('shared Home retains Findings controls and Visuals → Charts navigation in
  assert.deepEqual(plain(h.state.reportRange),{from:'2026-01-01',through:'2026-02-28'});
 });
 
-test('Findings bulk handler updates current monthly loss without changing measured POA, chart inputs or retained history',{timeout:120000},async t=>{
+test('Findings bulk handler updates current monthly loss without changing uploaded POA, chart inputs or retained history',{timeout:120000},async t=>{
  const out=process.env.FOUR_UPDATE_EVIDENCE;
  if(out)mkdirSync(out,{recursive:true});
  const f=await monthlyFixture(t,out?{directory:mkdtempSync(join(out,'composed-data-'))}:{});
@@ -69,15 +69,15 @@ test('Findings bulk handler updates current monthly loss without changing measur
  }finally{performance.close();database.close();}
  const published=await seedMonthlyLossRun(f);await seedMonthlyLossRun(f,{runId:'four-update-history-not-published',publish:false});await f.start();
  const get=()=>lossRequest(f,`/api/monthly-data?siteId=${encodeURIComponent(f.siteId)}`),post=body=>lossRequest(f,'/api/monthly-data',{body:{siteId:f.siteId,...body}});
- const initial=await get();assert.equal(initial.telemetry.poa.state,'selection-required');assert.equal(initial.telemetry.months['2026-01'].insolation.value,null);
- const configuration={...emptyConfiguration(),operationsStart:'2026-01-01',degradation:'0',irradianceChannelId:' legacy-id retained exactly ',poaSourceId:sourceId};configuration.baselines[1]={production:'400',revenue:'25',insolation:'2'};
+ const initial=await get();assert.equal(initial.telemetry.poa.state,'selected');assert.deepEqual(initial.telemetry.months['2026-01'].insolation.value,expected.months['2026-01'].insolation);
+ const configuration={...emptyConfiguration(),operationsStart:'2026-01-01',degradation:'0',irradianceChannelId:initial.telemetry.selectedChannelId,poaSourceId:sourceId};configuration.baselines[1]={production:'400',revenue:'25',insolation:'2'};
  const preview=await post({action:'preview',revision:initial.revision,configuration});assert.equal(preview.sourceChanged,true);assert.deepEqual(await get(),initial);
  const saved=await post({action:'configuration',revision:initial.revision,configuration,previewToken:preview.token});assert.deepEqual(await get(),saved);
  const utility={onPeak:'100.125000',offPeak:'200.375000',unpaidEnergy:'0.5',revenue:'-12.500000',energyUsed:'0',invoiceCost:'-0.00000000000000001'};
  const values=await post({action:'utility',revision:saved.revision,rows:[{month:'2026-01',...utility}]});assert.deepEqual(await get(),values);assert.deepEqual(values.utility['2026-01'],utility);
  for(const [month,want] of Object.entries(expected.months)){
   assert.deepEqual(values.telemetry.months[month].insolation.value,want.insolation);assert.deepEqual(values.telemetry.months[month].expected.value,want.expected);
-  assert.match(values.telemetry.months[month].insolation.source,/Measured POA sensor: POA South/);assert.equal(values.telemetry.months[month].insolation.state,'partial');
+  assert.match(values.telemetry.months[month].insolation.source,/Uploaded POA interval energy/);assert.equal(values.telemetry.months[month].insolation.state,'partial');
  }
  for(const [field,want] of Object.entries(expected.calculated))assert.deepEqual(values.calculated['2026-01'][field].value,want,field);
  assert.equal(values.telemetry.months['2026-01'].insolation.negativeIntervals,1);assert.equal(values.telemetry.months['2026-01'].insolation.coveredMilliseconds,10800000);
@@ -111,10 +111,10 @@ test('Findings bulk handler updates current monthly loss without changing measur
  const protectedBefore=retained(f);assert.deepEqual(await get(),confirmed);assert.deepEqual(retained(f),protectedBefore);
  await saveLossReview(f,'monthly-current','january','Dismissed');const dismissed=await get();assert.deepEqual(dismissed.confirmedLoss.months['2026-01'].value,{n:'41',d:'4'});assert.deepEqual(noLoss(dismissed),numericControl);
  await saveLossReview(f,'monthly-current','january','Confirmed');assert.deepEqual((await get()).confirmedLoss,confirmed.confirmedLoss);
- const north=confirmed.telemetry.poa.candidates.find(s=>s.deviceId==='302'),next={...configuration,poaSourceId:north.id};
+ const next={...configuration,irradianceChannelId:null};
  const nextPreview=await post({action:'preview',revision:confirmed.revision,configuration:next});
  const northSaved=await post({action:'configuration',revision:confirmed.revision,configuration:next,previewToken:nextPreview.token});assert.deepEqual(await get(),northSaved);
- assert.equal(northSaved.telemetry.months['2026-01'].insolation.value,null);assert.equal(northSaved.calculated['2026-01'].iapr.value,null);assert.deepEqual(northSaved.confirmedLoss,confirmed.confirmedLoss);
+ assert.deepEqual(northSaved.telemetry.months['2026-01'].insolation.value,expected.months['2026-01'].insolation);assert.deepEqual(northSaved.calculated['2026-01'].iapr.value,expected.calculated.iapr);assert.deepEqual(northSaved.confirmedLoss,confirmed.confirmedLoss);
  for(const field of ['productionExpectedRatio','revenueRatio','productionProjectionRatio'])assert.deepEqual(northSaved.calculated['2026-01'][field],confirmed.calculated['2026-01'][field]);
  const backPreview=await post({action:'preview',revision:northSaved.revision,configuration});const restored=await post({action:'configuration',revision:northSaved.revision,configuration,previewToken:backPreview.token});assert.deepEqual(await get(),restored);
  assert.deepEqual(restored.telemetry,confirmed.telemetry);assert.deepEqual(restored.calculated,confirmed.calculated);assert.deepEqual(restored.confirmedLoss,confirmed.confirmedLoss);assert.deepEqual(restored.utility,confirmed.utility);

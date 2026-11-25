@@ -48,14 +48,14 @@ test('built HTTP calculated metrics: saved scientific DC ratings, exact inputs, 
  ];});
  await f.stop();
  const seedDb=new LocalDatabase(join(f.directory,'sol-diagnostics.sqlite'),resolve('drizzle')),seedPerformance=new PerformanceStoreManager(join(f.directory,'performance'));
- try{await seedMeasuredPoa({database:seedDb,bucket:new LocalBucket(seedDb,join(f.directory,'objects')),performance:seedPerformance,root:f.directory,siteId:f.siteId,samples:[0,1].map(hour=>({timestamp:`2026-01-01T0${hour}:00:00.000Z`,poa:500,satellite:900,expected:5000}))});}finally{seedPerformance.close();seedDb.close();}
+ try{await seedMeasuredPoa({database:seedDb,bucket:new LocalBucket(seedDb,join(f.directory,'objects')),performance:seedPerformance,root:f.directory,siteId:f.siteId,samples:[0,1].map(hour=>({timestamp:`2026-01-01T0${hour}:00:00.000Z`,poa:500,satellite:500,expected:5000}))});}finally{seedPerformance.close();seedDb.close();}
  await f.start();let current=await get();
  assert.deepEqual(current.utility,beforeImport.utility);assert.deepEqual(current.configuration,beforeImport.configuration);assert.equal(current.telemetry.sourceRevision,1);
  assert.deepEqual(Object.keys(current.calculated['2026-01']),oracle.keys);
  for(const field of oracle.keys)assert.deepEqual(current.calculated['2026-01'][field].value,expected.values[field],field);
  for(const field of ['actualPerformanceRatio','performanceRatioRatio','insolationRatio','productionExpectedRatio','iapr','iar']){assert.equal(current.calculated['2026-01'][field].state,'partial');assert.match(current.calculated['2026-01'][field].reason,/partial/);}
  assert.equal(current.calculated['2026-01'].actualSpecificYield.state,'available');assert.deepEqual(current.calculated['2026-01'].actualSpecificYield.value,{n:'100',d:'1'},'actual yield uses utility total, not imported meter energy');
- assert.match(current.telemetry.months['2026-01'].insolation.source,/Measured POA/);
+ assert.match(current.telemetry.months['2026-01'].insolation.source,/Uploaded POA/);
  assert.deepEqual(await get(other),otherBefore);assert.deepEqual(await f.request(`/api/equipment?siteId=${f.siteId}`),savedModel);
  const imported=await f.request(`/api/performance-data?siteId=${f.siteId}`);
  const cached=f.inspect(shared=>shared.prepare('SELECT * FROM monthly_rollups WHERE site_id=?').get(f.siteId));
@@ -112,7 +112,7 @@ test('built HTTP calculated metrics: saved scientific DC ratings, exact inputs, 
  current=await get();assert.equal(current.capacity.dcKwp,null);assert.equal(current.calculated['2026-01'].actualSpecificYield.value,null);assert.match(current.calculated['2026-01'].actualSpecificYield.reason,/DC capacity/);assert.equal(current.calculated['2026-01'].iapr.state,'partial');
  assert.deepEqual(current.utility,beforeRestart.utility);assert.deepEqual(current.telemetry,beforeRestart.telemetry);assert.deepEqual(protectedState(),protectedBefore);
  await f.stop();const reopened=new LocalDatabase(join(f.directory,'sol-diagnostics.sqlite'),resolve('drizzle')),performance=new PerformanceStoreManager(join(f.directory,'performance'));
- try{assert.equal(await(await new LocalBucket(reopened,join(f.directory,'objects')).get(key)).text(),bytes);const rows=Array.from(performance.site(f.siteId).rows(1));assert.equal(rows.length,48);assert.deepEqual(rows.filter(r=>r.channel.equipmentId==='weather'&&r.value!==null).map(r=>r.value),[900,900]);assert.equal(performance.site(f.siteId).describe().revision,1);}finally{performance.close();reopened.close();}
+ try{assert.equal(await(await new LocalBucket(reopened,join(f.directory,'objects')).get(key)).text(),bytes);const rows=Array.from(performance.site(f.siteId).rows(1));assert.equal(rows.length,48);assert.deepEqual(rows.filter(r=>r.channel.equipmentId==='weather'&&r.value!==null).map(r=>r.value),[500,500]);assert.equal(performance.site(f.siteId).describe().revision,1);}finally{performance.close();reopened.close();}
  writeFileSync(join(f.directory,'verified-calculated-metrics.json'),JSON.stringify({exactSaved,combinedBefore,combinedAfter,beforeRestart,final:current,otherBefore,retainedResultsUnchanged:true},null,2));
  console.log('Calculated metrics HTTP evidence:',f.directory);
 });
