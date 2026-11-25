@@ -12,7 +12,7 @@ async function mount(t, fetch, siteId = 'chart-site') {
   return h;
 }
 
-test('immediate private no-store GET and 15-second polling have no editor or write side effects', async t => {
+test('initial private no-store GET remains stable across multiple former polling periods without editor or write side effects', async t => {
   const calls = [], s = snapshot(undefined, 'site with / &?');
   const h = await mount(t, async (url, options) => {calls.push({url, options}); return Response.json(s);}, s.siteId);
   assert.equal(calls.length, 1);
@@ -26,8 +26,18 @@ test('immediate private no-store GET and 15-second polling have no editor or wri
   assert.equal(h.current.snapshot.siteId, s.siteId);
   assert.equal(h.current.refreshing, false);
   assert.equal(h.current.error, '');
-  await h.tick(14999); assert.equal(calls.length, 1);
-  await h.tick(1); assert.equal(calls.length, 2);
+  const accepted = h.current.snapshot;
+  const model = loadChartModel(), config = settings({metrics: ['utilityTotal', 'expectedProduction', 'iapr']});
+  const series = model.buildChartSeries(accepted, config, h.current);
+  for (const elapsed of [14999, 1, 15000, 15000, 60000]) {
+    await h.tick(elapsed);
+    assert.equal(calls.length, 1, 'elapsed time must not read monthly data again');
+    assert.equal(h.current.snapshot, accepted);
+    assert.equal(h.current.refreshing, false);
+    assert.equal(h.current.error, '');
+    assert.deepEqual(model.buildChartSeries(h.current.snapshot, config, h.current), series);
+  }
+  assert.equal(h.timerCount, 0, 'settled reads leave no background timer');
   assert.ok(calls.every(call => call.options.method === 'GET' && call.options.body === undefined));
   assert.deepEqual(Object.keys(h.current).sort(), ['error', 'refreshing', 'reload', 'snapshot']);
 });
@@ -112,7 +122,7 @@ test('refreshing and failed reads retain utility but make telemetry freshness ex
   assert.equal(model.buildChartSeries(h.current.snapshot, config, h.current)[2].points[0].plotValue, 120);
 });
 
-test('15-second timeout releases a stuck fetch, bounds polls, ignores its late response, and lets retry recover', async t => {
+test('15-second timeout releases a stuck fetch, never auto-retries, ignores its late response, and lets explicit retry recover', async t => {
   const stuck = deferred(), calls = [];
   const h = await mount(t, async (_url, options) => {
     calls.push(options);
@@ -124,8 +134,15 @@ test('15-second timeout releases a stuck fetch, bounds polls, ignores its late r
   assert.equal(calls[0].signal.aborted, true);
   assert.equal(h.current.refreshing, false);
   assert.match(h.current.error, /timed out/i);
-  assert.equal(calls.length, 1, 'poll does not overlap the timed-out request in the same tick');
-  await h.tick(15000);
+  assert.equal(calls.length, 1);
+  for (let period = 0; period < 4; period++) {
+    await h.tick(15000);
+    assert.equal(calls.length, 1, 'timeout must wait for explicit retry');
+    assert.match(h.current.error, /timed out/i);
+    assert.equal(h.current.snapshot, null);
+  }
+  assert.equal(h.timerCount, 0);
+  await h.current.reload(); await h.flush();
   assert.equal(calls.length, 2);
   assert.equal(h.current.snapshot.siteId, 'chart-site');
   const late = snapshot(); late.utility['2026-01'].revenue = '999';
@@ -158,10 +175,20 @@ test('HTTP, malformed JSON and wrong-site responses fail visibly without accepti
     [Response.json(snapshot(undefined, 'another-site')), /different site/i],
     [Response.json({siteId: 'chart-site'}), /invalid|incomplete|response/i],
   ]) {
-    const h = await mount(t, async () => response);
+    let calls = 0;
+    const h = await mount(t, async () => {calls++; return response.clone();});
     assert.equal(h.current.snapshot, null);
     assert.equal(h.current.refreshing, false);
     assert.match(h.current.error, pattern);
+    const error = h.current.error;
+    for (let period = 0; period < 4; period++) {
+      await h.tick(15000);
+      assert.equal(calls, 1, 'failed reads must not retry automatically');
+      assert.equal(h.current.error, error);
+      assert.equal(h.current.refreshing, false);
+      assert.equal(h.current.snapshot, null);
+    }
+    assert.equal(h.timerCount, 0);
     h.dispose();
   }
 });

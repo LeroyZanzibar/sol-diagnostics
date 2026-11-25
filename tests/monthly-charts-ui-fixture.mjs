@@ -21,7 +21,7 @@ export function snapshot(siteId='site') {
   s.calculated=domain.calculatedRows(s.projections,s.utility,s.telemetry,s.capacity);
   return s;
 }
-export function harness({data={snapshot:snapshot(),refreshing:false,error:'',reload:async()=>{}},fetch=async()=>Response.json({views:[]}),plotOnly=false}={}) {
+export function harness({data={snapshot:snapshot(),refreshing:false,error:'',reload:async()=>{}},fetch=async()=>Response.json({views:[]}),plotOnly=false,realData=false}={}) {
   let current, cursor=0, dirty=false, tree, props, nextId=0;
   const frames=new Map(), queue=new Set(), dom=new Map(), components=[], listeners=new Map(), listenerSets=new Map();
   const doc={activeElement:null,addEventListener(name,fn){const handlers=listenerSets.get(name)??new Set();handlers.add(fn);listenerSets.set(name,handlers);listeners.set(name,event=>{for(const handler of [...handlers])handler(event);});},removeEventListener(name,fn){const handlers=listenerSets.get(name);handlers?.delete(fn);if(!handlers?.size)listeners.delete(name);}};
@@ -37,7 +37,8 @@ export function harness({data={snapshot:snapshot(),refreshing:false,error:'',rel
   const bindings={React,...hooks,Date:FixedDate,Error,TypeError,AbortController,structuredClone,fetch,document:doc,window:{addEventListener(){},removeEventListener(){}},ResizeObserver:undefined};
   const model=loadSource('app/monthly-chart-model.ts',[],{...domain,Error,TypeError,RangeError});
   const plot=loadSource('app/MonthlyChartPlot.tsx',[],{...bindings,...model});
-  const ui=plotOnly?null:loadSource('app/MonthlyCharts.tsx',[],{...bindings,...model,MonthlyChartPlot:plot.default,chartSeriesColor:plot.chartSeriesColor,useMonthlyChartData:()=>data});
+  const useMonthlyChartData=realData?loadSource('app/monthly-chart-client.ts',[],{...bindings,setTimeout,clearTimeout}).useMonthlyChartData:()=>data;
+  const ui=plotOnly?null:loadSource('app/MonthlyCharts.tsx',[],{...bindings,...model,MonthlyChartPlot:plot.default,chartSeriesColor:plot.chartSeriesColor,useMonthlyChartData});
   const root=plotOnly?plot.default:ui.default;
   function renderNode(n,path='root') {
     if(Array.isArray(n))return n.map((c,i)=>renderNode(c,`${path}.${c?.key??i}`));

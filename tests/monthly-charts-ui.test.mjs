@@ -31,7 +31,7 @@ test('presets change only metrics, selector groups/search/clear/chips change ren
  click(h,'Overview');click(h,'Remove Actual insolation');assert.equal(selected(h).includes('actualInsolation'),false);
 });
 
-test('default observed range initializes once per site; polls never undo explicit dates; YTD and All differ',async t=>{
+test('default observed range initializes once per site; accepted snapshots never undo explicit dates; YTD and All differ',async t=>{
  const h=await mount(t);assert.equal(field(h.tree,'To month').props.value,'2026-03');change(h,'From month','2025-02');change(h,'To month','2026-02');
  h.data.snapshot={...snapshot(),revision:2};h.render();await h.flush();assert.equal(field(h.tree,'From month').props.value,'2025-02');assert.equal(field(h.tree,'To month').props.value,'2026-02');
  click(h,'YTD');assert.equal(field(h.tree,'From month').props.value,'2026-01');assert.equal(field(h.tree,'To month').props.value,'2026-11');
@@ -45,6 +45,26 @@ test('invalid ranges, no metrics, initial loading, no-site and errors do not sho
  const loading=await mount(t,{data:{snapshot:null,refreshing:true,error:'',reload:async()=>{}}});assert.match(html(loading.tree),/Loading saved monthly data/);
  loading.data.error='Synthetic read failed';loading.data.refreshing=false;loading.render();assert.match(html(loading.tree),/Synthetic read failed/);assert.ok(button(loading.tree,'Retry'));
  const empty=await mount(t,{}, {...props,sites:[],siteId:''});assert.match(html(empty.tree),/No sites|Choose a site/);assert.equal(nodes(empty.tree).some(n=>n.type==='svg'),false);
+});
+
+test('real data hook fetches on mount, site switch, remount and visible error Retry, not ordinary chart settings',async t=>{
+ const calls=[];let fail=false;
+ const options={realData:true,fetch:async(url,o={})=>{
+  if(url.startsWith('/api/monthly-data?')){
+   calls.push({url,...o});
+   return fail?Response.json({error:'Synthetic chart read failed'},{status:503}):Response.json(snapshot(new URL(url,'http://test').searchParams.get('siteId')));
+  }
+  return Response.json({views:[view]});
+ }};
+ const h=await mount(t,options);assert.equal(calls.length,1);assert.ok(nodes(h.tree).some(n=>n.type==='svg'));
+ change(h,'From month','2025-02');change(h,'To month','2026-02');click(h,'Revenue');click(h,'Bar');click(h,'YoY');click(h,'Second prior year');
+ const restore=nodes(h.tree).find(n=>n.props?.['data-view-entry']===view.id);restore.props.onClick();h.render();await h.flush();
+ assert.equal(calls.length,1,'dates, metrics, chart type, comparisons and saved views do not refetch');
+ fail=true;h.render({...props,siteId:'other'});await h.flush();assert.equal(calls.length,2);assert.match(calls[1].url,/siteId=other$/);
+ assert.match(html(h.tree),/Synthetic chart read failed/);assert.ok(button(h.tree,'Retry'));
+ fail=false;await click(h,'Retry');await h.flush();assert.equal(calls.length,3);assert.match(calls[2].url,/siteId=other$/);assert.equal(button(h.tree,'Retry'),undefined);
+ h.dispose();const remounted=await mount(t,options);assert.equal(calls.length,4);assert.ok(nodes(remounted.tree).some(n=>n.type==='svg'));
+ assert.ok(calls.every(call=>call.method==='GET'&&call.body===undefined));
 });
 
 test('saved view restoration preserves current site, closes menu, and edits mark recalled setup modified',async t=>{

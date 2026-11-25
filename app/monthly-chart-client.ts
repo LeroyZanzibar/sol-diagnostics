@@ -3,7 +3,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {MonthlySnapshot} from './monthly-types';
 
-const POLL_MS = 15000;
 const TIMEOUT_MS = 15000;
 type ReadState = {siteId: string; snapshot: MonthlySnapshot | null; refreshing: boolean; error: string};
 type Session = {siteId: string; reload: () => Promise<void>};
@@ -31,7 +30,8 @@ async function readSnapshot(siteId: string, signal: AbortSignal): Promise<Monthl
   return data as MonthlySnapshot;
 }
 
-/** Independent read-only lifecycle: no monthly editor drafts, guards or writes. */
+/** Read on mount/site change or explicit retry, never on a background timer.
+ * Independent of monthly editor drafts, guards and writes. */
 export function useMonthlyChartData(siteId: string): {
   snapshot: MonthlySnapshot | null; refreshing: boolean; error: string; reload: () => Promise<void>;
 } {
@@ -45,7 +45,6 @@ export function useMonthlyChartData(siteId: string): {
 
   useEffect(() => {
     let disposed = false, generation = 0;
-    let poll: ReturnType<typeof setTimeout> | undefined;
     let cancelRequest: (() => void) | null = null;
     const session: Session = {siteId, reload: load};
     active.current = session;
@@ -57,9 +56,8 @@ export function useMonthlyChartData(siteId: string): {
     async function load(): Promise<void> {
       if (!siteId || disposed || active.current !== session) return;
       const sequence = ++generation;
-      if (poll !== undefined) {clearTimeout(poll); poll = undefined;}
       // An explicit reload supersedes the old request, even when its transport
-      // ignores abort. Polls are scheduled only after settlement, never stacked.
+      // ignores abort.
       cancelRequest?.();
       const controller = new AbortController();
       let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -91,10 +89,7 @@ export function useMonthlyChartData(siteId: string): {
         }));
       } finally {
         if (timeout !== undefined) clearTimeout(timeout);
-        if (current(sequence)) {
-          cancelRequest = null;
-          poll = setTimeout(() => {poll = undefined; void load();}, POLL_MS);
-        }
+        if (current(sequence)) cancelRequest = null;
       }
     }
 
@@ -102,7 +97,6 @@ export function useMonthlyChartData(siteId: string): {
     return () => {
       disposed = true;
       generation++;
-      if (poll !== undefined) clearTimeout(poll);
       cancelRequest?.();
       cancelRequest = null;
       if (active.current === session) active.current = null;
