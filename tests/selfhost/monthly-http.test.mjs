@@ -35,7 +35,7 @@ test('built authenticated named expected import/Apply/readback and correction pr
  }
  const readings=[12,24].flatMap((value,i)=>{const timestamp=`2026-01-01T${12+i}:00:00Z`;return [{timestamp,equipmentId:'@site',measurement:'Expected Production',channelId:'forecast',value,unit:'kWh'},{timestamp,equipmentId:'weather',measurement:'Irradiance',value:500,unit:'W/m²'}];});
  let current=await apply(readings,false);assert.equal(current.telemetry.expectedChannelId,'["@site","Expected Production","forecast"]');assert.equal(current.telemetry.expectedUnavailableReason,null);
- assert.equal(formatValue(current.telemetry.months['2026-01'].expected.value),'36');assert.equal(current.telemetry.months['2026-01'].expected.coveredMilliseconds,7200000);assert.equal(current.telemetry.months['2026-01'].expected.state,'partial');assert.equal(current.telemetry.months['2026-01'].insolation.value,null);assert.equal(current.telemetry.poa.state,'missing');
+ assert.equal(formatValue(current.telemetry.months['2026-01'].expected.value),'36');assert.equal(current.telemetry.months['2026-01'].expected.coveredMilliseconds,7200000);assert.equal(current.telemetry.months['2026-01'].expected.state,'partial');assert.deepEqual(current.telemetry.months['2026-01'].insolation.value,{n:'1',d:'1'});assert.equal(current.telemetry.poa.state,'selected');
  current=await apply([{...readings[0],value:18}],true);assert.equal(current.telemetry.sourceRevision,2);assert.equal(formatValue(current.telemetry.months['2026-01'].expected.value),'42');
  await f.stop();await f.start();current=await get();assert.equal(formatValue(current.telemetry.months['2026-01'].expected.value),'42');
  assert.deepEqual(current.utility,monthlyBefore.utility);assert.deepEqual(current.configuration,monthlyBefore.configuration);assert.equal(current.revision,monthlyBefore.revision);assert.deepEqual(protectedState(),before);
@@ -86,7 +86,7 @@ test('built authenticated HTTP: populated setup, exact monthly saves, preview/im
  const monthlyOnly={...corrected,degradation:'0.25'};const monthlyImpact=await post({action:'preview',revision:4,configuration:monthlyOnly});
  await post({action:'configuration',revision:4,configuration:monthlyOnly,previewToken:monthlyImpact.token});
  assert.deepEqual(f.inspect(db=>db.prepare('SELECT * FROM site_settings WHERE id=?').get(f.siteId)),siteBefore,'Monthly-only settings do not change whole-site import hashes');
- await f.request('/api/performance-data',{action:'commit',siteId:f.siteId,stageId:staged.stageId,previewToken:staged.previewToken,approveOverlap:false});let current=await get();assert.equal(formatValue(current.telemetry.months['2026-01'].expected.value),'288');assert.equal(current.telemetry.months['2026-01'].insolation.value,null);assert.equal(current.telemetry.poa.state,'missing');assert.equal(current.telemetry.months['2026-01'].expected.state,'partial');assert.equal(current.telemetry.state,'current');
+ await f.request('/api/performance-data',{action:'commit',siteId:f.siteId,stageId:staged.stageId,previewToken:staged.previewToken,approveOverlap:false});let current=await get();assert.equal(formatValue(current.telemetry.months['2026-01'].expected.value),'288');assert.deepEqual(current.telemetry.months['2026-01'].insolation.value,{n:'12',d:'1'});assert.equal(current.telemetry.poa.state,'selected');assert.equal(current.telemetry.months['2026-01'].expected.state,'partial');assert.equal(current.telemetry.state,'current');
  await f.commit([{...readings[0],value:24}]);
  // Miss the browser wake completely: stop before reading monthly output.
  await f.stop();await f.start();const deadline=Date.now()+20000;let durable;
@@ -107,9 +107,9 @@ test('real offline VCOM Apply retains satellite zero, selected POA fallback and 
  await action({action:'apply',jobId:id,stageId:job.stageId,previewToken:job.preview.previewToken,approveOverlap:false});
  const get=()=>f.request(`/api/monthly-data?siteId=${f.siteId}`);let current=await get(),m=current.telemetry.months['2026-01'];
  assert.equal(formatValue(m.expected.value),'287');assert.equal(m.expected.partialIntervals,1);assert.equal(m.expected.unknownQualityIntervals,0);assert.equal(m.expected.coveredMilliseconds,24*3600000-300000);
- assert.equal(formatValue(m.insolation.value,2),'14.40');assert.equal(m.insolation.satelliteIntervals,undefined);assert.equal(m.insolation.poaIntervals,24);assert.equal(m.insolation.unknownQualityIntervals,0);assert.match(m.insolation.source,/Measured POA/);assert.equal(current.telemetry.poa.state,'selected');assert.equal(current.confirmedLoss.state,'missing');
- const configuration={...current.configuration,poaSourceId:current.telemetry.poa.selectedSourceId};
- const preview=await f.request('/api/monthly-data',{siteId:f.siteId,action:'preview',revision:current.revision,configuration});assert.equal(preview.sourceChanged,true);assert.equal((await get()).configuration.poaSourceId,null);
+ assert.equal(formatValue(m.insolation.value,2),'11.60');assert.equal(m.insolation.satelliteIntervals,undefined);assert.equal(m.insolation.poaIntervals,24);assert.equal(m.insolation.unknownQualityIntervals,0);assert.match(m.insolation.source,/Uploaded POA/);assert.equal(current.telemetry.poa.state,'selected');assert.equal(current.confirmedLoss.state,'missing');
+ const configuration={...current.configuration,irradianceChannelId:current.telemetry.selectedChannelId};
+ const preview=await f.request('/api/monthly-data',{siteId:f.siteId,action:'preview',revision:current.revision,configuration});assert.equal(preview.sourceChanged,true);assert.equal((await get()).configuration.irradianceChannelId,null);
  await f.request('/api/monthly-data',{siteId:f.siteId,action:'configuration',revision:current.revision,configuration,previewToken:preview.token});assert.deepEqual((await get()).configuration,configuration);
  // Null overlaps retain original effective ownership, including the partial hour.
  await f.commit([{timestamp:'2026-01-01T00:00:00Z',equipmentId:'@site',measurement:'Expected Production',value:null,unit:'kWh'}]);current=await get();assert.equal(current.telemetry.months['2026-01'].expected.partialIntervals,1);

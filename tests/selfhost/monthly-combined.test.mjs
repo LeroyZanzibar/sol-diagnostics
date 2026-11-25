@@ -28,7 +28,7 @@ test('native combined save/read/reopen: unpaid-only edit changes seven exact met
  service.inputs.saveUtility('site',1,[{month,...beforeCase.utility,unpaidEnergy:null}]);
  service.inputs.saveUtility('other',1,[{month,...beforeCase.utility,unpaidEnergy:'000.01230'}]);
  const store=manager.site('site');
- await seedMeasuredPoa({database:db,bucket,performance:manager,root,samples:[0,1].map(hour=>({timestamp:`2026-01-01T0${hour}:00:00.000Z`,poa:500,satellite:900,expected:5000}))});
+ await seedMeasuredPoa({database:db,bucket,performance:manager,root,samples:[0,1].map(hour=>({timestamp:`2026-01-01T0${hour}:00:00.000Z`,poa:500,satellite:500,expected:5000}))});
  const key='analysis/combined-retained.json',bytes='{"synthetic":"retained outage result, not reanalysed"}';
  db.sqlite.prepare('INSERT INTO analysis_runs(id,site_id,import_id,parser_version,model_revision,analysis_object_key) VALUES(?,?,?,?,?,?)').run('retained-run','site','retained-import',28,'retained-model',key);
  db.sqlite.prepare('INSERT INTO issue_event_reviews(id,site_id,event_key,version,state,updated_at) VALUES(?,?,?,?,?,?)').run('retained-review','site','retained-event',1,'{"status":"confirmed"}','2026-01-02');

@@ -6,10 +6,20 @@ The **Projections → Monthly comparison** table adds twelve read-only calculate
 
 - **Utility production**: the exact total of present on-peak, off-peak and **Unpaid energy** entries, in kWh. Any category alone is valid; all-blank is unavailable and explicit zero is retained. The utility ledger, comparison total and every production-dependent metric use this same total.
 - **Projected production, budgeted revenue and projected insolation**: the existing monthly projections after start-month proration and the configured degradation rules, not the raw undegraded calendar-month baselines.
-- **Actual insolation**: the existing selected monthly reporting series, integrated to kWh/m², with its retained coverage and source provenance. Expected Production is the existing monthly sum of the imported site-level Expected Production series, in kWh.
+- **Actual insolation**: uploaded performance readings mapped to the selected POA equipment series. Each uploaded value is interval energy in Wh/m²; sum the unrounded values and divide by 1,000 for kWh/m². Assign intervals to the site's pinned local start month (including DST), with no duration multiplication, annual normalization, proration or degradation. This reporting contract also applies to existing channels carrying legacy `W/m²` metadata; canonical units and analytical behavior are not rewritten. Expected Production retains its existing monthly sum, elapsed-overlap allocation and quality handling, in kWh.
 - **DC capacity**: the site's connected module nameplate watts × module quantity, summed and divided by 1,000 to obtain kWp. Do not substitute inverter AC capacity, inverter maximum-DC input limits or export limits, and do not reduce nameplate capacity for degradation or delivery losses. Missing/incomplete module capacity makes dependent metrics unavailable rather than silently using an understated total.
 
 Conventional performance ratio uses plane-of-array insolation and a 1 kW/m² reference irradiance. The app uses the selected reporting series as configured; it does not convert GHI to POA or certify that an unknown/mixed source and a projected baseline use the same plane. Check that basis before treating PR as a contractual performance assessment. This is not a temperature-corrected or bifacial-specific PR.
+
+## Uploaded Actual Insolation selection and refresh
+
+The **Uploaded POA series** selector restores the saved `irradianceChannelId` mechanism. CSV, generic API, onsite, satellite-first and blended readings all qualify; physical-sensor proof, VCOM sidecars and source labels are not eligibility gates. Reporting does not download, reimport or invent provenance. The older `poaSourceId` field is retained unchanged for compatibility but no longer selects reporting data.
+
+A single unambiguous series is automatic. Independent equipment series, or multiple channels with the same measurement on one equipment, require an explicit choice. Missing or unavailable saved selections stay unavailable rather than switching to another series. Exactly one `Irradiance` and one `POA irradiance` channel on the same equipment are treated as historical names of one logical series. A saved exact channel ID is retained and resolves to that equipment's alias pair, so selecting either historical name includes both periods. At overlapping timestamps equal numeric alias values count once; conflicting values are excluded and flagged, never summed. GHI channels remain separate choices, without plane conversion.
+
+Zero is a valid reading; missing values remain gaps. Numeric subtotals retain partial coverage, including any excluded alias conflicts. Coverage uses elapsed interval time, but values do not. Monthly comparison and charts consume the same exact cached fractions and round only for display.
+
+Rollup calculation version 4 invalidates older measured-only caches even when the import revision is unchanged. Reads and the existing startup/periodic sweep recompute and persist these derived rollups; subsequent selection or canonical-data edits are fenced against stale in-flight publication. No monthly input strings, utility drafts, canonical readings/units, saved analyses, or Confirmed current-published loss records are changed.
 
 ## Calculations
 

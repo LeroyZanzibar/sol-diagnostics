@@ -30,8 +30,8 @@ test('pinned local calendar splits crossing intervals, explicit zero, channel-sp
  // Later source timezone is not the reporting timezone.
  await commit(store,[{timestamp:'2024-03-31T20:00:00.000Z',channel:irradiance,value:null}], 'America/New_York');
  const result=await service.read('site');assert.equal(result.telemetry.timezone,'Asia/Kolkata');
- const march=result.telemetry.months['2024-03'],april=result.telemetry.months['2024-04'];assert.equal(formatValue(march.expected.value),'6');assert.equal(formatValue(april.expected.value),'6');assert.equal(formatValue(march.insolation.value,2),'0.30');assert.equal(formatValue(april.insolation.value,2),'0.30');
- assert.equal(april.expected.coveredMilliseconds,5400000);assert.equal(april.insolation.coveredMilliseconds,1800000);assert.equal(april.expected.state,'partial');assert.equal(april.insolation.state,'partial');
+ const march=result.telemetry.months['2024-03'],april=result.telemetry.months['2024-04'];assert.equal(formatValue(march.expected.value),'6');assert.equal(formatValue(april.expected.value),'6');assert.equal(formatValue(march.insolation.value,2),'0.90');assert.equal(formatValue(april.insolation.value,2),'—');
+ assert.equal(april.expected.coveredMilliseconds,5400000);assert.equal(april.insolation.coveredMilliseconds,0);assert.equal(april.expected.state,'partial');assert.equal(april.insolation.state,'missing');
  assert.equal(result.telemetry.months['2024-05'],undefined);
 });
 test('fall-back month counts both repeated local hours as distinct UTC intervals',async t=>{

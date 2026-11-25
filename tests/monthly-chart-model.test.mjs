@@ -194,7 +194,7 @@ test('partial telemetry retains numeric values, source reasons, coverage, qualit
     assert.notEqual(p.plotValue, null, id);
     for (const pattern of [/partial/i, /3/, /7/, /2/, /quality.*unknown|unknown.*quality/i,
       /negative/i, /coverage/i, /1339200000/, /2678400000/, /America\/New_York/,
-      /23/, /measured-poa/, /Measured/, /POA/, /evidence unavailable/i,
+      /23/, /selected-irradiance/, /Measured/, /POA/, /evidence unavailable/i,
       /Satellite intervals: 100/, /POA intervals: 40/, /Unknown source intervals: 7/]) assert.match(text, pattern, id);
   }
   const expected = first(m, s, 'expectedProduction');

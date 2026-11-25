@@ -17,7 +17,7 @@ const missingCapacity = {dcKwp: null, unavailableReason: 'DC capacity is unavail
 const savedCapacity = {dcKwp: {n: '120', d: '1'}, unavailableReason: null}; // 400 W × 300 / 1000, not 100 kW AC or 150 kW max DC.
 const missingTelemetry = {state: 'missing', sourceRevision: 0, timezone: null, months: {}, candidates: [],
   selectionRequired: false, selectedChannelId: null, expectedChannelId: null, expectedUnavailableReason: null,
-  poa:{state:'missing',selectedSourceId:null,candidates:[],reason:'No authenticated measured POA sensor data is available.'}};
+  poa:{state:'missing',selectedSourceId:null,candidates:[],reason:'No uploaded irradiance series is available.'}};
 function checkMissingConfirmedLoss(value) {
   assert.ok(value, 'Monthly snapshot includes confirmed estimated loss availability');
   assert.deepEqual(Object.keys(value).sort(), ['analysisRunId', 'months', 'reason', 'state', 'timezone']);
@@ -73,8 +73,9 @@ function checkCalculated(calculated, projections, phase) {
   const hasModel = phase !== 'no-model';
   const hasTelemetry = phase === 'seed' || phase === 'corrected';
   const noCapacity = missingCapacity.unavailableReason;
-  const noInsolation = hasTelemetry ? 'No authenticated measured POA sensor is available. Satellite, GHI and generic imports are not substitutes.' : 'Actual insolation is unavailable: telemetry is missing.';
-  // Generic API imports intentionally have no authenticated physical sensor lineage.
+  const noInsolation = hasTelemetry ? 'Actual insolation is missing for this month.' : 'Actual insolation is unavailable: telemetry is missing.';
+  // Generic uploaded interval energy qualifies without provider provenance.
+  const partialInsolation = 'Uploaded insolation subtotal has partial monthly coverage.';
   const partialExpected = 'Hourly Expected Production has partial monthly coverage.';
   // Python fractions.Fraction literals from the original decimal strings:
   // E=123.1234567890123456, R=-12.3450, P=3100.1250*16/31,
@@ -87,15 +88,15 @@ function checkCalculated(calculated, projections, phase) {
     actualSpecificYield: hasModel ? available('6412680041094393', '6250000000000000') : missing(noCapacity),
     specificYieldRatio: hasModel ? available('198793081273926183', '2583437500000000000') : missing(noCapacity),
     budgetedPerformanceRatio: hasModel ? available('8267', '9960') : missing(noCapacity),
-    actualPerformanceRatio: missing(hasModel ? noInsolation : `${noCapacity} ${noInsolation}`),
-    performanceRatioRatio: missing(hasModel ? noInsolation : `${noCapacity} ${noInsolation} ${noCapacity}`),
-    insolationRatio: missing(noInsolation),
+    actualPerformanceRatio: hasTelemetry ? partial('6412680041094393','3125000000000000',partialInsolation) : missing(hasModel ? noInsolation : `${noCapacity} ${noInsolation}`),
+    performanceRatioRatio: hasTelemetry ? partial('1596757330232503857','645859375000000000',partialInsolation) : missing(hasModel ? noInsolation : `${noCapacity} ${noInsolation} ${noCapacity}`),
+    insolationRatio: hasTelemetry ? partial('31','996',partialInsolation) : missing(noInsolation),
     productionProjectionRatio: available('198793081273926183', '2583437500000000000'),
     productionExpectedRatio: hasTelemetry ? partial('6412680041094393', phase === 'corrected' ? '2207031250000000' : '1894531250000000', partialExpected)
       : missing('Hourly Expected Production is unavailable: telemetry is missing.'),
     revenueRatio: available('-25513', '330680'),
-    iapr: missing(noInsolation),
-    iar: missing(noInsolation),
+    iapr: hasTelemetry ? partial('1596757330232503857','645859375000000000',partialInsolation) : missing(noInsolation),
+    iar: hasTelemetry ? partial('-204927','82670',partialInsolation) : missing(noInsolation),
   }, `Independent exact first-month calculated contract (${phase})`);
   // Sole off-peak, a tiny component plus unpaid, unpaid-only, zero revenue and
   // missing totals remain distinct; no component may be rounded or zero-filled.
@@ -133,14 +134,14 @@ function telemetryFor(dataset, weather, corrected) {
   const metric = value => ({value, coveredMilliseconds: 7200000, partialIntervals: 0,
     unknownQualityIntervals: 0, negativeIntervals: 0, state: 'partial'});
   return {state: 'current', sourceRevision: dataset.revision, revisionId: dataset.revisionId, timezone: 'UTC',
-    selectionKey: '["measured-poa",1,null]', selectedChannelId: null, selectionRequired: false, candidates: [weather],
-    poa:{state:'missing',selectedSourceId:null,candidates:[],reason:'No authenticated measured POA sensor is available. Satellite, GHI and generic imports are not substitutes.'},
+    selectionKey: '["uploaded-interval-poa",1,null]', selectedChannelId: weather.id, selectionRequired: false, candidates: [{...weather,channelIds:[weather.id]}],
+    poa:{state:'selected',selectedSourceId:weather.id,candidates:[],reason:null},
     expectedChannelId: '["@site","Expected Production","forecast"]', expectedUnavailableReason: null,
     months: {'2026-01': {
       expected: metric({n: corrected ? '339' : '291', d: '8'}),
-      insolation: {...metric(null),state:'missing',coveredMilliseconds:0,source:'Measured POA sensor only',poaIntervals:0,excludedIntervals:2,unavailableIntervals:0,reason:'No authenticated measured POA sensor is available. Satellite, GHI and generic imports are not substitutes.'},
+      insolation: {...metric({n:'1',d:'2'}),source:`Uploaded POA interval energy: ${weather.equipmentId} (Irradiance)`,poaIntervals:2,excludedIntervals:0,unavailableIntervals:0,reason:'Uploaded insolation subtotal has partial monthly coverage.'},
       expectedMilliseconds: 2678400000,
-    }}, calculationVersion: 3,retryablePoa:false};
+    }}, calculationVersion: 4,retryablePoa:false};
 }
 
 /** Read-only verification against a detached, JSON-serializable expectation. */

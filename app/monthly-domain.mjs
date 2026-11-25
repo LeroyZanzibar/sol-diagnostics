@@ -125,7 +125,7 @@ function availableInput(value,label){
 function telemetryInput(telemetry,month,kind){
   const label=kind==='expected'?'Hourly Expected Production':'Actual insolation';
   if(telemetry?.state!=='current')return missingCalculated(`${label} is unavailable: telemetry is ${telemetry?.state==='refreshing'?'refreshing':'missing'}.`);
-  if(kind==='insolation'&&telemetry.poa?.state!=='selected')return missingCalculated(telemetry.poa?.reason||'Select an available measured POA sensor for Actual insolation.');
+  if(kind==='insolation'&&telemetry.poa?.state!=='selected')return missingCalculated(telemetry.poa?.reason||'Select an available uploaded POA series for Actual insolation.');
   if(kind==='expected'&&telemetry.expectedUnavailableReason)return missingCalculated(telemetry.expectedUnavailableReason);
   const metric=telemetry.months[month]?.[kind];
   if(!metric||metric.state==='missing'||metric.value===null)return missingCalculated(metric?.reason||`${label} is missing for this month.`);
