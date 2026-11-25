@@ -52,13 +52,13 @@ test('new calculation shows its short recorded Method, legacy calculations never
  const old=home({performance:{...performance(),methodology:{calculationVersion:28}}});assert.match(html(old.render()),/Legacy analysis/);assert.doesNotMatch(html(old.render()),/Daylight outages use supplied/);
 });
 
-test('Review workbench runs no inverter preparation and preserves real bulk/maintenance handlers',()=>{
- let recurrenceCalls=0,clear=0,selected=[];
- const original=finding('outage'),visible={...original,estimatedLossKwh:3,reportClipped:true},windows=[];
+test('Review workbench runs no inverter preparation and preserves real bulk handlers without maintenance controls',()=>{
+ let recurrenceCalls=0,clear=0;
+ const original=finding('outage'),visible={...original,estimatedLossKwh:3,reportClipped:true};
  const h=harness('app/ReviewWorkbench.tsx',{}, {inverterReviewCards:()=>{recurrenceCalls++;throw new Error('Retired card work');},reviewEnergy:loadSource('app/BulkReviewDialog.tsx').reviewEnergy,MaintenanceWindows:()=>null,BulkReviewDialog:()=>null});
- const props={siteId:'site',runId:'run',visible:[visible],originals:[original],episodes:[{id:'legacy'}],reviews:{},selected:['outage'],onSelect:(...args)=>selected.push(args),onClear:()=>clear++,onUpdated:noop,readOnly:false,maintenance:{windows}};
+ const props={siteId:'site',runId:'run',visible:[visible],originals:[original],episodes:[{id:'legacy'}],reviews:{},selected:['outage'],onClear:()=>clear++,onUpdated:noop,readOnly:false};
  let tree=h.render(props);assert.equal(recurrenceCalls,0);assert.doesNotMatch(html(tree),/recurring|crosshatched/i);assert.match(html(tree),/1 findings selected/);
- const maintenance=nodes(tree).find(n=>n.props?.findings&&n.props?.data);assert.equal(maintenance.props.findings[0],original);maintenance.props.onSelect(['outage']);assert.deepEqual(selected,[[['outage'],true]]);
+ assert.equal(nodes(tree).find(n=>n.props?.findings&&n.props?.data),undefined);assert.doesNotMatch(html(tree),/maintenance/i);
  button(tree,'Review selected').props.onClick();tree=h.render(props);const bulk=nodes(tree).find(n=>n.props?.findings&&n.props?.onUpdated);assert.equal(bulk.props.findings[0],original);bulk.props.onClose();assert.equal(clear,1);assert.equal(h.state.bulk,null);
  button(h.render(props),'Clear selection').props.onClick();assert.equal(clear,2);
 });

@@ -269,11 +269,11 @@ export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
     </div>
     {snapshot && <details className="mc-source-notes"><summary>Monthly sources & calculation notes</summary>
       <p>Expected Production is the monthly total of imported hourly Expected Production, not projected production. Partial totals remain partial; missing values are not zero.</p>
-      <p>Actual insolation uses the selected reporting series: satellite-first with POA gap filling only when supported by retained evidence. Imported provenance can be mixed or unknown. Conventional performance ratio expects matching plane-of-array (POA) insolation.</p>
+      <p>Actual insolation uses the selected measured physical POA sensor only. Satellite, GHI and blended values are never substituted. Missing readings stay missing; numeric subtotals remain partial. Conventional performance ratio expects matching projected POA insolation.</p>
       <p>Specific yield and performance ratio use saved connected module DC capacity, not AC limits or losses. {snapshot.capacity.unavailableReason || 'Capacity-dependent metrics use the saved model.'}</p>
       <p>Reporting timezone: {snapshot.telemetry.timezone || 'not yet pinned (UTC used for current-year shortcuts)'}. Telemetry source revision: {snapshot.telemetry.sourceRevision}. Status: {data.error ? 'freshness unavailable' : data.refreshing ? 'refreshing' : snapshot.telemetry.state}.</p>
       {snapshot.telemetry.expectedUnavailableReason && <p>{snapshot.telemetry.expectedUnavailableReason}</p>}
-      {snapshot.telemetry.selectionRequired && <p>Select an explicit irradiance reporting channel in 12-month baselines before comparing Actual insolation.</p>}
+      {snapshot.telemetry.poa?.reason && <p>{snapshot.telemetry.poa.reason}</p>}
       <p>All includes the available actual and projection domain, including future projections. The default 12 months ends at the latest numeric actual month. YTD uses the current reporting year.</p>
     </details>}
   </section>;

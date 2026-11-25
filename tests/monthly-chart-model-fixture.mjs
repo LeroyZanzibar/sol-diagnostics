@@ -1,3 +1,4 @@
+import {selectedPoa} from './monthly-poa-unit-fixture.mjs';
 import {readFileSync} from 'node:fs';
 import * as domain from '../app/monthly-domain.mjs';
 import {loadSource} from './source-module.mjs';
@@ -30,11 +31,11 @@ export function snapshot(c = oracle.cases[0], siteId = 'chart-site') {
     utility: {[c.month]: structuredClone(c.utility)},
     projections: [structuredClone(c.projection)],
     capacity: {dcKwp: structuredClone(c.capacity), unavailableReason: null},
-    telemetry: {state: 'current', sourceRevision: 23, timezone: 'America/New_York',
+    telemetry: {poa:selectedPoa(),state: 'current', sourceRevision: 23, timezone: 'America/New_York',
       selectedChannelId: 'site|selected-irradiance', selectionRequired: false,
       expectedChannelId: 'site|named-expected', expectedUnavailableReason: null, candidates: [],
       months: {[c.month]: {expected: metric(c.expected), insolation: {...metric(c.insolation),
-        source: 'Imported irradiance; satellite/POA provenance unknown'}, expectedMilliseconds: 2678400000}}},
+        source: 'Measured POA sensor only'}, expectedMilliseconds: 2678400000}}},
   };
   result.calculated = domain.calculatedRows(result.projections, result.utility, result.telemetry, result.capacity);
   return result;

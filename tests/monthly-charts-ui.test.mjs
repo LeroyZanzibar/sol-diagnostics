@@ -83,10 +83,75 @@ test('real SVG/table use model points: null path breaks, zero/negative grouped b
  const three=h.model.buildChartSeries(snapshot(),{...settings,metrics:['utilityTotal','revenue','actualInsolation']});h.render({series:three,type:'line'});assert.equal(nodes(h.tree).filter(n=>n.type==='svg').length,3);
 });
 
+const monthPopup = h => nodes(h.tree).find(n=>n.props?.['data-month-details']!==undefined);
+const visibleText = tree => html(tree).replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+function hoverMonth(h,index=0){nodes(h.tree).find(n=>n.props?.['data-chart-hit']===`0:${index}`).props.onPointerMove({pointerType:'mouse'});h.render();}
+function assertCompactPopup(h,series,index=0){
+ const popup=monthPopup(h);assert.ok(popup,'hover popup remains open');
+ const items=nodes(popup).filter(n=>n.props?.className==='mc-detail-item');assert.equal(items.length,series.length);
+ items.forEach((item,i)=>{
+   const s=series[i],point=s.points[index];
+   assert.equal(visibleText(nodes(item).find(n=>n.type==='strong')),s.label);
+   const unit=s.metric.unit==='%'&&point.display.endsWith('%')?'':s.metric.unit;
+   assert.equal(visibleText(nodes(item).find(n=>n.props?.className==='mc-detail-value')),`${point.display} ${unit}`.trim());
+   assert.ok(visibleText(item).includes(`Source month: ${h.model.formatChartMonth(point.sourceMonth)}`));
+ });
+ assert.equal(nodes(popup).some(n=>n.props?.className==='mc-provenance'),false,'hover must not expose other metrics through provenance');
+ assert.doesNotMatch(visibleText(popup),/Monthly input revision|Saved projection:|On-peak production:|Off-peak production:|Invoice energy used cost:/);
+}
+
+test('mouse hover shows only the selected metric, not other utility values in its provenance',async t=>{
+ const h=await mount(t,{plotOnly:true},{series:[],type:'line'}),series=h.model.buildChartSeries(snapshot(),{...settings,metrics:['utilityTotal']});
+ assert.ok(series[0].points[0].details.includes('Utility revenue: -12 $.'),'real model fixture contains the unselected revenue');
+ for(const type of ['line','bar']){
+   h.render({series,type});hoverMonth(h);assertCompactPopup(h,series);
+   assert.match(visibleText(monthPopup(h)),/10 kWh/);assert.doesNotMatch(visibleText(monthPopup(h)),/Utility revenue|-12/);
+ }
+});
+
+test('mouse hover retains multiple selected values, units and only enabled YoY source months',async t=>{
+ const h=await mount(t,{plotOnly:true},{series:[],type:'line'});
+ for(const comparisonYears of [1,2]){
+   const series=h.model.buildChartSeries(snapshot(),{...settings,metrics:['utilityTotal','revenue','productionProjectionRatio'],comparisonYears});
+   assert.ok(series.some(s=>s.points[0].details.some(detail=>detail.startsWith('Saved projection:'))));
+   h.render({series,type:'line'});hoverMonth(h);assertCompactPopup(h,series);
+   const text=visibleText(monthPopup(h));assert.match(text,/-12 \$/);assert.match(text,/111%/);assert.match(text,/Jan 2025/);
+   if(comparisonYears===1)assert.doesNotMatch(text,/Jan 2024|2 years prior/);else assert.match(text,/Jan 2024/);
+   assert.doesNotMatch(text,/%\s+%/);
+ }
+});
+
+test('open mouse hover follows metric and comparison selection updates immediately',async t=>{
+ const h=await mount(t,{plotOnly:true},{series:[],type:'line'});
+ h.render({series:h.model.buildChartSeries(snapshot(),settings),type:'line'});hoverMonth(h);
+ // Keep the plot instance open while its selected-series props change. The parent
+ // UI also remounts on settings changes; that existing dismissal is unchanged.
+ for(const selection of [
+   {metrics:['utilityTotal'],comparisonYears:0},
+   {metrics:['revenue','budgetRevenue'],comparisonYears:1},
+   {metrics:['budgetRevenue'],comparisonYears:0},
+ ]){
+   const series=h.model.buildChartSeries(snapshot(),{...settings,...selection});
+   h.render({series,type:'line'});assertCompactPopup(h,series);
+ }
+ assert.doesNotMatch(visibleText(monthPopup(h)),/Utility revenue|Utility actual production total|Actual insolation|year prior/);
+ h.render({series:[],type:'line'});assert.equal(monthPopup(h),undefined);
+});
+
+test('explicit pin, keyboard focus and table retain full source details for a selected metric',async t=>{
+ const h=await mount(t,{plotOnly:true},{series:[],type:'line'}),series=h.model.buildChartSeries(snapshot(),{...settings,metrics:['utilityTotal']});
+ h.render({series,type:'line'});hoverMonth(h);
+ let hit=nodes(h.tree).find(n=>n.props?.['data-chart-hit']==='0:0'),dom=[...h.dom.values()].find(n=>n.props?.['data-chart-hit']==='0:0');
+ hit.props.onClick({currentTarget:dom});h.render();assert.match(visibleText(monthPopup(h)),/Utility revenue: -12 \$/);
+ hoverMonth(h,1);assert.match(visibleText(monthPopup(h)),/pinned details/);assert.match(visibleText(monthPopup(h)),/Utility revenue: -12 \$/);
+ click(h,'Dismiss month details');hit=nodes(h.tree).find(n=>n.props?.['data-chart-hit']==='0:0');hit.props.onFocus({currentTarget:dom});h.render();assert.match(visibleText(monthPopup(h)),/Utility revenue: -12 \$/);
+ h.render({series,type:'table'});const details=nodes(h.tree).filter(n=>n.type==='details'&&n.props.className==='mc-cell-details');assert.ok(details.length);assert.match(visibleText(details[0]),/Source details.*Utility revenue: -12 \$/);
+});
+
 test('month details expose source/quality and support focus, arrows, touch pinning and dismissal',async t=>{
  const h=await mount(t,{plotOnly:true},{series:[],type:'line'});const series=h.model.buildChartSeries(snapshot(),{...settings,metrics:['actualInsolation'],comparisonYears:1});h.render({series,type:'line'});await h.flush();
  let hit=nodes(h.tree).find(n=>n.props?.['data-chart-hit']==='0:0');assert.equal(hit.props.tabIndex,0);const dom=[...h.dom.values()].find(n=>n.props?.['data-chart-hit']==='0:0');
- hit.props.onFocus({currentTarget:dom});h.render();assert.match(html(h.tree),/provenance unknown/);assert.match(html(h.tree),/partial/i);assert.match(html(h.tree),/Jan 2025/);
+ hit.props.onFocus({currentTarget:dom});h.render();assert.match(html(h.tree),/Measured POA/);assert.match(html(h.tree),/partial/i);assert.match(html(h.tree),/Jan 2025/);
  hit=nodes(h.tree).find(n=>n.props?.['data-chart-hit']==='0:0');hit.props.onKeyDown({...event(),key:'ArrowRight',currentTarget:dom});h.render();assert.equal(h.document.activeElement.props['data-chart-hit'],'0:1');
  hit=nodes(h.tree).find(n=>n.props?.['data-chart-hit']==='0:0');hit.props.onClick({currentTarget:dom});h.render();assert.ok(button(h.tree,'Dismiss month details'));click(h,'Dismiss month details');assert.equal(nodes(h.tree).some(n=>n.props?.['data-month-details']),false);
 });

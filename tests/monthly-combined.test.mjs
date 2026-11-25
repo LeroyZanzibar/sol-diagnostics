@@ -1,3 +1,4 @@
+import {selectedPoa} from './monthly-poa-unit-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -9,7 +10,7 @@ const capacityFields=['budgetedSpecificYield','actualSpecificYield','specificYie
 const telemetryFields=['actualPerformanceRatio','performanceRatioRatio','insolationRatio','productionExpectedRatio','iapr','iar'];
 function inputs(c){
  const metric=value=>({value,state:'complete',partialIntervals:0,unknownQualityIntervals:0});
- return {projections:c.configuration?projectionRows(c.configuration).filter(r=>r.month===c.month):[structuredClone(c.projection)],utility:{[c.month]:structuredClone(c.utility)},capacity:{dcKwp:c.capacity,unavailableReason:null},telemetry:{state:'current',months:{[c.month]:{expected:metric(c.expected),insolation:metric(c.insolation)}}}};
+ return {projections:c.configuration?projectionRows(c.configuration).filter(r=>r.month===c.month):[structuredClone(c.projection)],utility:{[c.month]:structuredClone(c.utility)},capacity:{dcKwp:c.capacity,unavailableReason:null},telemetry:{poa:selectedPoa(),state:'current',months:{[c.month]:{expected:metric(c.expected),insolation:metric(c.insolation)}}}};
 }
 const calculate=f=>calculatedRows(f.projections,f.utility,f.telemetry,f.capacity)[f.projections[0].month];
 const named=name=>oracle.combinedCases.find(c=>c.name===name);

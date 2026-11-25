@@ -1,3 +1,4 @@
+import {seedMeasuredPoa} from './monthly-poa-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync} from 'node:fs';
@@ -26,8 +27,7 @@ test('native saved read-time metrics: site isolation, utility/model/config edits
  const utility={month:'2026-01',onPeak:'8000.0000',offPeak:'4000.000000000000001',unpaidEnergy:null,revenue:'1200',energyUsed:'0',invoiceCost:'-0.01'};
  for(const site of ['site','other']){
   const p=service.inputs.preview(site,0,config);service.inputs.saveConfiguration(site,0,config,p.token);service.inputs.saveUtility(site,1,[utility]);
-  const store=manager.site(site),stage=await store.stage({source:'csv',fileName:'Synthetic',timezone:'UTC',intervalMinutes:60,modelRevision:'fixture'},readings());
-  store.commit(stage.stageId,{previewToken:stage.previewToken,approveOverlap:false,modelRevision:'fixture',actor:'fixture'});
+  await seedMeasuredPoa({database:db,bucket:service.bucket,performance:manager,root,siteId:site,samples:[0,1].map(hour=>({timestamp:`2026-01-01T0${hour}:00:00.000Z`,poa:500,satellite:900,expected:5000}))});
  }
  // A convenient exact ordinary total, followed by a precise edit later.
  service.inputs.saveUtility('site',2,[{...utility,offPeak:'4000.0000'}]);

@@ -12,7 +12,7 @@ function attemptEdits(h){
  field(h.tree('settings'),'Operations start date').props.onChange({target:{value:'2025-01-01'}});
  field(h.tree('settings'),'Annual degradation (%)').props.onChange({target:{value:'9'}});
  field(h.tree('baselines'),'Baseline 3 production').props.onChange({target:{value:'987.625'}});
- field(h.tree('baselines'),'Reporting irradiance channel').props.onChange({target:{value:'later-channel'}});
+ field(h.tree('baselines'),'Measured POA sensor').props.onChange({target:{value:'later-channel'}});
 }
 function assertDisabled(h){for(const mode of ['utility','settings','baselines']){
  const controls=nodes(h.tree(mode)).filter(n=>['input','select'].includes(n.type));assert.ok(controls.length);

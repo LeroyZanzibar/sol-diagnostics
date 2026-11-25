@@ -12,7 +12,7 @@ export class MonthlyStore {
     // Read model capacity under the same shared-database snapshot as the inputs.
     // Verification, AC ratings and losses do not gate installed module DC kWp.
     const capacity=modelDcCapacity(read.all('SELECT id,type,parent_id AS parentId,module_rated_capacity_w AS moduleRatedCapacityW,quantity FROM equipment_assets WHERE site_id=? ORDER BY id',siteId));
-    return {siteId,revision:config?.revision??0,configuration:config?JSON.parse(config.configuration_json):emptyConfiguration(),utility,capacity};
+    return {siteId,revision:config?.revision??0,configuration:config?{...JSON.parse(config.configuration_json),poaSourceId:JSON.parse(config.configuration_json).poaSourceId??null}:emptyConfiguration(),utility,capacity};
   }
   read(siteId){return this.database.withSynchronousRead(read=>this.snapshot(read,siteId));}
   assertRevision(current,revision){demand(Number.isSafeInteger(revision)&&revision>=0,'An edit revision is required.');demand(current.revision===revision,'Monthly data changed in another session. Reload before editing.',409,'monthly-conflict');}
@@ -32,7 +32,7 @@ export class MonthlyStore {
     const months=[...new Set([...before.keys(),...after.keys()])].sort();
     const impact=months.filter(month=>JSON.stringify(before.get(month))!==JSON.stringify(after.get(month))).map(month=>({month,before:before.get(month)??null,after:after.get(month)??null}));
     const displayed=new Set(horizon(configuration.operationsStart));
-    return {siteId,revision,configuration,token:this.token(siteId,revision,configuration),impact,retainedOutsideWindow:Object.keys(current.utility).filter(month=>!displayed.has(month)),sourceChanged:current.configuration.irradianceChannelId!==configuration.irradianceChannelId};
+    return {siteId,revision,configuration,token:this.token(siteId,revision,configuration),impact,retainedOutsideWindow:Object.keys(current.utility).filter(month=>!displayed.has(month)),sourceChanged:current.configuration.poaSourceId!==configuration.poaSourceId};
   }
   saveConfiguration(siteId,revision,input,token){
     const configuration=validateConfiguration(input);

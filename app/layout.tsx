@@ -11,6 +11,7 @@ import "./foundry-theme.css";
 import "./issue-visibility.css";
 import "./jade-theme.css";
 import "./maintenance.css";
+import "./findings.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

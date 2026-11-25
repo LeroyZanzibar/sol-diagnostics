@@ -1,3 +1,4 @@
+import {seedMeasuredPoa} from './monthly-poa-fixture.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,mkdirSync,copyFileSync,readdirSync} from 'node:fs';
@@ -23,8 +24,9 @@ test('old in-flight calculation cannot overwrite a corrected generation from ano
  service.calculate=original;assert.equal((await service.read('site')).telemetry.state,'current');
 });
 test('pinned local calendar splits crossing intervals, explicit zero, channel-specific coverage and missingness',async t=>{
- const {store,service}=fixture(t);const timestamp='2024-03-31T18:00:00.000Z';
+ const {root,db,store,service,performance}=fixture(t);const timestamp='2024-03-31T18:00:00.000Z';
  await commit(store,[{timestamp,channel:expected,value:12},{timestamp,channel:irradiance,value:600},{timestamp:'2024-03-31T19:00:00.000Z',channel:expected,value:0}], 'Asia/Kolkata');
+ await seedMeasuredPoa({database:db,bucket:service.bucket,performance,root,samples:[{timestamp,poa:600,satellite:900,expected:12},{timestamp:'2024-03-31T19:00:00.000Z',poa:null,satellite:null,expected:0}]});
  // Later source timezone is not the reporting timezone.
  await commit(store,[{timestamp:'2024-03-31T20:00:00.000Z',channel:irradiance,value:null}], 'America/New_York');
  const result=await service.read('site');assert.equal(result.telemetry.timezone,'Asia/Kolkata');

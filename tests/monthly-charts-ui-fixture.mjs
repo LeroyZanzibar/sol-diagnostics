@@ -1,3 +1,4 @@
+import {selectedPoa} from './monthly-poa-unit-fixture.mjs';
 // UI-only deterministic hook runner. Production components and model are source-loaded;
 // only React scheduling, DOM focus, data-hook transport and view HTTP are controlled here.
 import assert from 'node:assert/strict';
@@ -16,7 +17,7 @@ export const settings = {start:'2026-01',end:'2026-03',type:'line',comparisonYea
 export function snapshot(siteId='site') {
   const metric = value => ({value:value===null?null:domain.fraction(value),state:value===null?'missing':'complete',coveredMilliseconds:2678400000,partialIntervals:0,unknownQualityIntervals:0,negativeIntervals:0});
   const utility = (onPeak,revenue) => ({onPeak,offPeak:null,unpaidEnergy:null,revenue,energyUsed:null,invoiceCost:null});
-  const s = {siteId,revision:1,configuration:domain.emptyConfiguration(),utility:{'2025-01':utility('8','-5'),'2026-01':utility('10','-12'),'2026-02':utility(null,'0'),'2026-03':utility('0','14')},projections:['2026-01','2026-02','2026-03','2049-12'].map(month => ({month,days:31,operationalDays:31,production:domain.fraction('9'),revenue:domain.fraction('11'),insolation:domain.fraction('2')})),capacity:{dcKwp:domain.fraction('2'),unavailableReason:null},telemetry:{state:'current',sourceRevision:3,timezone:'America/New_York',selectedChannelId:'irradiance-channel',selectionRequired:false,expectedChannelId:'expected-channel',expectedUnavailableReason:null,candidates:[],months:{'2026-01':{expected:metric('11'),insolation:{...metric('2'),state:'partial',unknownQualityIntervals:1,source:'Imported irradiance; satellite/POA provenance unknown'},expectedMilliseconds:2678400000}}}};
+  const s = {siteId,revision:1,configuration:domain.emptyConfiguration(),utility:{'2025-01':utility('8','-5'),'2026-01':utility('10','-12'),'2026-02':utility(null,'0'),'2026-03':utility('0','14')},projections:['2026-01','2026-02','2026-03','2049-12'].map(month => ({month,days:31,operationalDays:31,production:domain.fraction('9'),revenue:domain.fraction('11'),insolation:domain.fraction('2')})),capacity:{dcKwp:domain.fraction('2'),unavailableReason:null},telemetry:{poa:selectedPoa(),state:'current',sourceRevision:3,timezone:'America/New_York',selectedChannelId:'irradiance-channel',selectionRequired:false,expectedChannelId:'expected-channel',expectedUnavailableReason:null,candidates:[],months:{'2026-01':{expected:metric('11'),insolation:{...metric('2'),state:'partial',unknownQualityIntervals:1,source:'Measured POA sensor only'},expectedMilliseconds:2678400000}}}};
   s.calculated=domain.calculatedRows(s.projections,s.utility,s.telemetry,s.capacity);
   return s;
 }

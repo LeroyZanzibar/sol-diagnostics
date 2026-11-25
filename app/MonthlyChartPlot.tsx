@@ -214,7 +214,8 @@ export default function MonthlyChartPlot({series, type, onRemoveMetric}: Props) 
         <div><span className="mc-swatch" aria-hidden="true" style={{borderColor: chartSeriesColor(s.metric.color), borderTopStyle: s.yearOffset === 1 ? 'dashed' : s.yearOffset === 2 ? 'dotted' : 'solid'}}/><strong>{s.label}</strong></div>
         <p className="mc-detail-value">{point.display} <span>{displayUnit(point, s.metric.unit)}</span></p>
         <p>Source month: {formatChartMonth(point.sourceMonth)}</p>
-        <PointDetails point={point}/>
+        {/* Hover summarizes selected series only; focus and pin retain source detail. */}
+        {shown.mode !== 'hover' && <PointDetails point={point}/>}
       </div>;})}</div>
     </section>}
   </div>;

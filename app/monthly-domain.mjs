@@ -30,12 +30,14 @@ export function formatValue(value,places=0,group=false){
   return `${number<0n&&rounded!==0n?'-':''}${whole}${places?'.'+digits.slice(-places):''}`;
 }
 export function utilityTotal(onPeak,offPeak,unpaidEnergy=null){const values=[onPeak,offPeak,unpaidEnergy].filter(x=>x!==null&&x!==undefined&&x!=='');return values.length?add(...values.map(fraction)):null;}
-export function emptyConfiguration(){return {operationsStart:null,degradation:null,irradianceChannelId:null,baselines:Object.fromEntries(Array.from({length:12},(_,i)=>[String(i+1),{production:null,revenue:null,insolation:null}]))};}
+export function emptyConfiguration(){return {operationsStart:null,degradation:null,irradianceChannelId:null,poaSourceId:null,baselines:Object.fromEntries(Array.from({length:12},(_,i)=>[String(i+1),{production:null,revenue:null,insolation:null}]))};}
 export function daysInMonth(year,month){return new Date(Date.UTC(year,month,0)).getUTCDate();}
 export function validateMonth(month){demand(typeof month==='string'&&/^\d{4}-(0[1-9]|1[0-2])$/.test(month)&&month>='1900-01'&&month<='2100-12','Use a calendar month from 1900-01 through 2100-12.');return month;}
 export function validateConfiguration(input){
   demand(input&&typeof input==='object'&&!Array.isArray(input),'Configuration is required.');
   const {operationsStart,degradation,irradianceChannelId,baselines}=input;
+  const poaSourceId=input.poaSourceId??null;
+  demand(poaSourceId===null||typeof poaSourceId==='string'&&poaSourceId.length>0&&poaSourceId.length<=2048,'Choose an exact measured POA sensor.');
   if(operationsStart!==null){
     demand(typeof operationsStart==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(operationsStart)&&operationsStart>='1900-01-01'&&operationsStart<='2075-12-31','Operations start must be 1900-01-01 through 2075-12-31.');
     const [y,m,d]=operationsStart.split('-').map(Number);demand(m>=1&&m<=12&&d>=1&&d<=daysInMonth(y,m),'Operations start must be a valid calendar date.');
@@ -44,7 +46,7 @@ export function validateConfiguration(input){
   demand(irradianceChannelId===null||typeof irradianceChannelId==='string'&&irradianceChannelId.length>0&&irradianceChannelId.length<=2048,'Choose an exact irradiance channel.');
   demand(baselines&&typeof baselines==='object'&&Object.keys(baselines).length===12,'Supply twelve calendar-month baselines.');
   const normalized={};for(let m=1;m<=12;m++){const b=baselines[m];demand(b&&typeof b==='object','Each month requires three baseline fields.');normalized[m]=Object.fromEntries(baselineFields.map(k=>[k,nullableDecimal(b[k])]));}
-  return {operationsStart,degradation:rate,irradianceChannelId,baselines:normalized};
+  return {operationsStart,degradation:rate,irradianceChannelId,poaSourceId,baselines:normalized};
 }
 export function horizon(start){if(!start)return [];const [y,m]=start.split('-').map(Number);return Array.from({length:300},(_,i)=>new Date(Date.UTC(y,m-1+i,1)).toISOString().slice(0,7));}
 export function projectionRows(config){
@@ -123,13 +125,13 @@ function availableInput(value,label){
 function telemetryInput(telemetry,month,kind){
   const label=kind==='expected'?'Hourly Expected Production':'Actual insolation';
   if(telemetry?.state!=='current')return missingCalculated(`${label} is unavailable: telemetry is ${telemetry?.state==='refreshing'?'refreshing':'missing'}.`);
-  if(kind==='insolation'&&telemetry.selectionRequired)return missingCalculated('Select an available reporting irradiance channel for Actual insolation.');
+  if(kind==='insolation'&&telemetry.poa?.state!=='selected')return missingCalculated(telemetry.poa?.reason||'Select an available measured POA sensor for Actual insolation.');
   if(kind==='expected'&&telemetry.expectedUnavailableReason)return missingCalculated(telemetry.expectedUnavailableReason);
   const metric=telemetry.months[month]?.[kind];
-  if(!metric||metric.state==='missing'||metric.value===null)return missingCalculated(`${label} is missing for this month.`);
+  if(!metric||metric.state==='missing'||metric.value===null)return missingCalculated(metric?.reason||`${label} is missing for this month.`);
   if(metric.state!=='complete'){
     const details=[metric.partialIntervals?`${metric.partialIntervals} partial intervals`:null,metric.unknownQualityIntervals?'quality unknown':null].filter(Boolean);
-    return {value:metric.value,state:'partial',reason:`${label} has partial monthly coverage${details.length?` (${details.join('; ')})`:''}.`};
+    return {value:metric.value,state:'partial',reason:metric.reason||`${label} has partial monthly coverage${details.length?` (${details.join('; ')})`:''}.`};
   }
   return availableInput(metric.value,label);
 }

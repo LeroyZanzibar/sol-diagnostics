@@ -39,7 +39,7 @@ for(const id of [null,'forecast'])test(`actual importer/native monthly reports s
  const result=await f.service.read('site'),month=result.telemetry.months['2026-01'];
  // Retain genuine response/cache evidence, including the pre-fix missing result.
  writeFileSync(join(f.root,'observation.json'),JSON.stringify({id,receipt,retained,result},null,2));t.diagnostic(`Synthetic importer readback: ${f.root}`);
- assert.equal(formatValue(month.insolation.value,2),'1.00');
+ assert.equal(month.insolation.value,null);assert.equal(result.telemetry.poa.state,'missing');
  assert.equal(formatValue(month.expected.value),'36');
  assert.equal(result.telemetry.expectedUnavailableReason??null,null);
  assert.equal(month.expected.coveredMilliseconds,7200000);assert.equal(month.expected.state,'partial');assert.equal(month.expected.unknownQualityIntervals,0);
@@ -64,7 +64,7 @@ test('competing eligible expected series fail closed without suppressing insolat
  const result=await f.service.read('site'),month=result.telemetry.months['2026-01'];
  assert.equal(month.expected.value,null);assert.equal(month.expected.state,'missing');assert.equal(month.expected.coveredMilliseconds,0);
  assert.equal(result.telemetry.expectedChannelId,null);assert.match(result.telemetry.expectedUnavailableReason,/multiple.*Expected Production channels/i);
- assert.equal(formatValue(month.insolation.value,2),'1.00');assert.equal(result.telemetry.selectionRequired,false);
+ assert.equal(month.insolation.value,null);assert.equal(result.telemetry.poa.state,'missing');assert.equal(result.telemetry.selectionRequired,false);
  f.service.inputs.saveUtility('site',0,[{month:'2026-01',onPeak:'5.1250',offPeak:null,unpaidEnergy:null,revenue:null,energyUsed:null,invoiceCost:null}]);
  assert.equal((await f.service.read('site')).utility['2026-01'].onPeak,'5.1250');assert.equal(expectedRows(f,1).length,4);
 });
@@ -79,6 +79,6 @@ test('reopened version-1 named-channel cache is recomputed without a new import'
  await f.reopen();assert.equal(f.db.sqlite.prepare('SELECT calculation_version FROM monthly_rollups').get().calculation_version,1);
  const result=await f.service.read('site'),cached=f.db.sqlite.prepare('SELECT * FROM monthly_rollups WHERE site_id=?').get('site');
  assert.equal(formatValue(result.telemetry.months['2026-01'].expected.value),'36');assert.equal(result.telemetry.expectedChannelId,expectedId('forecast'));
- assert.equal(cached.calculation_version,2);assert.equal(JSON.parse(cached.payload_json).calculationVersion,2);
+ assert.equal(cached.calculation_version,3);assert.equal(JSON.parse(cached.payload_json).calculationVersion,3);
  assert.equal(cached.source_revision,1);assert.deepEqual(f.store.describe(),dataset);assert.deepEqual(expectedRows(f,1),retained);
 });
