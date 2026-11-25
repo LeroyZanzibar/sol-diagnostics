@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.11.25.2 — pending publication
+## 2026.11.25.2 — published November 25, 2026
 
 - Correct Actual Insolation in monthly data and charts to use uploaded hourly interval energy from the site’s mapped POA series. Sum Wh/m² by local calendar month and divide by 1,000; do not multiply by interval duration or exclude onsite, satellite, blended or generic uploaded readings based on provenance.
 - Resolve historical irradiance-name aliases on the same equipment without double-counting; preserve explicit series selection, missing/zero distinctions and partial coverage. Refresh prior derived rollups without changing canonical readings, utility inputs, analyses or reviews.
