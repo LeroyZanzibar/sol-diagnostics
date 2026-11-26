@@ -40,7 +40,7 @@ test('comparison appends a read-only whole-kWh loss column and retains all calcu
   assert.match(html,/Confirmed estimated loss \(kWh\)/);
   assert.match(html,/tabindex="0"[^>]*aria-label="Confirmed estimated loss \(kWh\)/);
   assert.equal(body.length,1);assert.equal(lossValue(body[0]),'1,235');
-  assert.equal(cells(body[0]).at(-1),lossCell(body[0]),'loss is appended, not substituted for an existing metric');
+  assert.equal(cells(body[0]).at(-2),lossCell(body[0]),'loss is appended, not substituted for an existing metric');
   assert.deepEqual([...body[0].matchAll(/data-calculated-field="([^"]+)"/g)].map(m=>m[1]),domain.calculatedFields);
   assert.equal(text(cells(body[0])[0]),'16','existing exact utility total is unchanged');
   assert.equal(text(cells(body[0])[1]),'20');assert.equal(text(cells(body[0])[3]),'-10');

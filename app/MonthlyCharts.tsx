@@ -22,7 +22,7 @@ function reportingMonth(snapshot: MonthlySnapshot | null) {
 }
 function availableRange(snapshot: MonthlySnapshot | null, fallback: string): MonthRange {
   if (!snapshot) return {start: fallback, end: fallback};
-  const months = [...new Set([...snapshot.projections.map(row => row.month), ...Object.keys(snapshot.utility), ...Object.keys(snapshot.telemetry.months), ...Object.keys(snapshot.calculated)])].sort();
+  const months = [...new Set([...snapshot.projections.map(row => row.month), ...Object.keys(snapshot.utility), ...Object.keys(snapshot.telemetry.months), ...Object.keys(snapshot.calculated), ...Object.keys(snapshot.confirmedLoss?.months ?? {}), ...Object.keys(snapshot.unconfirmedLoss?.months ?? {})])].sort();
   return {start: months[0] || fallback, end: months.at(-1) || fallback};
 }
 function exactSettings(a: ChartSettings, b: ChartSettings) {
@@ -259,7 +259,7 @@ export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
       </div>
       <div id={rangeErrorId} className="mc-range-error" role={validationError ? 'alert' : undefined}>{validationError && `Check the date range: ${validationError}`}</div>
       {notice && <p className="mc-notice" role="status">{notice}</p>}
-      {data.error && siteId && <div className="mc-data-error" role="alert"><strong>Monthly data could not be refreshed.</strong><p>{data.error} Telemetry-dependent values are hidden until freshness is confirmed. Other values come from the last accepted saved snapshot.</p><button type="button" onClick={() => void data.reload()} disabled={data.refreshing}>Retry</button></div>}
+      {data.error && siteId && <div className="mc-data-error" role="alert"><strong>Monthly data could not be refreshed.</strong><p>{data.error} Telemetry-dependent values and Confirmed estimated loss are hidden until freshness is confirmed. Other values come from the last accepted saved snapshot.</p><button type="button" onClick={() => void data.reload()} disabled={data.refreshing}>Retry</button></div>}
       {!siteId || !site ? <div className="mc-empty" role="status"><h2>{sites.length ? 'Choose a site' : 'No sites available'}</h2><p>Select a configured site to explore its saved monthly data.</p></div> : !ready ? <div className="mc-empty" role="status"><h2>{data.error ? 'Monthly data unavailable' : 'Loading saved monthly data…'}</h2><p>{data.error ? 'Retry the read to load this site.' : 'Reading utility actuals, projections and monthly telemetry.'}</p></div> : validationError ? <div className="mc-empty"><p>Correct the date range above to show the chart. No values are plotted for an invalid range.</p></div> : !selected.length ? <div className="mc-empty" role="status"><h2>Choose at least one metric</h2><p>Use a quick view or open Metrics to start a chart.</p></div> : <>
         <div className="mc-range-readout"><div><strong>{formatChartMonth(settings.start)} to {formatChartMonth(settings.end)}</strong><p>{settings.comparisonYears ? `Same calendar months, plus ${settings.comparisonYears === 2 ? 'two prior years' : 'one prior year'}. Source periods are labeled below.` : 'Monthly timeline'}{data.refreshing ? ' / Refreshing saved data…' : ''}</p></div><span>{new Set(selected.map(metric => metric.unit)).size > 2 ? 'Separate charts by unit' : 'Axes follow measurement units'}</span></div>
         {!hasValues && <div className="mc-empty" role="status"><h2>No numeric values in this selection</h2><p>Try another period or metric. Missing values are never treated as zero; the table retains source reasons.</p></div>}
@@ -269,6 +269,7 @@ export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
     </div>
     {snapshot && <details className="mc-source-notes"><summary>Monthly sources & calculation notes</summary>
       <p>Expected Production is the monthly total of imported hourly Expected Production, not projected production. Partial totals remain partial; missing values are not zero.</p>
+      <p>Confirmed estimated loss uses effective Confirmed findings from the current published analysis only. Zero is valid within established analysis coverage; unknown loss or unavailable publication is not zero. Source details include the published analysis, reporting timezone and finding counts.</p>
       <p>Actual insolation sums the selected uploaded POA interval energy / 1000 by local month, regardless of source labels. Missing readings stay missing; numeric subtotals remain partial. Conventional performance ratio expects matching projected POA insolation.</p>
       <p>Specific yield and performance ratio use saved connected module DC capacity, not AC limits or losses. {snapshot.capacity.unavailableReason || 'Capacity-dependent metrics use the saved model.'}</p>
       <p>Reporting timezone: {snapshot.telemetry.timezone || 'not yet pinned (UTC used for current-year shortcuts)'}. Telemetry source revision: {snapshot.telemetry.sourceRevision}. Status: {data.error ? 'freshness unavailable' : data.refreshing ? 'refreshing' : snapshot.telemetry.state}.</p>

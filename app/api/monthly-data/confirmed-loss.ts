@@ -1,4 +1,4 @@
-import {getBucketBinding, getDatabaseBinding, type SynchronousDatabaseReader} from '../../../db/binding';
+import {getBucketBinding, getDatabaseBinding, type SynchronousDatabaseReader, type SynchronousDatabaseWriter} from '../../../db/binding';
 import {optionalPerformanceStoreManager} from '../../../db/performance-store';
 import {DEPOT_CLEANUP_ID, DEPOT_SITE_ID} from '../../../db/depot-performance-cleanup';
 import {publishedAnalysisAvailable} from '../analysis-history/availability';
@@ -10,7 +10,7 @@ import {hasTimeZone, localMoment, monthlyLosses, siteWallTime} from '../../issue
 import {readCheckpoint} from '../performance-summary/checkpoint-storage';
 import {add, fraction, multiply} from '../../monthly-domain.mjs';
 import type {Fraction} from '../../monthly-domain.mjs';
-import type {MonthlyConfirmedLoss, MonthlyConfirmedLossMetric} from '../../monthly-types';
+import type {MonthlyConfirmedLoss, MonthlyConfirmedLossMetric, MonthlyUnconfirmedLoss} from '../../monthly-types';
 
 type Publication = {import_id:string; summary:string; processed_at:string};
 type Run = {id:string; site_id:string; import_id:string; analysis_object_key:string; status:string; parser_version:number; model_revision:string};
@@ -138,7 +138,7 @@ async function issueMonths(issue:Payload, source:ReturnType<typeof selection>, t
   return parts;
 }
 
-async function aggregate(payload:Payload, source:ReturnType<typeof selection>, reviews:Awaited<ReturnType<typeof effectiveReviews>>):Promise<MonthlyConfirmedLoss> {
+async function aggregate(payload:Payload, source:ReturnType<typeof selection>, reviews:Awaited<ReturnType<typeof effectiveReviews>>, unconfirmed = false):Promise<MonthlyConfirmedLoss> {
   const timezone = payload.timeZone || payload.summary?.timezone || payload.methodology?.timezone || source.input?.timezone;
   try {if (typeof timezone !== 'string' || !timezone) throw Error(); new Intl.DateTimeFormat('en', {timeZone:timezone}).format(0);}
   catch {throw new SourceUnavailable('The saved analysis reporting timezone is unavailable.');}
@@ -156,7 +156,8 @@ async function aggregate(payload:Payload, source:ReturnType<typeof selection>, r
       continue;
     }
     seen.set(issue.id, identity);
-    if (!isIssueVisible(issue, defaultIssueVisibility) || effectiveReviewStatus(issue, byKey.get(issue.eventKey)) !== 'Confirmed') continue;
+    const status = effectiveReviewStatus(issue, byKey.get(issue.eventKey));
+    if (!isIssueVisible(issue, defaultIssueVisibility) || !(unconfirmed ? status === 'Unreviewed' || status === 'Needs review' : status === 'Confirmed')) continue;
     for (const part of await issueMonths(issue, source, timezone, minutes)) {
       const month = siteWallTime(part.startDateTime, timezone).slice(0, 7), target = months[month];
       if (!target) continue; // No fabricated coverage outside the saved analyzed domain.
@@ -170,15 +171,28 @@ async function aggregate(payload:Payload, source:ReturnType<typeof selection>, r
   return {state:'current', analysisRunId:source.run!.id, timezone, months, reason:null};
 }
 
-/** Fresh read-only composition; never persisted in the telemetry/monthly cache. */
-export async function readMonthlyConfirmedLoss(siteId:string):Promise<MonthlyConfirmedLoss> {
+type ReviewedLosses = {confirmedLoss:MonthlyConfirmedLoss; unconfirmedLoss:MonthlyUnconfirmedLoss};
+function unconfirmedResult(source:MonthlyConfirmedLoss):MonthlyUnconfirmedLoss {
+  const reason = (text:string|null) => text?.replace(/\bconfirmed estimated\b/g, 'unconfirmed estimated').replace(/\bConfirmed\b/g, 'Unconfirmed') ?? null;
+  return {...source, reason:reason(source.reason), months:Object.fromEntries(Object.entries(source.months).map(([month, metric]) => {
+    const {confirmedCount, ...rest} = metric;
+    return [month, {...rest, unconfirmedCount:confirmedCount, reason:reason(metric.reason)}];
+  }))};
+}
+const pairAbsent = (source:MonthlyConfirmedLoss):ReviewedLosses => ({confirmedLoss:source, unconfirmedLoss:unconfirmedResult(source)});
+
+/** Both partitions share one publication/review fence. Persist only derived
+ * Unconfirmed data, never inputs, analyses or reviews. Recompute on every read:
+ * a retained materialization is NOT authority to serve a stale publication. */
+export async function readMonthlyReviewedLoss(siteId:string, persist = true):Promise<ReviewedLosses> {
   try {
     const db = getDatabaseBinding();
     if (!db.withSynchronousRead) throw new SourceUnavailable('A consistent read of the current published analysis is unavailable.');
     for (let attempt = 0; attempt < 2; attempt++) {
       const source = db.withSynchronousRead((read:SynchronousDatabaseReader) => selection(read, siteId));
-      if (!source.row) return absent('missing', 'No current published analysis is available for this site.');
-      let keys:string[] = [], versions:string|undefined, result:MonthlyConfirmedLoss;
+      let keys:string[] = [], versions:string|undefined, result:ReviewedLosses;
+      if (!source.row) result = pairAbsent(absent('missing', 'No current published analysis is available for this site.'));
+      else {
       try {
         if (!await publishedAnalysisAvailable(db, siteId, source.row.import_id, source.pointer) || !source.run)
           throw new SourceUnavailable('The current published analysis is unavailable. No historical analysis is substituted.');
@@ -189,19 +203,47 @@ export async function readMonthlyConfirmedLoss(siteId:string):Promise<MonthlyCon
         keys = [...new Set<string>([...payload.analysis.issues, ...(payload.analysis.recurringIssues || [])].map(issue => issue.eventKey))].sort();
         versions = db.withSynchronousRead((read:SynchronousDatabaseReader) => reviewVersions(read, siteId, keys));
         const reviews = await effectiveReviews(db, siteId, source.run.id, payload, payload.analysis.issues.map((issue:Payload) => issue.eventKey));
-        result = await aggregate(payload, source, reviews);
+        const confirmedLoss = await aggregate(payload, source, reviews);
+        let unconfirmedLoss:MonthlyUnconfirmedLoss;
+        try {unconfirmedLoss = unconfirmedResult(await aggregate(payload, source, reviews, true));}
+        catch (error) {unconfirmedLoss = unconfirmedResult(absent('unavailable', error instanceof SourceUnavailable ? error.message : 'Unconfirmed findings could not be read.', source.run.id));}
+        result = {confirmedLoss, unconfirmedLoss};
       } catch (error) {
-        result = absent('unavailable', error instanceof SourceUnavailable ? error.message : 'The current published analysis or its reviews could not be read.', source.run?.id || null);
+        result = pairAbsent(absent('unavailable', error instanceof SourceUnavailable ? error.message : 'The current published analysis or its reviews could not be read.', source.run?.id || null));
+      }
       }
       // One non-yielding final snapshot fences the selected pointer, run status,
       // current input and all relevant review versions after every async read.
-      const stable = db.withSynchronousRead((read:SynchronousDatabaseReader) => selection(read, siteId).signature === source.signature &&
-        (versions === undefined || reviewVersions(read, siteId, keys) === versions));
+      const fence = (read:SynchronousDatabaseReader) => selection(read, siteId).signature === source.signature &&
+        (versions === undefined || reviewVersions(read, siteId, keys) === versions);
+      let stable:boolean;
+      try {
+        stable = persist && db.withSynchronousWrite ? db.withSynchronousWrite((write:SynchronousDatabaseWriter) => {
+          if (!fence(write)) return false;
+          write.run(`INSERT INTO monthly_unconfirmed_loss(site_id,calculation_version,publication_identity,review_identity,payload_json)
+            VALUES (?,1,?,?,?) ON CONFLICT(site_id) DO UPDATE SET calculation_version=excluded.calculation_version,
+            publication_identity=excluded.publication_identity,review_identity=excluded.review_identity,payload_json=excluded.payload_json
+            WHERE calculation_version<>excluded.calculation_version OR publication_identity<>excluded.publication_identity
+            OR review_identity<>excluded.review_identity OR payload_json<>excluded.payload_json`, siteId, source.signature, versions ?? '[]', JSON.stringify(result.unconfirmedLoss));
+          return true;
+        }) : db.withSynchronousRead(fence);
+        if (persist && !db.withSynchronousWrite) throw new SourceUnavailable('Derived monthly loss storage is unavailable.');
+      } catch {
+        // A derived-cache failure cannot invalidate an independently read Confirmed
+        // result or block utility saves. Never claim an unpersisted value is current.
+        stable = db.withSynchronousRead(fence);
+        result.unconfirmedLoss = unconfirmedResult(absent('unavailable', 'Derived monthly loss storage is unavailable.', source.run?.id || null));
+      }
       if (stable) return result;
     }
-    return absent('refreshing', 'The current publication or reviews changed during this read. Refreshing confirmed estimated loss.');
+    return pairAbsent(absent('refreshing', 'The current publication or reviews changed during this read. Refreshing confirmed estimated loss.'));
   } catch {
     // Derived-source failure must not block unrelated utility/configuration saves.
-    return absent('unavailable', 'The current published analysis or its reviews could not be read.');
+    return pairAbsent(absent('unavailable', 'The current published analysis, reviews or derived monthly storage could not be read.'));
   }
+}
+
+/** Compatibility read-only Confirmed service. */
+export async function readMonthlyConfirmedLoss(siteId:string):Promise<MonthlyConfirmedLoss> {
+  return (await readMonthlyReviewedLoss(siteId, false)).confirmedLoss;
 }

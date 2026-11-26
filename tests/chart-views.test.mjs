@@ -62,7 +62,7 @@ test('save returns exact settings and generated metadata; GET uses deterministic
   assert.deepEqual(JSON.parse(row.settings_json), body.settings);
   assert.deepEqual(await responseJson(await api.GET(), 200), {views:[view]});
   const all={...settings(), type:'line', comparisonYears:0, metrics:model.chartMetrics.map(metric => metric.id)};
-  assert.equal(all.metrics.length, 24);
+  assert.equal(all.metrics.length, 26);
   assert.deepEqual((await saved(api, {name:'Every metric', settings:all})).settings, plain(all));
   const insert=db.sqlite.prepare('INSERT INTO chart_views (id,user_id,name,name_key,settings_json,created_at) VALUES (?,?,?,?,?,?)');
   for (const id of ['order-z','order-a']) insert.run(id, 'primary-user', id, id, JSON.stringify(settings()), '2000-01-01T00:00:00.000Z');

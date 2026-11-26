@@ -7,7 +7,7 @@ import {monthlyFixture} from './monthly-fixture.mjs';
 import {emptyConfiguration} from '../../app/monthly-domain.mjs';
 import {seedMonthlyLossRun,monthlyLossIssues,saveLossReview,lossRequest,lossTimezone} from './monthly-confirmed-loss-fixture.mjs';
 const fraction=(n,d='1')=>({n,d});
-const withoutLoss=({confirmedLoss,...rest})=>rest;
+const withoutLoss=({confirmedLoss,unconfirmedLoss,...rest})=>{assert.ok(unconfirmedLoss);return rest;};
 const tables=['monthly_configuration','monthly_utility','monthly_rollups','analysis_runs','analysis_jobs','issue_event_reviews','issue_review_changes','performance_summaries','telemetry_imports'];
 const retained=f=>f.inspect(db=>({tables:Object.fromEntries(tables.map(table=>[table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])),objects:db.prepare('SELECT key,path FROM __sol_objects ORDER BY key').all().map(({key,path})=>[key,createHash('sha256').update(readFileSync(join(f.directory,'objects',path))).digest('hex')])}));
 

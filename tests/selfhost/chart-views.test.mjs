@@ -14,7 +14,7 @@ const migrations=resolve('drizzle');
 const inventory=() => readdirSync(migrations).filter(name => /^\d+.*\.sql$/.test(name)).sort();
 const hash=path => createHash('sha256').update(readFileSync(path)).digest('hex');
 const settings={start:'2024-11', end:'2026-02', type:'bar', comparisonYears:2,
-  metrics:['utilityTotal','budgetRevenue','actualInsolation','iapr']};
+  metrics:['utilityTotal','budgetRevenue','actualInsolation','iapr','confirmedLoss','unconfirmedLoss']};
 const plain=value => JSON.parse(JSON.stringify(value));
 function modules(db) {
   const model=loadSource('app/monthly-chart-model.ts', [], {...monthlyDomain, JSON});
@@ -112,7 +112,7 @@ if (!isMainThread && workerData?.chartViewsWriter) {
         db=new LocalDatabase(path, migrations);
         assert.deepEqual(ledger(db).map(row => row.name), names);
         assert.deepEqual(ledger(db).slice(0,oldLedger.length), oldLedger);
-        assert.deepEqual(retained(db), before);
+        assert.deepEqual(retained(db), {...before,monthly_unconfirmed_loss:[]});
         const {api}=modules(db);
         if (reopen===0) {
           assert.deepEqual(await (await api.GET()).json(), {views:[]});
@@ -129,7 +129,7 @@ if (!isMainThread && workerData?.chartViewsWriter) {
         if (reopen===0) persistedBytes=stored.settings_json;
         assert.equal(stored.settings_json,persistedBytes);
         assert.deepEqual(JSON.parse(stored.settings_json),settings);
-        assert.deepEqual(retained(db), before, 'save/reopen never changes user settings, sites, inputs, summaries, reviews or object metadata');
+        assert.deepEqual(retained(db), {...before,monthly_unconfirmed_loss:[]}, 'save/reopen never changes user settings, sites, inputs, summaries, reviews or object metadata');
         assert.equal(await (await new LocalBucket(db,join(root,'objects')).get('analysis/retained.json')).text(), objectBytes);
         assert.equal(db.sqlite.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
         assert.deepEqual(db.sqlite.prepare('PRAGMA foreign_key_check').all(), []);
