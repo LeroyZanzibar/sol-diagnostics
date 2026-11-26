@@ -8,7 +8,7 @@ import {loadSource} from './source-module.mjs';
 export const oracle = JSON.parse(readFileSync(new URL('./monthly-calculated-oracle.json', import.meta.url), 'utf8'));
 export const metricIds = [
   'onPeak', 'offPeak', 'unpaidEnergy', 'utilityTotal', 'energyUsed',
-  'projectedProduction', 'expectedProduction', 'revenue', 'invoiceCost',
+  'projectedProduction', 'expectedProduction', 'confirmedLoss', 'unconfirmedLoss', 'revenue', 'invoiceCost',
   'budgetRevenue', 'actualInsolation', 'projectedInsolation',
   'budgetedSpecificYield', 'actualSpecificYield', 'specificYieldRatio',
   'budgetedPerformanceRatio', 'actualPerformanceRatio', 'performanceRatioRatio',

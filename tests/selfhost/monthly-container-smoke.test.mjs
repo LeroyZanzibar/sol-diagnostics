@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {spawn, execFileSync} from 'node:child_process';
+import {lossStorageProgram, runMonthlyLossPersistenceSmoke, verifyMonthlyLossPersistence} from '../../scripts/monthly-loss-persistence-smoke.mjs';
 import {once} from 'node:events';
 import {mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -112,8 +113,43 @@ async function fixture(t) {
       }
     } finally { manager.close(); }
   }
-  return {root, start, stop, request, api, verifyStore};
+  const lossStorage = (mode, siteId) => JSON.parse(execFileSync(process.execPath,
+    ['--input-type=module', '-e', lossStorageProgram, mode, directory, siteId], {
+      cwd: fileURLToPath(new URL('../../', import.meta.url)), encoding: 'utf8', timeout: 15000,
+    }));
+  return {root, directory, start, stop, request, api, verifyStore, lossStorage};
 }
+
+test('native-container positive monthly loss smoke: exact stored bytes before GET after production restart', {timeout: 90000}, async t => {
+  const f = await fixture(t);
+  await f.start();
+  const scenario = await runMonthlyLossPersistenceSmoke({api: f.api, storage: f.lossStorage});
+  assert.ok(Object.isFrozen(scenario.expected));
+  assert.ok(Object.isFrozen(scenario.expected.unconfirmedLoss.months['2026-01'].value));
+  const snapshot = join(f.root, 'loss-expected.json');
+  writeFileSync(snapshot, JSON.stringify(scenario.expected));
+  const bytes = readFileSync(snapshot, 'utf8');
+  const verify = () => verifyMonthlyLossPersistence({api: f.api, storage: f.lossStorage,
+    expected: JSON.parse(readFileSync(snapshot, 'utf8'))});
+  await verify();
+  await f.stop();
+  await f.start();
+  assert.equal(readFileSync(snapshot, 'utf8'), bytes);
+  await verify(); // Shared verifier reads SQLite BEFORE the recomputing monthly GET.
+  // A missing materialization must fail before GET can repair it.
+  const db = new DatabaseSync(join(f.directory, 'sol-diagnostics.sqlite'));
+  try { db.prepare('DELETE FROM monthly_unconfirmed_loss WHERE site_id=?').run(scenario.expected.siteId); }
+  finally { db.close(); }
+  let reads = 0;
+  await assert.rejects(verifyMonthlyLossPersistence({expected: JSON.parse(bytes), storage: f.lossStorage,
+    api: async (...args) => { reads++; return f.api(...args); }}), /persisted monthly loss/);
+  assert.equal(reads, 0, 'Missing stored rows must not be silently regenerated');
+  if (process.env.SOL_MONTHLY_SMOKE_EVIDENCE_DIR) {
+    mkdirSync(process.env.SOL_MONTHLY_SMOKE_EVIDENCE_DIR, {recursive: true});
+    writeFileSync(join(process.env.SOL_MONTHLY_SMOKE_EVIDENCE_DIR, 'loss-expected.json'), bytes);
+  }
+  t.diagnostic('Shared native path: independent positive Confirmed/Unconfirmed, dismissed and historical exclusions, local-month counted ledger, unknown/zero/missing, exact SQLite payload before GET after host restart. Docker execution remains CI-only.');
+});
 
 test('native-container monthly smoke scenario: exact inputs, approved projections, calculated metrics, corrected telemetry and real production-server restart', {timeout: 90000}, async t => {
   const f = await fixture(t);

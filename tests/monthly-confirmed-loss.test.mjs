@@ -21,11 +21,14 @@ test('GET composes the current Confirmed loss and review-only changes leave mont
   assert.equal(first.confirmedLoss.state, 'current'); assert.equal(first.confirmedLoss.analysisRunId, 'current');
   assert.deepEqual(first.confirmedLoss.months['2026-07'], metric(zero, 0));
   assert.equal(first.confirmedLoss.months['2026-08'], undefined, 'outside saved analysis coverage is not zero');
-  assert.deepEqual(databaseSnapshot(f.db), stored, 'derived read must not alter SQLite');
+  const {monthly_unconfirmed_loss:materialized,...unchanged}=databaseSnapshot(f.db);
+  assert.deepEqual(unchanged,(({monthly_unconfirmed_loss,...rest})=>rest)(stored),'only derived Unconfirmed storage may change');
+  assert.deepEqual(JSON.parse(materialized[0].payload_json),first.unconfirmedLoss);
+  assert.deepEqual(first.unconfirmedLoss.months['2026-06'].value,zero);
   for (const [status, expected] of [['Dismissed', zero], ['Confirmed', {n:'10', d:'1'}]]) {
     await f.decide('current', a, status); const changed = await f.read();
     assert.deepEqual(changed.confirmedLoss.months['2026-06'].value, expected);
-    const {confirmedLoss, ...native} = changed; assert.deepEqual(native, before);
+    const {confirmedLoss, unconfirmedLoss, ...native} = changed; assert.deepEqual(unconfirmedLoss.months['2026-06'].value,zero); assert.deepEqual(native, before);
   }
   await f.reopen(); assert.deepEqual((await f.read()).confirmedLoss.months['2026-06'].value, {n:'10', d:'1'});
 });
@@ -33,10 +36,14 @@ test('GET composes the current Confirmed loss and review-only changes leave mont
 test('no publication or historical-only runs remain missing and never materialize a performance database', async t => {
   const f = fixture(t); seedInput(f.db); await f.run({id:'historical', publish:false});
   const before = databaseSnapshot(f.db), files = readdirSync(join(f.root, 'performance'));
-  const loss = (await f.read()).confirmedLoss;
+  const snapshot = await f.read(), loss = snapshot.confirmedLoss;
+  const {monthly_unconfirmed_loss:materialized,...unchanged}=databaseSnapshot(f.db);
+  assert.deepEqual(JSON.parse(materialized[0].payload_json),snapshot.unconfirmedLoss);
+  assert.equal(snapshot.unconfirmedLoss.state,'missing');
+  assert.deepEqual(unchanged,(({monthly_unconfirmed_loss,...rest})=>rest)(before));
   assert.ok(loss, 'missing publication still has an explicit loss availability object');
   assert.deepEqual({...loss, reason:'reason'}, {state:'missing', analysisRunId:null, timezone:null, months:{}, reason:'reason'});
-  assert.ok(loss.reason); assert.deepEqual(databaseSnapshot(f.db), before); assert.deepEqual(readdirSync(join(f.root, 'performance')), files);
+  assert.ok(loss.reason); assert.deepEqual(readdirSync(join(f.root, 'performance')), files);
 });
 
 test('only the input-matching publication contributes, never newer history or another site', async t => {

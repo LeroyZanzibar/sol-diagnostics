@@ -5,10 +5,10 @@ import {loadChartModel, metricIds, telemetryIds, oracle, snapshot, settings, pla
 
 const first = (model, s, id, read) => model.buildChartSeries(s, settings({metrics: [id]}), read)[0].points[0];
 
-test('catalog has exactly the approved 24 metrics and quick views, with stable source/unit metadata', () => {
+test('catalog has exactly the approved 26 metrics and unchanged quick views, with stable source/unit metadata', () => {
   const model = loadChartModel();
   assert.deepEqual(plain(model.chartMetrics.map(m => m.id)), metricIds);
-  assert.equal(new Set(model.chartMetrics.map(m => m.color)).size, 24);
+  assert.equal(new Set(model.chartMetrics.map(m => m.color)).size, 26);
   assert.deepEqual(plain(model.chartMetrics.filter(m => m.telemetry).map(m => m.id)).sort(), [...telemetryIds].sort());
   for (const metric of model.chartMetrics) {
     assert.ok(metric.label && metric.description && metric.color);
@@ -223,6 +223,9 @@ test('refresh/error or noncurrent telemetry suppress every dependent value, reta
         assert.notEqual(p.raw, null, 'retains original source, never rewrites the snapshot');
         assert.match(p.reason, pattern);
         assert.match(p.details.join(' '), /23/);
+      } else if (item.metric.id === 'confirmedLoss' || item.metric.id === 'unconfirmedLoss') {
+        assert.equal(p.state, read ? 'stale' : 'missing');
+        assert.equal(p.plotValue, null, 'fixture has no published analysis');
       } else if (item.metric.id !== 'unpaidEnergy') assert.equal(p.state, 'available', item.metric.id);
     }
   }

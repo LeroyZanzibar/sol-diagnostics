@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.11.26.1 — publication pending
+
+- Add Confirmed estimated loss to Charts across line, bar, table, selected metrics and prior-year comparisons, using the authoritative monthly snapshot and preserving exact underlying fractions, missing/zero distinctions and saved views.
+- Add read-only Unconfirmed estimated loss to Monthly comparison and Charts for effective Unreviewed or Needs review findings in the current published analysis. Exclude effective Confirmed/Dismissed and historical analyses; preserve counted interval losses, saved site-local month boundaries and explicit unknown coverage.
+- Persist the complete derived Unconfirmed monthly snapshot through additive migration `0024_monthly_unconfirmed_loss.sql`. Revalidate publication/review identities on permitted reads without rewriting utility inputs, canonical telemetry, saved analyses or reviews. Preserve existing Charts mount/site/Retry-only refresh behavior and monthly draft protections.
+- Extend native-image lifecycle checks with independently asserted positive Confirmed/Unconfirmed totals and exact persisted row verification before any recomputing read after restart/recreation, retaining existing authentication, hardening and persistence checks.
+- No automatic downloads, imports or analysis runs. Back up complete app data before updating; publication and installed-app deployment remain separate.
+
 ## 2026.11.25.3 — published November 25, 2026
 
 - Stop automatic Charts polling and background refresh on focus, visibility changes, or saved-preference changes. Charts load on page mount and site changes; explicit error Retry remains available.

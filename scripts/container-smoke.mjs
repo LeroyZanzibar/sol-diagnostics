@@ -9,6 +9,7 @@ import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {runPerformancePersistenceSmoke} from './performance-persistence-smoke.mjs';
 import {runMonthlyPersistenceSmoke, verifyMonthlyPersistence} from './monthly-persistence-smoke.mjs';
+import {lossStorageProgram, runMonthlyLossPersistenceSmoke, verifyMonthlyLossPersistence} from './monthly-loss-persistence-smoke.mjs';
 import {runChartViewsPersistenceSmoke, verifyChartViewsPersistence} from './chart-views-persistence-smoke.mjs';
 
 const image = process.argv[2];
@@ -101,6 +102,11 @@ try {
   const performance = await runPerformancePersistenceSmoke({api, request, siteId: site.id});
   const monthly = await runMonthlyPersistenceSmoke({api, request});
   const chartViews = await runChartViewsPersistenceSmoke({api, request});
+  const lossStorage = (mode, siteId) => JSON.parse(docker('exec', name, 'node', '--input-type=module',
+    '-e', lossStorageProgram, mode, '/data', siteId));
+  const loss = await runMonthlyLossPersistenceSmoke({api, storage: lossStorage});
+  const lossSnapshot = join(root, 'loss-expected.json');
+  writeFileSync(lossSnapshot, JSON.stringify(loss.expected));
   // Keep the approved expectation outside the image and /data. Every lifecycle
   // readback uses these same bytes, never a new snapshot from the restarted app.
   const monthlySnapshot = join(root, 'monthly-expected.json');
@@ -119,6 +125,9 @@ try {
     } finally {db.close();}
   `;
   const persisted = async () => {
+    await verifyMonthlyLossPersistence({api, storage: lossStorage,
+      expected: JSON.parse(readFileSync(lossSnapshot, 'utf8'))});
+    console.log('PASS: positive Confirmed/Unconfirmed totals and exact persisted loss payload before recomputing GET.');
     assert.ok((await api('/api/site-settings')).sites.some(item => item.id === site.id && item.name === site.name));
     const settings = (await api('/api/user-settings')).user;
     assert.equal(settings.firstName, 'Synthetic');

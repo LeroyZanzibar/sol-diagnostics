@@ -17,6 +17,8 @@ export const chartMetrics: readonly ChartMetricDefinition[] = [
   {id: 'energyUsed', label: 'Utility energy used', unit: 'kWh', group: 'Production', telemetry: false, color: '#8c6199', description: 'Saved utility energy used, not generation.'},
   {id: 'projectedProduction', label: 'Projected production', unit: 'kWh', group: 'Production', telemetry: false, color: '#b3872f', description: 'Saved projection after operations-start proration and annual degradation.'},
   {id: 'expectedProduction', label: 'Expected Production', unit: 'kWh', group: 'Production', telemetry: true, color: '#5c81b3', description: 'Monthly total of imported hourly Expected Production, already weather-adjusted; not the budget projection.'},
+  {id: 'confirmedLoss', label: 'Confirmed estimated loss', unit: 'kWh', group: 'Production', telemetry: false, color: '#a65b45', description: 'Saved estimated loss from effective Confirmed findings in the current published analysis only; not a recalculation or a sum of historical analyses.'},
+  {id: 'unconfirmedLoss', label: 'Unconfirmed estimated loss', unit: 'kWh', group: 'Production', telemetry: false, color: '#8a6fba', description: 'Persisted monthly estimated loss from effective Unreviewed and Needs review findings in the current published analysis only. Effective Confirmed and Dismissed are excluded; historical analyses are not summed.'},
   {id: 'revenue', label: 'Utility revenue', unit: '$', group: 'Revenue', telemetry: false, color: '#32736b', description: 'Saved utility revenue; signed values are retained.'},
   {id: 'invoiceCost', label: 'Invoice energy used cost', unit: '$', group: 'Revenue', telemetry: false, color: '#ab6051', description: 'Saved invoice energy used cost; signed values are retained.'},
   {id: 'budgetRevenue', label: 'Budgeted revenue', unit: '$', group: 'Revenue', telemetry: false, color: '#c18d49', description: 'Saved revenue projection after operations-start proration and annual degradation.'},
@@ -142,6 +144,12 @@ export function defaultRange(snapshot: MonthlySnapshot, fallbackMonth: string): 
         row[kind]?.state !== 'missing' && exactFraction(row[kind]?.value ?? null) !== null));
     }
   }
+  for (const source of [snapshot.confirmedLoss, snapshot.unconfirmedLoss]) {
+    if (source?.state !== 'current') continue;
+    for (const [month, value] of Object.entries(source.months)) {
+      record(month, value.state === 'complete' && value.unknownCount === 0 && exactFraction(value.value) !== null);
+    }
+  }
   const end = [...observed].sort().at(-1) ?? fallbackMonth;
   // At the lower selection boundary there are fewer than twelve legal months.
   return {start: indexMonth(Math.max(monthIndex('1900-01'), monthIndex(end) - 11)), end};
@@ -218,7 +226,7 @@ function chartPoint(snapshot: MonthlySnapshot, metric: ChartMetricDefinition, an
   const id = metric.id, calculated = calculatedIds.has(id);
   const dependencies: Dependencies = calculated ? calculatedDependencies[id as MonthlyCalculatedField] :
     utilityIds.has(id) || id === 'utilityTotal' ? {utility: true} :
-    id in projectionFields ? {projection: true} : {telemetry: id === 'expectedProduction' ? 'expected' : 'insolation'};
+    id in projectionFields ? {projection: true} : id === 'confirmedLoss' || id === 'unconfirmedLoss' ? {} : {telemetry: id === 'expectedProduction' ? 'expected' : 'insolation'};
   const details = [`Source month: ${formatChartMonth(sourceMonth)} (${sourceMonth}).`, `Monthly input revision: ${snapshot.revision}.`, metric.description];
   if (dependencies.utility) details.push(...utilityDetails(snapshot, sourceMonth));
   if (dependencies.projection) details.push(...projectionDetails(projection));
@@ -230,7 +238,24 @@ function chartPoint(snapshot: MonthlySnapshot, metric: ChartMetricDefinition, an
   let raw: ChartPoint['raw'] = null;
   let state: ChartPoint['state'] = 'available';
   let reason: string | null = null;
-  if (calculated) {
+  if (id === 'confirmedLoss' || id === 'unconfirmedLoss') {
+    const label = id === 'confirmedLoss' ? 'Confirmed' : 'Unconfirmed';
+    const source = snapshot[id], value = source?.months[sourceMonth];
+    const unknown = value?.state === 'partial' || (value?.unknownCount ?? 0) > 0;
+    details.push(`Published analysis: ${source?.analysisRunId || 'unavailable'}; source state: ${source?.state || 'missing'}.`,
+      `Analysis reporting timezone: ${source?.timezone || 'unknown'}.`,
+      value ? `Analysis coverage: ${value.state}; ${'confirmedCount' in value ? value.confirmedCount : value.unconfirmedCount} ${label} findings; ${value.unknownCount} unknown.` :
+        'This source month is outside established saved analysis coverage.');
+    if (source?.state !== 'current') {
+      state = 'missing'; reason = source?.reason || `${label} estimated loss source is ${source?.state || 'missing'}; current publication is unavailable.`;
+    } else if (unknown) {
+      state = 'missing'; reason = value?.reason || `At least one ${label} finding has unknown estimated loss; no monthly total is available.`;
+    } else if (value?.state === 'complete' && value.value !== null) {
+      raw = value.value; reason = value.reason;
+    } else {
+      state = 'missing'; reason = value?.reason || `${label} estimated loss is unavailable outside established saved analysis coverage.`;
+    }
+  } else if (calculated) {
     const value = snapshot.calculated[sourceMonth]?.[id as MonthlyCalculatedField];
     raw = value?.value ?? null;
     state = value?.state ?? 'missing';
@@ -265,6 +290,11 @@ function chartPoint(snapshot: MonthlySnapshot, metric: ChartMetricDefinition, an
     if (stale) {state = 'stale'; reason = stale;}
   }
 
+  if ((id === 'confirmedLoss' || id === 'unconfirmedLoss') && (read.error || read.refreshing)) {
+    state = 'stale';
+    reason = read.error ? `${metric.label} freshness is unavailable: ${read.error}` :
+      `Current publication and ${metric.label} findings are being checked while monthly data is refreshing.`;
+  }
   let plotValue: number | null = null, display = '—';
   if (state !== 'missing' && state !== 'stale' && raw !== null) {
     const exact = exactFraction(raw);

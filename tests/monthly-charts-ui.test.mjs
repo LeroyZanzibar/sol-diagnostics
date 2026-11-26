@@ -27,7 +27,7 @@ test('presets change only metrics, selector groups/search/clear/chips change ren
  assert.equal(button(h.tree,'Bar').props['aria-pressed'],true);assert.equal(button(h.tree,'Second prior year').props['aria-pressed'],true);
  assert.ok(nodes(h.tree).some(n=>n.type==='rect'&&n.props['data-value']<0));
  change(h,'Search metrics','insolation');assert.equal(nodes(h.tree).some(n=>n.type==='input'&&n.props['data-metric-id']==='revenue'),false);
- click(h,'Select all');change(h,'Search metrics','');assert.equal(selected(h).length,24);click(h,'Clear');assert.match(html(h.tree),/Choose at least one metric/i);assert.equal(nodes(h.tree).some(n=>n.type==='svg'),false);
+ click(h,'Select all');change(h,'Search metrics','');assert.equal(selected(h).length,26);click(h,'Clear');assert.match(html(h.tree),/Choose at least one metric/i);assert.equal(nodes(h.tree).some(n=>n.type==='svg'),false);
  click(h,'Overview');click(h,'Remove Actual insolation');assert.equal(selected(h).includes('actualInsolation'),false);
 });
 

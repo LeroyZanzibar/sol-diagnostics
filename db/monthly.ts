@@ -1,7 +1,7 @@
 import type {MonthlySnapshot,MonthlyPreview} from '../app/monthly-types';
 import type {MonthlyConfiguration,UtilityValues} from '../app/monthly-domain.mjs';
 type MonthlyRuntime={
-  read(siteId:string):Promise<Omit<MonthlySnapshot,'confirmedLoss'>>;
+  read(siteId:string):Promise<Omit<MonthlySnapshot,'confirmedLoss'|'unconfirmedLoss'>>;
   validateSelection(siteId:string,config:MonthlyConfiguration):Promise<void>;
   inputs:{
     saveUtility(siteId:string,revision:number,rows:Array<UtilityValues&{month:string}>):unknown;

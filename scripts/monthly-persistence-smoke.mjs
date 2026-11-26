@@ -167,7 +167,7 @@ export async function runMonthlyPersistenceSmoke({api, request}) {
   const post = body => api(endpoint, 'POST', {siteId, ...body});
   const first = await api(pathFor(siteId));
   const initial = {siteId, revision: 0, configuration: emptyConfiguration(), utility: {}, projections: [], telemetry: missingTelemetry,
-    capacity: missingCapacity, calculated: {}, confirmedLoss: checkMissingConfirmedLoss(first.confirmedLoss)};
+    capacity: missingCapacity, calculated: {}, confirmedLoss: checkMissingConfirmedLoss(first.confirmedLoss), unconfirmedLoss: checkMissingConfirmedLoss(first.unconfirmedLoss)};
   assert.deepEqual(first, initial, 'Monthly smoke must start on a fresh synthetic site');
   const empty = await api(performancePath(siteId));
   assert.equal(empty.dataset.revision, 0);
@@ -227,7 +227,7 @@ export async function runMonthlyPersistenceSmoke({api, request}) {
   assert.deepEqual(await api(pathFor(siteId)), afterUtility, 'Preview must not save configuration or projections');
   const configured = captureCalculated(
     await post({action: 'configuration', revision: 1, configuration, previewToken: preview.token}),
-    {siteId, revision: 2, configuration, utility, projections, telemetry: missingTelemetry, confirmedLoss: initial.confirmedLoss}, 'no-model');
+    {siteId, revision: 2, configuration, utility, projections, telemetry: missingTelemetry, confirmedLoss: initial.confirmedLoss, unconfirmedLoss: initial.unconfirmedLoss}, 'no-model');
   assert.deepEqual(await api(pathFor(siteId)), configured, 'Explicit save must match approved preview and exact input strings');
 
   const id = suffix => `monthly-${siteId}-${suffix}`;

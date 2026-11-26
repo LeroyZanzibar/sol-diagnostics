@@ -1,5 +1,5 @@
 import {getMonthlyRuntime} from '../../../db/monthly';
-import {readMonthlyConfirmedLoss} from './confirmed-loss';
+import {readMonthlyReviewedLoss} from './confirmed-loss';
 import {MonthlyError,validateConfiguration,validateUtilityRows} from '../../monthly-domain.mjs';
 export const dynamic='force-dynamic';
 const respond=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'private, no-store'}});
@@ -11,7 +11,7 @@ function failure(error:unknown){
 }
 async function readSnapshot(siteId:string){
   const snapshot=await getMonthlyRuntime().read(siteId);
-  return {...snapshot,confirmedLoss:await readMonthlyConfirmedLoss(siteId)};
+  return {...snapshot,...await readMonthlyReviewedLoss(siteId)};
 }
 export async function GET(request:Request){try{return respond(await readSnapshot(new URL(request.url).searchParams.get('siteId')||''));}catch(error){return failure(error);}}
 export async function POST(request:Request){

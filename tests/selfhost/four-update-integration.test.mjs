@@ -28,7 +28,7 @@ const expected={
  calculated:{productionProjectionRatio:{n:'301',d:'400'},productionExpectedRatio:{n:'1204',d:'73'},revenueRatio:{n:'-1',d:'2'},insolationRatio:{n:'31',d:'80'},iapr:{n:'301',d:'155'},iar:{n:'-40',d:'31'}},
 };
 const plain=value=>JSON.parse(JSON.stringify(value));
-const noLoss=({confirmedLoss,...rest})=>rest;
+const noLoss=({confirmedLoss,unconfirmedLoss,...rest})=>{assert.ok(unconfirmedLoss);return rest;};
 const retained=f=>f.inspect(db=>({tables:Object.fromEntries(['monthly_configuration','monthly_utility','analysis_runs','analysis_jobs','issue_event_reviews','issue_review_changes','performance_summaries','telemetry_imports'].map(table=>[table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])),objects:db.prepare('SELECT key,path FROM __sol_objects ORDER BY key').all().map(({key,path})=>[key,createHash('sha256').update(readFileSync(join(f.directory,'objects',path))).digest('hex')])}));
 const ReportingPeriod=loadSource('app/ReportingPeriod.tsx',[],{React,...periods}).default;
 

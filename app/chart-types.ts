@@ -2,7 +2,7 @@ import type {Fraction} from './monthly-domain.mjs';
 
 export type ChartMetricId =
   | 'onPeak' | 'offPeak' | 'unpaidEnergy' | 'utilityTotal' | 'energyUsed'
-  | 'projectedProduction' | 'expectedProduction' | 'revenue' | 'invoiceCost'
+  | 'projectedProduction' | 'expectedProduction' | 'confirmedLoss' | 'unconfirmedLoss' | 'revenue' | 'invoiceCost'
   | 'budgetRevenue' | 'actualInsolation' | 'projectedInsolation'
   | 'budgetedSpecificYield' | 'actualSpecificYield' | 'specificYieldRatio'
   | 'budgetedPerformanceRatio' | 'actualPerformanceRatio' | 'performanceRatioRatio'

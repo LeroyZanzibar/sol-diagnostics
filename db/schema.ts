@@ -1,6 +1,14 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+export const monthlyUnconfirmedLoss = sqliteTable('monthly_unconfirmed_loss', {
+  siteId:text('site_id').primaryKey().notNull().references(()=>siteSettings.id,{onDelete:'cascade'}),
+  calculationVersion:integer('calculation_version').notNull(),
+  publicationIdentity:text('publication_identity').notNull(),
+  reviewIdentity:text('review_identity').notNull(),
+  payloadJson:text('payload_json').notNull(),
+});
+
 // Manual-only provider state. Never part of the model/settings public row.
 export const vcomKeyIdentity = sqliteTable('vcom_key_identity', {
   id:text('id').primaryKey().notNull(), keyId:text('key_id').notNull(),
