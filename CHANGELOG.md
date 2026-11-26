@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.11.26.1 — publication pending
+## 2026.11.26.1 — published November 26, 2026
 
 - Add Confirmed estimated loss to Charts across line, bar, table, selected metrics and prior-year comparisons, using the authoritative monthly snapshot and preserving exact underlying fractions, missing/zero distinctions and saved views.
 - Add read-only Unconfirmed estimated loss to Monthly comparison and Charts for effective Unreviewed or Needs review findings in the current published analysis. Exclude effective Confirmed/Dismissed and historical analyses; preserve counted interval losses, saved site-local month boundaries and explicit unknown coverage.
