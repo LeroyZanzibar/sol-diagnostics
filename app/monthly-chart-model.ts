@@ -1,5 +1,5 @@
 import {
-  calculatedFields, formatCalculatedValue, formatValue, fraction, utilityFields, utilityTotal,
+  add, calculatedFields, formatCalculatedValue, formatValue, fraction, multiply, utilityFields, utilityTotal,
   type Fraction, type MonthlyCalculatedField, type ProjectionRow, type UtilityField,
 } from './monthly-domain.mjs';
 import type {MonthlyMetric, MonthlySnapshot} from './monthly-types';
@@ -45,6 +45,8 @@ export const quickViews: readonly {id: 'overview' | 'production' | 'revenue' | '
   {id: 'performance', label: 'Performance', metrics: ['iapr', 'iar', 'productionProjectionRatio']},
 ];
 
+export const waterfallMetrics = ['projectedProduction', 'expectedProduction', 'confirmedLoss', 'utilityTotal'] as const satisfies readonly ChartMetricId[];
+
 const metricsById = new Map(chartMetrics.map(metric => [metric.id, metric]));
 const calculatedIds = new Set<string>(calculatedFields);
 const utilityIds = new Set<string>(utilityFields);
@@ -88,11 +90,18 @@ export function validateChartSettings(input: unknown, allowEmpty = false): Chart
   const value = input as Record<string, unknown>;
   if (typeof value.start !== 'string' || typeof value.end !== 'string') throw new Error('Choose a start and end month.');
   rangeLength(value.start, value.end);
-  if (value.type !== 'line' && value.type !== 'bar' && value.type !== 'table') throw new Error('Choose a line, bar or table chart.');
+  if (value.type !== 'line' && value.type !== 'bar' && value.type !== 'table' && value.type !== 'waterfall') throw new Error('Choose a line, bar, table or waterfall chart.');
   if (value.comparisonYears !== 0 && value.comparisonYears !== 1 && value.comparisonYears !== 2) throw new Error('Choose zero, one or two prior years.');
   if (!Array.isArray(value.metrics) || (!allowEmpty && !value.metrics.length) ||
       [...value.metrics].some(id => typeof id !== 'string' || !metricsById.has(id as ChartMetricId)) ||
       new Set(value.metrics).size !== value.metrics.length) throw new Error('Choose unique known metrics; a saved view needs at least one.');
+  if (value.type === 'waterfall') {
+    if (value.comparisonYears !== 0) throw new Error('Waterfall does not support prior year comparison.');
+    const metrics = value.metrics;
+    if (metrics.length !== waterfallMetrics.length || waterfallMetrics.some((id, index) => metrics[index] !== id)) {
+      throw new Error('Waterfall requires the fixed production metrics in order.');
+    }
+  }
   return {start: value.start, end: value.end, type: value.type, comparisonYears: value.comparisonYears, metrics: [...value.metrics] as ChartMetricId[]};
 }
 
@@ -222,7 +231,7 @@ function projectionDetails(projection: ProjectionRow | undefined): string[] {
 }
 
 function chartPoint(snapshot: MonthlySnapshot, metric: ChartMetricDefinition, anchorMonth: string, sourceMonth: string,
-  projection: ProjectionRow | undefined, read: ChartReadState): ChartPoint {
+  projection: ProjectionRow | undefined, read: ChartReadState, forPlot = true): ChartPoint {
   const id = metric.id, calculated = calculatedIds.has(id);
   const dependencies: Dependencies = calculated ? calculatedDependencies[id as MonthlyCalculatedField] :
     utilityIds.has(id) || id === 'utilityTotal' ? {utility: true} :
@@ -300,7 +309,7 @@ function chartPoint(snapshot: MonthlySnapshot, metric: ChartMetricDefinition, an
     const exact = exactFraction(raw);
     if (!exact) {
       state = 'missing'; reason = 'The saved value is not a valid finite numeric value.';
-    } else {
+    } else if (forPlot) {
       display = calculated ? formatCalculatedValue(id as MonthlyCalculatedField, exact, true) :
         formatValue(exact, metric.unit === 'kWh/m²' || metric.unit === 'kWh/kWp' ? 2 : 0, true);
       plotValue = toPlotNumber(exact, metric.unit === '%' ? 100 : 1);
@@ -331,6 +340,78 @@ export function buildChartSeries(snapshot: MonthlySnapshot, settings: ChartSetti
     }
   }
   return series;
+}
+
+type WaterfallRowId = 'projected' | 'adjustment' | 'expected' | 'loss' | 'afterLoss' | 'variance' | 'actual';
+type WaterfallStageId = Exclude<WaterfallRowId, 'adjustment' | 'afterLoss'>;
+type WaterfallRow = {id: WaterfallRowId; label: string; value: Fraction | null; display: string; reason: string | null};
+type WaterfallStage = {id: WaterfallStageId; row: WaterfallRow; start: number | null; end: number | null; flat: boolean};
+export type ProductionWaterfall = {
+  rows: WaterfallRow[];
+  stages: WaterfallStage[];
+  vsProjected: {display: string; percent: string | null; sign: 'negative' | 'positive' | 'neutral'} | null;
+};
+
+const negated = (value: Fraction) => multiply(value, fraction('-1'));
+const difference = (to: Fraction | null, from: Fraction | null) => to && from ? add(to, negated(from)) : null;
+
+function signedAmount(value: Fraction, signed: boolean, percent = false) {
+  const sign = BigInt(value.n);
+  if (sign === BigInt(0)) return percent ? '0.0%' : '0';
+  const magnitude = sign < BigInt(0) ? negated(value) : value;
+  const display = formatValue(magnitude, percent ? 1 : 0, true);
+  // Never describe a real, nonzero adjustment or residual as exactly zero.
+  const amount = percent ? (display === '0.0' ? '<0.1' : display) + '%' : display === '0' ?
+    formatValue(magnitude, 6, true).replace(/0+$/, '').replace(/\.$/, '') : display;
+  const prefix = sign < BigInt(0) ? '−' : signed ? '+' : '';
+  return prefix + (amount === '0' ? '<0.000001' : amount);
+}
+
+export function buildProductionWaterfall(snapshot: MonthlySnapshot, range: MonthRange,
+  read: ChartReadState = {refreshing: false, error: ''}): ProductionWaterfall {
+  const months = monthsInclusive(range.start, range.end);
+  const projections = new Map(snapshot.projections.map(row => [row.month, row]));
+  function total(id: typeof waterfallMetrics[number]) {
+    const known: Fraction[] = [];
+    let firstUnavailable: string | null = null;
+    const metric = metricsById.get(id)!;
+    for (const month of months) {
+      const point = chartPoint(snapshot, metric, month, month, projections.get(month), read, false);
+      const value = point.state === 'available' ? exactFraction(point.raw) : null;
+      if (value) known.push(value);
+      else firstUnavailable ??= `${formatChartMonth(month)}: ${point.reason ?? `${point.state} source value.`}`;
+    }
+    return firstUnavailable ? {value: null, reason: `${known.length} of ${months.length} months available. ${firstUnavailable}`} : {value: add(...known), reason: null};
+  }
+  const p = total('projectedProduction'), e = total('expectedProduction'), l = total('confirmedLoss'), a = total('utilityTotal');
+  const adjustment = difference(e.value, p.value), loss = l.value && negated(l.value);
+  const after = difference(e.value, l.value), variance = difference(a.value, after), vsProjected = difference(a.value, p.value);
+  function row(id: WaterfallRowId, label: string, value: Fraction | null, reason: string | null, signed = false): WaterfallRow {
+    return {id, label, value, display: value === null ? 'Unavailable' : signedAmount(value, signed), reason: value === null ? reason : null};
+  }
+  const projectedRow = row('projected', 'Projected production', p.value, p.reason);
+  const adjustmentRow = row('adjustment', 'Projected to expected', adjustment, 'Requires both projected and expected production.', true);
+  const expectedRow = row('expected', 'Expected production', e.value, e.reason);
+  const lossRow = row('loss', 'Confirmed estimated losses', loss, l.reason, true);
+  const afterRow = row('afterLoss', 'Expected after losses', after, 'Requires expected production and confirmed estimated losses.');
+  const varianceRow = row('variance', 'Unexplained variance', variance, 'Requires expected production after confirmed losses and utility actual production.', true);
+  const actualRow = row('actual', 'Utility actual production', a.value, a.reason);
+  const zero = fraction('0');
+  function stage(id: WaterfallStageId, row: WaterfallRow, from: Fraction | null, to: Fraction | null): WaterfallStage {
+    const start = from === null ? null : toPlotNumber(from), end = to === null ? null : toPlotNumber(to);
+    return {id, row, start, end, flat: from !== null && to !== null && difference(to, from)?.n === '0'};
+  }
+  return {
+    rows: [projectedRow, adjustmentRow, expectedRow, lossRow, afterRow, varianceRow, actualRow],
+    stages: [stage('projected', projectedRow, zero, p.value), stage('expected', expectedRow, p.value ?? zero, e.value),
+      stage('loss', lossRow, e.value, after), ...(variance && variance.n !== '0' ? [stage('variance', varianceRow, after, a.value)] : []),
+      stage('actual', actualRow, zero, a.value)],
+    vsProjected: vsProjected ? {
+      display: signedAmount(vsProjected, true),
+      sign: BigInt(vsProjected.n) < BigInt(0) ? 'negative' : vsProjected.n === '0' ? 'neutral' : 'positive',
+      percent: p.value && BigInt(p.value.n) > BigInt(0) ? signedAmount(multiply(vsProjected, {n: p.value.d, d: p.value.n}, fraction('100')), true, true) : null,
+    } : null,
+  };
 }
 
 export function groupChartPanels(series: ChartSeries[]): ChartPanel[] {

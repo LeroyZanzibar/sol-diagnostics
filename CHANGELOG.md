@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.11.27.1 — pending publication
+
+- Add a Production Waterfall chart in Visuals → Charts, with period totals and a reconciliation panel in kWh. Show the projected-to-expected adjustment, confirmed estimated losses, and the independent utility actual; distinguish any remaining variance from confirmed losses.
+- Keep incomplete source periods explicit, preserve known totals and explicit zeros, and support saving and restoring Waterfall views. No data migration or automatic analysis is introduced.
+
 ## 2026.11.26.1 — published November 26, 2026
 
 - Add Confirmed estimated loss to Charts across line, bar, table, selected metrics and prior-year comparisons, using the authoritative monthly snapshot and preserving exact underlying fractions, missing/zero distinctions and saved views.

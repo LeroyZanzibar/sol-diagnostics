@@ -4,9 +4,10 @@ import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
 import type {FormEvent, KeyboardEvent, RefObject} from 'react';
 import type {ChartMetricId, ChartSettings, ChartType, MonthRange, SavedChartView} from './chart-types';
 import type {MonthlySnapshot} from './monthly-types';
-import {buildChartSeries, chartMetrics, chartSettingsEqual, defaultRange, formatChartMonth, quickViews, shiftMonth, validateChartSettings} from './monthly-chart-model';
+import {buildChartSeries, buildProductionWaterfall, chartMetrics, chartSettingsEqual, defaultRange, formatChartMonth, quickViews, shiftMonth, validateChartSettings, waterfallMetrics} from './monthly-chart-model';
 import {useMonthlyChartData} from './monthly-chart-client';
 import MonthlyChartPlot, {chartSeriesColor} from './MonthlyChartPlot';
+import MonthlyChartWaterfall from './MonthlyChartWaterfall';
 import './monthly-charts.css';
 
 type Props = {sites: Array<{id: string; name: string; location: string}>; siteId: string; onSiteChange: (id: string) => void};
@@ -56,7 +57,8 @@ function closeDetails(ref: RefObject<HTMLDetailsElement | null>, focus = true) {
 }
 function viewDescription(view: SavedChartView) {
   const settings = view.settings;
-  return `${settings.metrics.length} metrics / ${formatChartMonth(settings.start)} to ${formatChartMonth(settings.end)} / ${settings.type}${settings.comparisonYears ? ` / YoY +${settings.comparisonYears}` : ' / Timeline'}`;
+  const range = `${formatChartMonth(settings.start)} to ${formatChartMonth(settings.end)}`;
+  return settings.type === 'waterfall' ? `${range} / Production waterfall / Period total` : `${settings.metrics.length} metrics / ${range} / ${settings.type}${settings.comparisonYears ? ` / YoY +${settings.comparisonYears}` : ' / Timeline'}`;
 }
 
 export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
@@ -66,7 +68,10 @@ export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
   const snapshot = data.snapshot?.siteId === siteId ? data.snapshot : null;
   const currentMonth = reportingMonth(snapshot);
   const [chart, setChart] = useState<{readySite: string; settings: ChartSettings}>(() => ({readySite: '', settings: {start: shiftMonth(currentMonth, -11), end: currentMonth, type: 'line', comparisonYears: 0, metrics: [...quickViews[0].metrics]}}));
-  const settings = chart.settings;
+  // Keep explorer preferences while the waterfall uses its own fixed settings.
+  const settings = useMemo<ChartSettings>(() => chart.settings.type === 'waterfall' ?
+    {...chart.settings, metrics: [...waterfallMetrics], comparisonYears: 0} : chart.settings, [chart.settings]);
+  const isWaterfall = settings.type === 'waterfall';
   const [search, setSearch] = useState('');
   const [views, setViews] = useState<SavedChartView[]>([]);
   const [viewsLoading, setViewsLoading] = useState(true);
@@ -138,7 +143,10 @@ export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
   }
   function restore(view: SavedChartView) {
     if (savingRef.current) return;
-    setChart({readySite: siteId, settings: {...view.settings, metrics: [...view.settings.metrics]}});
+    setChart(previous => ({readySite: siteId, settings: view.settings.type === 'waterfall' ?
+      {...previous.settings, start: view.settings.start, end: view.settings.end, type: 'waterfall'} :
+      {...view.settings, metrics: [...view.settings.metrics]}}));
+    if (view.settings.type === 'waterfall') closeDetails(metricsRef, false);
     setActiveView(view); setNotice(`Restored “${view.name}”. Selected site unchanged.`);
     formActiveRef.current = false; setSaveFormOpen(false); setSaveError(''); closeDetails(viewsRef);
   }
@@ -193,7 +201,9 @@ export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
   let validationError = '';
   try {validateChartSettings(settings, true);} catch (error) {validationError = errorText(error);}
   const ready = !!snapshot && chart.readySite === siteId && !!siteId;
-  const series = useMemo(() => ready && !validationError && snapshot ? buildChartSeries(snapshot, settings, {refreshing: data.refreshing, error: data.error}) : [], [ready, validationError, snapshot, settings, data.refreshing, data.error]);
+  const read = useMemo(() => ({refreshing: data.refreshing, error: data.error}), [data.refreshing, data.error]);
+  const series = useMemo(() => ready && !validationError && snapshot && !isWaterfall ? buildChartSeries(snapshot, settings, read) : [], [ready, validationError, snapshot, isWaterfall, settings, read]);
+  const waterfall = useMemo(() => ready && !validationError && snapshot && isWaterfall ? buildProductionWaterfall(snapshot, settings, read) : null, [ready, validationError, snapshot, isWaterfall, settings, read]);
   const hasValues = series.some(item => item.points.some(point => point.plotValue !== null));
   const selected = chartMetrics.filter(metric => settings.metrics.includes(metric.id));
   const filtered = chartMetrics.filter(metric => `${metric.label} ${metric.description} ${metric.unit} ${metric.group}`.toLowerCase().includes(search.trim().toLowerCase()));
@@ -217,7 +227,7 @@ export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
     </header>
     <div className="mc-workspace">
       <div className="mc-views-row"><span className="mc-row-label">Quick views</span><div className="mc-presets" role="group" aria-label="Metric quick views">
-        {quickViews.map(preset => <button type="button" key={preset.id} aria-pressed={preset.metrics.length === settings.metrics.length && preset.metrics.every(id => settings.metrics.includes(id))} onClick={() => update({metrics: [...preset.metrics]})}>{preset.label}</button>)}
+        {quickViews.map(preset => <button type="button" key={preset.id} disabled={isWaterfall} aria-pressed={!isWaterfall && preset.metrics.length === settings.metrics.length && preset.metrics.every(id => settings.metrics.includes(id))} onClick={() => update({metrics: [...preset.metrics]})}>{preset.label}</button>)}
       </div><span className={`mc-current-view${modified ? ' mc-modified' : ''}`} title={modified ? 'Changes do not overwrite the original view.' : undefined}>{activeView ? `${activeView.name}${modified ? ' (modified)' : ''}` : 'Unsaved view'}</span>
       <details className="mc-popup mc-my-views" data-my-views ref={viewsRef} onKeyDown={event => popupKey(event, viewsRef, true)}>
         <summary aria-controls={`${instanceId}-saved-views`}>My views</summary>
@@ -244,11 +254,11 @@ export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
           <label><span>To</span><input type="month" aria-label="To month" min="1900-01" max="9999-12" value={settings.end} aria-invalid={!!validationError} aria-describedby={rangeErrorId} onChange={event => update({end: event.target.value})}/></label></div>
           <div className="mc-ranges" role="group" aria-label="Date range shortcuts">{ranges.map(({label, range, title}) => <button type="button" key={label} title={title} disabled={!snapshot} aria-pressed={settings.start === range.start && settings.end === range.end} onClick={() => update(range)}>{label}</button>)}</div>
         </div>
-        <div className="mc-control"><span>Chart type</span><div className="mc-segmented" role="group" aria-label="Chart type">{(['line', 'bar', 'table'] as ChartType[]).map(type => <button type="button" key={type} aria-pressed={settings.type === type} onClick={() => update({type})}>{type[0].toUpperCase() + type.slice(1)}</button>)}</div></div>
-        <div className="mc-control"><span>Comparison</span><div className="mc-comparison"><div className="mc-segmented" role="group" aria-label="Time comparison"><button type="button" aria-pressed={settings.comparisonYears === 0} onClick={() => update({comparisonYears: 0})}>Timeline</button><button type="button" aria-pressed={settings.comparisonYears > 0} onClick={() => update({comparisonYears: settings.comparisonYears || 1})}>YoY</button></div>
-          {settings.comparisonYears > 0 && <button type="button" className="mc-extra-year" aria-label="Second prior year" aria-pressed={settings.comparisonYears === 2} onClick={() => update({comparisonYears: settings.comparisonYears === 2 ? 1 : 2})}>+ 2nd prior year</button>}</div></div>
+        <div className="mc-control mc-chart-type"><span>Chart type</span><div className="mc-segmented" role="group" aria-label="Chart type">{(['line', 'bar', 'table', 'waterfall'] as const).map(type => <button type="button" key={type} aria-pressed={settings.type === type} onClick={() => {if (type === 'waterfall') closeDetails(metricsRef, false); update({type});}}>{type[0].toUpperCase() + type.slice(1)}</button>)}</div></div>
+        {!isWaterfall && <div className="mc-control"><span>Comparison</span><div className="mc-comparison"><div className="mc-segmented" role="group" aria-label="Time comparison"><button type="button" aria-pressed={settings.comparisonYears === 0} onClick={() => update({comparisonYears: 0})}>Timeline</button><button type="button" aria-pressed={settings.comparisonYears > 0} onClick={() => update({comparisonYears: settings.comparisonYears || 1})}>YoY</button></div>
+          {settings.comparisonYears > 0 && <button type="button" className="mc-extra-year" aria-label="Second prior year" aria-pressed={settings.comparisonYears === 2} onClick={() => update({comparisonYears: settings.comparisonYears === 2 ? 1 : 2})}>+ 2nd prior year</button>}</div></div>}
       </div>
-      <div className="mc-metric-strip"><div className="mc-chips" aria-label="Selected metrics">{selected.map(metric => <button type="button" key={metric.id} className="mc-chip" aria-label={`Remove ${metric.label}`} onClick={() => removeMetric(metric.id)}><span className="mc-swatch" style={{borderColor: chartSeriesColor(metric.color)}} aria-hidden="true"/>{metric.label}<span aria-hidden="true">×</span></button>)}</div>
+      {isWaterfall ? <p className="mc-waterfall-fixed"><strong>Production metrics follow a fixed order.</strong> One waterfall for the selected period.</p> : <div className="mc-metric-strip"><div className="mc-chips" aria-label="Selected metrics">{selected.map(metric => <button type="button" key={metric.id} className="mc-chip" aria-label={`Remove ${metric.label}`} onClick={() => removeMetric(metric.id)}><span className="mc-swatch" style={{borderColor: chartSeriesColor(metric.color)}} aria-hidden="true"/>{metric.label}<span aria-hidden="true">×</span></button>)}</div>
         <details className="mc-popup mc-metric-picker" ref={metricsRef} onKeyDown={event => popupKey(event, metricsRef)}><summary aria-controls={`${instanceId}-metric-options`}>+ Metrics <span>{selected.length}</span></summary>
           <div className="mc-popover mc-metric-popover" id={`${instanceId}-metric-options`} role="region" aria-label="Select metrics"><div className="mc-popover-head"><strong>Select metrics</strong><button type="button" onClick={() => closeDetails(metricsRef)}>Close</button></div>
             <div className="mc-metric-tools"><label className="mc-search"><span className="mc-sr-only">Search metrics</span><input type="search" aria-label="Search metrics" placeholder="Search all metrics" value={search} onChange={event => setSearch(event.target.value)}/></label><button type="button" onClick={() => update({metrics: chartMetrics.map(metric => metric.id)})}>Select all</button><button type="button" onClick={() => update({metrics: []})}>Clear</button></div>
@@ -256,11 +266,11 @@ export default function MonthlyCharts({sites, siteId, onSiteChange}: Props) {
             <p className="mc-picker-help">Changes appear immediately. Select all includes all metrics, not just search results.</p>
           </div>
         </details>
-      </div>
+      </div>}
       <div id={rangeErrorId} className="mc-range-error" role={validationError ? 'alert' : undefined}>{validationError && `Check the date range: ${validationError}`}</div>
       {notice && <p className="mc-notice" role="status">{notice}</p>}
       {data.error && siteId && <div className="mc-data-error" role="alert"><strong>Monthly data could not be refreshed.</strong><p>{data.error} Telemetry-dependent values and Confirmed estimated loss are hidden until freshness is confirmed. Other values come from the last accepted saved snapshot.</p><button type="button" onClick={() => void data.reload()} disabled={data.refreshing}>Retry</button></div>}
-      {!siteId || !site ? <div className="mc-empty" role="status"><h2>{sites.length ? 'Choose a site' : 'No sites available'}</h2><p>Select a configured site to explore its saved monthly data.</p></div> : !ready ? <div className="mc-empty" role="status"><h2>{data.error ? 'Monthly data unavailable' : 'Loading saved monthly data…'}</h2><p>{data.error ? 'Retry the read to load this site.' : 'Reading utility actuals, projections and monthly telemetry.'}</p></div> : validationError ? <div className="mc-empty"><p>Correct the date range above to show the chart. No values are plotted for an invalid range.</p></div> : !selected.length ? <div className="mc-empty" role="status"><h2>Choose at least one metric</h2><p>Use a quick view or open Metrics to start a chart.</p></div> : <>
+      {!siteId || !site ? <div className="mc-empty" role="status"><h2>{sites.length ? 'Choose a site' : 'No sites available'}</h2><p>Select a configured site to explore its saved monthly data.</p></div> : !ready ? <div className="mc-empty" role="status"><h2>{data.error ? 'Monthly data unavailable' : 'Loading saved monthly data…'}</h2><p>{data.error ? 'Retry the read to load this site.' : 'Reading utility actuals, projections and monthly telemetry.'}</p></div> : validationError ? <div className="mc-empty"><p>Correct the date range above to show the chart. No values are plotted for an invalid range.</p></div> : settings.type === 'waterfall' ? waterfall && <MonthlyChartWaterfall key={`${siteId}:${settings.start}:${settings.end}`} model={waterfall} range={settings} refreshing={data.refreshing}/> : !selected.length ? <div className="mc-empty" role="status"><h2>Choose at least one metric</h2><p>Use a quick view or open Metrics to start a chart.</p></div> : <>
         <div className="mc-range-readout"><div><strong>{formatChartMonth(settings.start)} to {formatChartMonth(settings.end)}</strong><p>{settings.comparisonYears ? `Same calendar months, plus ${settings.comparisonYears === 2 ? 'two prior years' : 'one prior year'}. Source periods are labeled below.` : 'Monthly timeline'}{data.refreshing ? ' / Refreshing saved data…' : ''}</p></div><span>{new Set(selected.map(metric => metric.unit)).size > 2 ? 'Separate charts by unit' : 'Axes follow measurement units'}</span></div>
         {!hasValues && <div className="mc-empty" role="status"><h2>No numeric values in this selection</h2><p>Try another period or metric. Missing values are never treated as zero; the table retains source reasons.</p></div>}
         {(hasValues || settings.type === 'table') && <MonthlyChartPlot key={`${siteId}:${settings.start}:${settings.end}:${settings.type}:${settings.comparisonYears}:${settings.metrics.join(',')}`} series={series} type={settings.type} onRemoveMetric={removeMetric}/>}
