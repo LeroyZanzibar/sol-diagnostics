@@ -377,11 +377,13 @@ export function buildProductionWaterfall(snapshot: MonthlySnapshot, range: Month
     const metric = metricsById.get(id)!;
     for (const month of months) {
       const point = chartPoint(snapshot, metric, month, month, projections.get(month), read, false);
-      const value = point.state === 'available' ? exactFraction(point.raw) : null;
+      // Use the same eligibility as the monthly chart points. A numeric partial
+      // point contributes its existing value; Waterfall does not assess coverage.
+      const value = point.state === 'missing' || point.state === 'stale' ? null : exactFraction(point.raw);
       if (value) known.push(value);
       else firstUnavailable ??= `${formatChartMonth(month)}: ${point.reason ?? `${point.state} source value.`}`;
     }
-    return firstUnavailable ? {value: null, reason: `${known.length} of ${months.length} months available. ${firstUnavailable}`} : {value: add(...known), reason: null};
+    return known.length ? {value: add(...known), reason: null} : {value: null, reason: firstUnavailable};
   }
   const p = total('projectedProduction'), e = total('expectedProduction'), l = total('confirmedLoss'), a = total('utilityTotal');
   const adjustment = difference(e.value, p.value), loss = l.value && negated(l.value);

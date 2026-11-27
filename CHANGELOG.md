@@ -1,6 +1,11 @@
 # Changelog
 
-## 2026.11.27.1 — pending publication
+## 2026.11.27.2 — pending publication
+
+- Let Production Waterfall display the supplied numeric kWh values, including numeric partial months. Sum available values within the selected period without a completeness check or filling gaps with zero. Leave upstream source quality rules unchanged.
+- Match the typography of Monthly Charts and clean up the reconciliation panel with aligned amounts and a separate details section.
+
+## 2026.11.27.1 — published November 27, 2026
 
 - Add a Production Waterfall chart in Visuals → Charts, with period totals and a reconciliation panel in kWh. Show the projected-to-expected adjustment, confirmed estimated losses, and the independent utility actual; distinguish any remaining variance from confirmed losses.
 - Keep incomplete source periods explicit, preserve known totals and explicit zeros, and support saving and restoring Waterfall views. No data migration or automatic analysis is introduced.

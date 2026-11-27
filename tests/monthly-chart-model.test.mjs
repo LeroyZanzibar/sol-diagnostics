@@ -27,16 +27,22 @@ test('production waterfall uses exact inclusive totals and reconciles only known
   const zero=run({edit(s){for(const month of Object.values(s.confirmedLoss.months))month.value=fraction('0');}});
   assert.equal(values(zero).loss,'0');assert.equal(values(zero).afterLoss,'1,080,000');
   for(const result of [run({loss:null}),run({edit:s=>{s.confirmedLoss.months[end].unknownCount=1;}})]) {
-    assert.equal(values(result).loss,'Unavailable');assert.equal(values(result).afterLoss,'Unavailable');assert.equal(values(result).variance,'Unavailable');assert.equal(values(result).actual,'918,000');
-    assert.equal(result.stages.find(s=>s.id==='loss').end,null);
+    assert.equal(values(result).loss,'−76,000');assert.equal(values(result).afterLoss,'1,004,000');assert.equal(values(result).variance,'−86,000');assert.equal(values(result).actual,'918,000');
+    assert.equal(result.stages.find(s=>s.id==='loss').end,1004000);
   }
-  for(const result of [run({quality:'partial'}),run({read:{refreshing:true,error:''}}),run({read:{refreshing:false,error:'Read failed'}}),run({edit:s=>{s.telemetry.state='stale';}})]) {
+  const partial=run({quality:'partial',edit:s=>{s.telemetry.months[end].expected.value=fraction('300000');}});
+  assert.equal(values(partial).expected,'1,004,000');assert.equal(values(partial).variance,'+34,000');assert.equal(partial.rows.find(r=>r.id==='expected').reason,null);
+  assert.equal(values(run({quality:'missing'})).expected,'704,000','a raw value the upstream source marks missing is not used');
+  for(const result of [run({read:{refreshing:true,error:''}}),run({read:{refreshing:false,error:'Read failed'}}),run({edit:s=>{s.telemetry.state='stale';}})]) {
     assert.equal(values(result).expected,'Unavailable');assert.equal(values(result).adjustment,'Unavailable');assert.equal(values(result).variance,'Unavailable');assert.equal(values(result).actual,'918,000');assert.equal(values(result).projected,'1,240,000');
   }
   const noProjection=run({edit:s=>{s.projections.pop();}});
-  assert.equal(values(noProjection).expected,'1,080,000');assert.equal(values(noProjection).variance,'−42,000');assert.equal(noProjection.vsProjected,null);
+  assert.equal(values(noProjection).projected,'808,000');assert.equal(values(noProjection).expected,'1,080,000');assert.equal(values(noProjection).variance,'−42,000');assert.equal(noProjection.vsProjected.display,'+110,000');
   const noActual=run({edit:s=>{delete s.utility[end];}});
-  assert.equal(values(noActual).actual,'Unavailable');assert.equal(values(noActual).variance,'Unavailable');assert.equal(values(noActual).afterLoss,'960,000');
+  assert.equal(values(noActual).actual,'620,000');assert.equal(values(noActual).variance,'−340,000');assert.equal(values(noActual).afterLoss,'960,000');
+  const noLoss=run({edit:s=>{s.confirmedLoss.months={};}});
+  assert.equal(values(noLoss).loss,'Unavailable'); assert.equal(values(noLoss).variance,'Unavailable');
+  assert.equal(noLoss.stages.find(s=>s.id==='loss').end,null); assert.equal(values(noLoss).actual,'918,000');
   const zeroProjection=run({edit:s=>{for (const row of s.projections) row.production=fraction('0');}});
   assert.equal(zeroProjection.vsProjected.percent,null);assert.equal(zeroProjection.vsProjected.display,'+918,000');
   assert.throws(()=>model.validateChartSettings({...inputs,comparisonYears:1}),/comparison|prior year/i);

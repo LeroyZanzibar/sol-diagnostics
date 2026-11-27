@@ -1,6 +1,6 @@
 "use client";
 
-import {useId, useState} from 'react';
+import {useEffect, useId, useRef, useState} from 'react';
 import type {MonthRange} from './chart-types';
 import {formatChartMonth, type ProductionWaterfall} from './monthly-chart-model';
 
@@ -24,6 +24,8 @@ function axisLabel(value: number) {
 
 export default function MonthlyChartWaterfall({model, range, refreshing}: Props) {
   const uid = useId();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(720);
   const [selection, setSelection] = useState<ProductionWaterfall['stages'][number]['id'] | null>(null);
   const {rows, stages, vsProjected} = model;
   const active = stages.find(stage => stage.id === selection) ?? stages.find(stage => stage.id === 'variance') ?? stages.find(stage => stage.id === 'loss')!;
@@ -35,11 +37,21 @@ export default function MonthlyChartWaterfall({model, range, refreshing}: Props)
   const unplottable = stages.some(stage => stage.row.value && (stage.start === null || stage.end === null) && (stage.id !== 'loss' || !afterLoss.reason));
   const endpoints = stages.flatMap(({start,end}) => start === null || end === null ? [] : [start,end]);
   const hasPlot = endpoints.length > 0;
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const resize = () => setWidth(Math.max(540, root.clientWidth));
+    resize();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(resize);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [hasPlot]);
   const scale = Math.max(0, ...endpoints.map(Math.abs)) || 1;
   const lower = Math.min(0, ...endpoints.map(value => value / scale));
   const upper = Math.max(0, ...endpoints.map(value => value / scale));
   const axisMin = lower, axisMax = lower === upper ? 1 : upper;
-  const axisX = 76, axisRight = 710, top = 38, bottom = 228;
+  const axisX = 60, axisRight = width - 12, top = 33, bottom = 205;
   const y = (value: number) => bottom - (value / scale - axisMin) / (axisMax - axisMin) * (bottom - top);
   const ticks = [...new Set([axisMin, axisMin * .5, 0, axisMax * .5, axisMax])].sort((a,b) => a-b)
     .filter(tick => tick === 0 || Math.abs(y(tick * scale) - y(0)) >= 16)
@@ -65,13 +77,12 @@ export default function MonthlyChartWaterfall({model, range, refreshing}: Props)
     <div className="mc-wf-layout">
       <div className="mc-wf-plot">
         {(missing.length > 0 || unplottable) && <div className="mc-wf-notice" role="status">
-          {missing.map(row => <p key={row.id}><strong>{row.label} {row.id === 'loss' ? 'are' : 'is'} unavailable.</strong> {row.reason}</p>)}
-          {missing.length > 0 && <p>Only available period totals and adjustments are shown. Missing values are not zero.</p>}
+          {missing.length > 0 && <p><strong>Unavailable:</strong> {missing.map(row => row.label).join(', ')}.</p>}
           {unplottable && <p>Some amounts cannot be shown on the chart scale. Their values are listed in Reconciliation.</p>}
         </div>}
-        {!hasPlot ? <div className="mc-empty"><p>No production values can be plotted for this period. See Reconciliation for source details.</p></div> : <>
-        <div className="mc-wf-scroll" tabIndex={0} role="region" aria-label="Production waterfall plot (scroll horizontally on narrow screens)">
-          <svg viewBox="0 0 720 294" role="group" aria-label="Production waterfall stages" className="mc-wf-svg">
+        {!hasPlot ? <div className="mc-empty"><p>No production values can be plotted for this period.</p></div> : <>
+        <div ref={scrollRef} className="mc-wf-scroll" tabIndex={0} role="region" aria-label="Production waterfall plot (scroll horizontally on narrow screens)">
+          <svg width={width} height="260" viewBox={`0 0 ${width} 260`} role="group" aria-label="Production waterfall stages" className="mc-wf-svg">
             <defs><pattern id={`${uid}-variance`} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
               <rect width="6" height="6" className="mc-wf-hatch-bg"/><path d="M 0 0 V 6" className="mc-wf-hatch-line"/>
             </pattern></defs>
@@ -89,19 +100,19 @@ export default function MonthlyChartWaterfall({model, range, refreshing}: Props)
               const barTop = placed ? Math.min(y(start),y(end)) : 132;
               const barHeight = placed ? Math.abs(y(start) - y(end)) : 0;
               const fitted = placed && (id === 'loss' || id === 'variance' || id === 'expected') && end < start;
-              const valueY = fitted ? Math.min(244,barTop + barHeight + 18) : barTop - 9;
+              const valueY = fitted ? Math.min(220,barTop + barHeight + 15) : barTop - 8;
               const color = id === 'expected' && adjustment.reason ? 'projected' : id;
               const pick = () => setSelection(id);
               return <g key={id} className="mc-wf-stage" role="button" tabIndex={0} data-waterfall-stage={id}
                 aria-pressed={active.id === id} aria-controls={`${uid}-detail`} aria-label={`${row.label}: ${amounts(stage)}`}
                 onPointerEnter={e => {if (e.pointerType === 'mouse') pick();}} onFocus={pick} onClick={pick}
                 onKeyDown={event => {if (event.key === 'Enter' || event.key === ' ') {event.preventDefault(); pick();}}}>
-                <rect className="mc-wf-hit" x={cx - pitch/2 + 2} y="8" width={pitch - 4} height="280" rx="4"/>
+                <rect className="mc-wf-hit" x={cx - pitch/2 + 2} y="8" width={pitch - 4} height="243" rx="4"/>
                 {placed && (flat ? <line className={`mc-wf-bar mc-wf-${color}`} x1={left} x2={left + barWidth} y1={barTop} y2={barTop}/> :
                   <rect className={`mc-wf-bar mc-wf-${color}`} x={left} y={barTop} width={barWidth} height={Math.max(1,barHeight)} fill={id === 'variance' ? `url(#${uid}-variance)` : undefined}/>)}
                 <text className="mc-wf-value" textAnchor="middle" x={cx} y={valueY}>{row.display}</text>
-                {id === 'expected' && !adjustment.reason && <text className="mc-wf-tick" textAnchor="middle" x={cx} y={valueY + 14}>{adjustment.display} vs projected</text>}
-                <text className="mc-wf-category" textAnchor="middle" x={cx} y="267">{stageLabels[id][0]}<tspan x={cx} dy="15">{stageLabels[id][1]}</tspan></text>
+                {id === 'expected' && !adjustment.reason && <text className="mc-wf-tick" textAnchor="middle" x={cx} y={valueY + 12}>{adjustment.display} vs projected</text>}
+                <text className="mc-wf-category" textAnchor="middle" x={cx} y="237">{stageLabels[id][0]}<tspan x={cx} dy="12">{stageLabels[id][1]}</tspan></text>
               </g>;
             })}
           </svg>
@@ -114,15 +125,15 @@ export default function MonthlyChartWaterfall({model, range, refreshing}: Props)
       </div>
       <aside className="mc-wf-ledger" aria-label="Reconciliation">
         <h3>Reconciliation</h3><table><caption>Period totals and adjustments (kWh)</caption>
-          <tbody>{rows.map(row => <tr key={row.id} data-waterfall-row={row.id}><th scope="row">{row.label}{row.reason && <small>{row.reason}</small>}</th><td>{row.display}</td></tr>)}</tbody>
+          <tbody>{rows.map(row => <tr key={row.id} data-waterfall-row={row.id}><th scope="row">{row.label}</th><td data-unavailable={!!row.reason}>{row.display}</td></tr>)}</tbody>
         </table>
         <div className="mc-wf-detail" id={`${uid}-detail`} aria-live="polite">
           <strong>{active.row.label}: {amounts(active)}</strong>
-          <p>{active.row.reason ?? descriptions[active.id]}</p>
+          <p>{active.row.reason ?? (active.id === 'expected' && adjustment.reason ? 'Weather-adjusted expected production from the imported readings. No projection is available for comparison.' : descriptions[active.id])}</p>
           {active.id === 'loss' && !active.row.reason && afterLoss.reason && <p>{afterLoss.reason}</p>}
         </div>
       </aside>
     </div>
-    <p className="mc-wf-foot">Confirmed losses come from confirmed findings; they do not automatically explain the full gap to utility actual.</p>
+    <p className="mc-wf-foot">Uses the values available for the selected period. Unexplained variance is shown separately from confirmed losses.</p>
   </section>;
 }
