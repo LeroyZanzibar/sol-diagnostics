@@ -37,8 +37,9 @@ export function harness({data={snapshot:snapshot(),refreshing:false,error:'',rel
   const bindings={React,...hooks,Date:FixedDate,Error,TypeError,AbortController,structuredClone,fetch,document:doc,window:{addEventListener(){},removeEventListener(){}},ResizeObserver:undefined};
   const model=loadSource('app/monthly-chart-model.ts',[],{...domain,Error,TypeError,RangeError});
   const plot=loadSource('app/MonthlyChartPlot.tsx',[],{...bindings,...model});
+  const waterfall=loadSource('app/MonthlyChartWaterfall.tsx',[],{...bindings,...model});
   const useMonthlyChartData=realData?loadSource('app/monthly-chart-client.ts',[],{...bindings,setTimeout,clearTimeout}).useMonthlyChartData:()=>data;
-  const ui=plotOnly?null:loadSource('app/MonthlyCharts.tsx',[],{...bindings,...model,MonthlyChartPlot:plot.default,chartSeriesColor:plot.chartSeriesColor,useMonthlyChartData});
+  const ui=plotOnly?null:loadSource('app/MonthlyCharts.tsx',[],{...bindings,...model,MonthlyChartPlot:plot.default,MonthlyChartWaterfall:waterfall.default,chartSeriesColor:plot.chartSeriesColor,useMonthlyChartData});
   const root=plotOnly?plot.default:ui.default;
   function renderNode(n,path='root') {
     if(Array.isArray(n))return n.map((c,i)=>renderNode(c,`${path}.${c?.key??i}`));

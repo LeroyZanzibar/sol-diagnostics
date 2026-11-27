@@ -13,6 +13,56 @@ function click(h,label){const b=button(h.tree,label);assert.ok(b,`Button ${label
 const view={id:'saved-ui-view',name:'Revenue review',settings:{...settings,type:'bar',comparisonYears:2,metrics:['revenue','budgetRevenue']},createdAt:'2026-11-23T12:00:00Z'};
 function saveForm(h,name){click(h,'Save current view');change(h,'View name',name);return nodes(h.tree).find(n=>n.type==='form');}
 
+test('Waterfall uses Option B reconciliation, retains explorer controls and saves/restores canonical settings',async t=>{
+ let posted;const s=snapshot(),month='2026-01';
+ s.confirmedLoss={state:'current',analysisRunId:'current-run',timezone:'America/New_York',months:{[month]:{state:'complete',value:domain.fraction('2'),confirmedCount:1,unknownCount:0}}};
+ const h=await mount(t,{data:{snapshot:s,refreshing:false,error:'',reload:async()=>{}},fetch:async(_url,o)=>{
+   if(o.method==='POST'){posted={...JSON.parse(o.body),id:'waterfall-saved',createdAt:view.createdAt};return Response.json({view:posted},{status:201});}
+   return Response.json({views:posted?[view,posted]:[view]});
+ }});
+ click(h,'Revenue');click(h,'YoY');click(h,'Second prior year');click(h,'Bar');
+ change(h,'From month',month);change(h,'To month',month);click(h,'Waterfall');
+ assert.equal(button(h.tree,'Waterfall').props['aria-pressed'],true);assert.equal(button(h.tree,'YoY'),undefined);assert.equal(field(h.tree,'Search metrics'),undefined);
+ assert.equal(button(h.tree,'Revenue').props.disabled,true);
+ assert.match(html(h.tree),/Reconciliation/);assert.match(html(h.tree),/Unexplained variance/);
+ const stage=id=>nodes(h.tree).find(n=>n.props['data-waterfall-stage']===id);
+ const ledger=id=>nodes(h.tree).find(n=>n.props['data-waterfall-row']===id);
+ assert.match(visibleText(ledger('adjustment')),/\+2$/);assert.match(visibleText(ledger('variance')),/\+1$/);
+ assert.ok(stage('expected'));assert.equal(stage('loss').props.tabIndex,0);assert.equal(stage('variance').props.tabIndex,0);
+ stage('expected').props.onPointerEnter({pointerType:'mouse'});h.render();assert.equal(stage('expected').props['aria-pressed'],true);
+ stage('loss').props.onFocus();h.render();assert.equal(stage('loss').props['aria-pressed'],true);
+ stage('actual').props.onClick();h.render();assert.equal(stage('actual').props['aria-pressed'],true);
+ stage('variance').props.onKeyDown({...event(),key:' '});h.render();assert.equal(stage('variance').props['aria-pressed'],true);
+ const form=saveForm(h,'Production bridge');await form.props.onSubmit(event());await h.flush();
+ assert.deepEqual(posted.settings,{start:month,end:month,type:'waterfall',comparisonYears:0,metrics:['projectedProduction','expectedProduction','confirmedLoss','utilityTotal']});
+ click(h,'Bar');assert.deepEqual(selected(h),['revenue','budgetRevenue']);assert.equal(button(h.tree,'Second prior year').props['aria-pressed'],true);
+ change(h,'To month','2026-03');nodes(h.tree).find(n=>n.props['data-view-entry']==='waterfall-saved').props.onClick();h.render();
+ assert.equal(field(h.tree,'To month').props.value,month);assert.equal(field(h.tree,'Chart site').props.value,'site');assert.equal(button(h.tree,'Waterfall').props['aria-pressed'],true);
+ change(h,'To month','2026-03');assert.match(html(h.tree),/Confirmed estimated losses are unavailable/);assert.match(html(h.tree),/Production bridge \(modified\)/);
+ assert.equal(stage('variance'),undefined);assert.match(visibleText(ledger('projected')),/27$/);
+ assert.doesNotMatch(html(stage('loss')),/class="mc-wf-bar/);
+});
+
+test('Waterfall skips the plot for wholly unavailable data but plots explicit zeros',async t=>{
+ const s=snapshot(),month='2026-01',zero=domain.fraction('0');
+ s.projections.find(p=>p.month===month).production=zero;
+ s.telemetry.months[month].expected.value=zero;
+ s.utility[month].onPeak='0';
+ s.confirmedLoss={state:'current',analysisRunId:'current-run',timezone:'America/New_York',months:{[month]:{state:'complete',value:zero,confirmedCount:0,unknownCount:0}}};
+ const h=await mount(t,{data:{snapshot:s,refreshing:false,error:'',reload:async()=>{}}});
+ click(h,'Waterfall');change(h,'To month','2027-01');change(h,'From month','2027-01');
+ const unavailable=html(h.tree);
+ assert.match(unavailable,/No production values can be plotted/);
+ assert.match(unavailable,/Reconciliation/);
+ assert.doesNotMatch(unavailable,/mc-wf-svg|="NaN"|="-?Infinity"/);
+ change(h,'From month',month);change(h,'To month',month);
+ const valid=html(h.tree);
+ assert.match(valid,/mc-wf-svg/);
+ assert.doesNotMatch(valid,/No production values can be plotted|="NaN"|="-?Infinity"/);
+ assert.equal(nodes(h.tree).filter(n=>n.type==='line'&&n.props.className?.startsWith('mc-wf-bar')).length,4);
+ assert.equal(nodes(h.tree).some(n=>n.props['data-waterfall-stage']==='variance'),false);
+});
+
 test('compact real UI has immediate controls, real sites, closed native views and no duplicate app navigation',async t=>{
  const h=await mount(t);assert.match(html(h.tree),/Monthly charts/);assert.equal(field(h.tree,'Chart site').props.value,'site');
  assert.deepEqual(['Overview','Production','Revenue','Performance','12M','24M','YTD','All','Line','Bar','Table','Timeline','YoY'].map(label=>Boolean(button(h.tree,label))),Array(13).fill(true));
@@ -57,7 +107,7 @@ test('real data hook fetches on mount, site switch, remount and visible error Re
   return Response.json({views:[view]});
  }};
  const h=await mount(t,options);assert.equal(calls.length,1);assert.ok(nodes(h.tree).some(n=>n.type==='svg'));
- change(h,'From month','2025-02');change(h,'To month','2026-02');click(h,'Revenue');click(h,'Bar');click(h,'YoY');click(h,'Second prior year');
+ change(h,'From month','2025-02');change(h,'To month','2026-02');click(h,'Revenue');click(h,'Bar');click(h,'YoY');click(h,'Second prior year');click(h,'Waterfall');click(h,'Line');
  const restore=nodes(h.tree).find(n=>n.props?.['data-view-entry']===view.id);restore.props.onClick();h.render();await h.flush();
  assert.equal(calls.length,1,'dates, metrics, chart type, comparisons and saved views do not refetch');
  fail=true;h.render({...props,siteId:'other'});await h.flush();assert.equal(calls.length,2);assert.match(calls[1].url,/siteId=other$/);
@@ -238,10 +288,14 @@ test('domain percentages are not suffixed twice in table or accessible point lab
 test('real React server rendering exercises native hooks and renderer without the scheduling harness',()=>{
  const model=loadSource('app/monthly-chart-model.ts',[],{...domain,Error,TypeError,RangeError});
  const plot=loadSource('app/MonthlyChartPlot.tsx',[],{React,...React,...model});
+ const waterfall=loadSource('app/MonthlyChartWaterfall.tsx',[],{React,...React,...model});
  const series=model.buildChartSeries(snapshot(),{...settings,metrics:['utilityTotal','revenue'],comparisonYears:2});
  for(const type of ['line','bar','table']){
    const output=html(React.createElement(plot.default,{series,type}));assert.match(output,type==='table'?/<table/:/<svg/);assert.match(output,/Source|source/);assert.doesNotMatch(output,/NaN|Infinity/);
  }
- const ui=loadSource('app/MonthlyCharts.tsx',[],{React,...React,...model,MonthlyChartPlot:plot.default,chartSeriesColor:plot.chartSeriesColor,useMonthlyChartData:()=>({snapshot:null,refreshing:true,error:'',reload:async()=>{}})});
+ const range={start:'2026-01',end:'2026-03'};
+ const output=html(React.createElement(waterfall.default,{model:model.buildProductionWaterfall(snapshot(),range),range,refreshing:false}));
+ assert.match(output,/<svg/);assert.match(output,/<table/);assert.doesNotMatch(output,/NaN|Infinity/);
+ const ui=loadSource('app/MonthlyCharts.tsx',[],{React,...React,...model,MonthlyChartPlot:plot.default,MonthlyChartWaterfall:waterfall.default,chartSeriesColor:plot.chartSeriesColor,useMonthlyChartData:()=>({snapshot:null,refreshing:true,error:'',reload:async()=>{}})});
  assert.match(html(React.createElement(ui.default,props)),/Loading saved monthly data/);
 });

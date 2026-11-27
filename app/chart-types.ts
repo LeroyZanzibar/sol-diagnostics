@@ -9,7 +9,7 @@ export type ChartMetricId =
   | 'insolationRatio' | 'productionProjectionRatio' | 'productionExpectedRatio'
   | 'revenueRatio' | 'iapr' | 'iar';
 export type ChartUnit = 'kWh' | '$' | 'kWh/m²' | 'kWh/kWp' | '%';
-export type ChartType = 'line' | 'bar' | 'table';
+export type ChartType = 'line' | 'bar' | 'table' | 'waterfall';
 export type MonthRange = {start: string; end: string};
 export type ChartSettings = MonthRange & {
   type: ChartType;

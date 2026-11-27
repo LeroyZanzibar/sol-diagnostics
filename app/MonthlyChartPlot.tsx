@@ -5,7 +5,7 @@ import type {KeyboardEvent} from 'react';
 import type {ChartMetricId, ChartPanel, ChartPoint, ChartSeries, ChartType, ChartUnit} from './chart-types';
 import {formatChartMonth, groupChartPanels} from './monthly-chart-model';
 
-type Props = {series: ChartSeries[]; type: ChartType; onRemoveMetric?: (id: ChartMetricId) => void};
+type Props = {series: ChartSeries[]; type: Exclude<ChartType, 'waterfall'>; onRemoveMetric?: (id: ChartMetricId) => void};
 type ActiveMonth = {index: number; panel: number; mode: 'hover' | 'focus' | 'pinned'};
 const dash = (offset: number) => offset === 1 ? '7 5' : offset === 2 ? '2 4' : undefined;
 const opacity = (offset: number) => offset === 1 ? .9 : offset === 2 ? .8 : 1;

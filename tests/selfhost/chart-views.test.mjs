@@ -15,6 +15,8 @@ const inventory=() => readdirSync(migrations).filter(name => /^\d+.*\.sql$/.test
 const hash=path => createHash('sha256').update(readFileSync(path)).digest('hex');
 const settings={start:'2024-11', end:'2026-02', type:'bar', comparisonYears:2,
   metrics:['utilityTotal','budgetRevenue','actualInsolation','iapr','confirmedLoss','unconfirmedLoss']};
+const waterfallSettings={start:'2026-04',end:'2026-06',type:'waterfall',comparisonYears:0,
+  metrics:['projectedProduction','expectedProduction','confirmedLoss','utilityTotal']};
 const plain=value => JSON.parse(JSON.stringify(value));
 function modules(db) {
   const model=loadSource('app/monthly-chart-model.ts', [], {...monthlyDomain, JSON});
@@ -137,6 +139,37 @@ if (!isMainThread && workerData?.chartViewsWriter) {
       }
       assert.deepEqual(Object.fromEntries(historicalFiles.map(path => [path,hash(path)])), historicalHashes);
     } finally {db?.close();}
+  });
+
+  test('waterfall settings round-trip through the real API and reopened SQLite without changing legacy views', async t => {
+    const root=rootFor(t, 'chart-views-waterfall-'), path=join(root,'shared.sqlite');
+    let db=new LocalDatabase(path,migrations);
+    try {
+      const {api}=modules(db), baseline=retained(db), migrationLedger=ledger(db);
+      const post=(name, settings)=>api.POST(new Request('https://example.test/api/chart-views',{method:'POST',body:JSON.stringify({name,settings})}));
+      const previous=await post('Legacy bar',settings);
+      assert.equal(previous.status,201);
+      const legacy=(await previous.json()).view;
+      const stored=await post('Quarterly waterfall',waterfallSettings);
+      assert.equal(stored.status,201);
+      const waterfall=(await stored.json()).view;
+      assert.deepEqual(waterfall.settings,waterfallSettings);
+      for (const invalid of [{...waterfallSettings,comparisonYears:1},{...waterfallSettings,metrics:['revenue']},
+        {...waterfallSettings,metrics:[...waterfallSettings.metrics].reverse()},{...waterfallSettings,siteId:'not-a-view-field'}]) {
+        assert.equal((await post('Invalid waterfall',invalid)).status,400);
+      }
+      const storedRows=typedRows(db,'chart_views');
+      assert.equal(storedRows.length,2);
+      assert.equal(storedRows.find(row=>row.id===waterfall.id).settings_json,JSON.stringify(waterfallSettings));
+      db.close();db=new LocalDatabase(path,migrations);
+      const read=await modules(db).api.GET();
+      assert.equal(read.status,200);
+      const {views}=await read.json();
+      assert.deepEqual(views.sort((a,b)=>a.name.localeCompare(b.name)),[legacy,waterfall]);
+      assert.deepEqual(typedRows(db,'chart_views'),storedRows);
+      assert.deepEqual(retained(db),baseline);
+      assert.deepEqual(ledger(db),migrationLedger);
+    } finally {db.close();}
   });
 
   async function simultaneous(t, path, names) {

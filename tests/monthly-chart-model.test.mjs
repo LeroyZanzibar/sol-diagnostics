@@ -1,7 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {calculatedRows} from '../app/monthly-domain.mjs';
+import {calculatedRows, fraction} from '../app/monthly-domain.mjs';
 import {loadChartModel, metricIds, telemetryIds, oracle, snapshot, settings, plain, emptyUtility, freezeDeep} from './monthly-chart-model-fixture.mjs';
+
+test('production waterfall uses exact inclusive totals and reconciles only known sources', () => {
+  const model=loadChartModel(), start='2026-04', end='2026-06';
+  const inputs=settings({start,end,type:'waterfall',metrics:['projectedProduction','expectedProduction','confirmedLoss','utilityTotal']});
+  function run({actual='288000',loss='44000',quality='complete',read,edit}={}) {
+    const s=snapshot(), months=['2026-04','2026-05','2026-06'];
+    s.projections=months.map((month,i)=>({month,production:fraction(['410000','398000','432000'][i])}));
+    s.utility=Object.fromEntries(months.map((month,i)=>[month,{onPeak:['312000','288000',actual][i],offPeak:'10000',unpaidEnergy:i===2?'0':null}]));
+    const expected=Object.values(s.telemetry.months)[0];
+    s.telemetry.months=Object.fromEntries(months.map((month,i)=>[month,{...expected,expected:{...expected.expected,value:fraction(['360000','344000','376000'][i]),state:i===2?quality:'complete'}}]));
+    s.confirmedLoss={state:'current',analysisRunId:'published',months:Object.fromEntries(months.map((month,i)=>[month,{state:'complete',value:i===2&&loss===null?null:fraction(['34000','42000',loss][i]),confirmedCount:1,unknownCount:0}]))};
+    edit?.(s);
+    return model.buildProductionWaterfall(freezeDeep(s),inputs,read);
+  }
+  const values=r=>Object.fromEntries(r.rows.map(row=>[row.id,row.display]));
+  const sample=run();
+  assert.deepEqual(values(sample),{projected:'1,240,000',adjustment:'−160,000',expected:'1,080,000',loss:'−120,000',afterLoss:'960,000',variance:'−42,000',actual:'918,000'});
+  assert.equal(sample.vsProjected.display,'−322,000');assert.equal(sample.vsProjected.percent,'−26.0%');
+  assert.deepEqual(plain(sample.stages.map(({id,start,end})=>[id,start,end])),[['projected',0,1240000],['expected',1240000,1080000],['loss',1080000,960000],['variance',960000,918000],['actual',0,918000]]);
+  assert.equal(values(run({actual:'342000'})).variance,'+12,000');
+  const exact=run({actual:'330000'});assert.equal(values(exact).variance,'0');assert.ok(!exact.stages.some(s=>s.id==='variance'));
+  const tiny=run({actual:'330000.0001'});assert.equal(values(tiny).variance,'+0.0001');assert.ok(tiny.stages.some(s=>s.id==='variance'));
+  const zero=run({edit(s){for(const month of Object.values(s.confirmedLoss.months))month.value=fraction('0');}});
+  assert.equal(values(zero).loss,'0');assert.equal(values(zero).afterLoss,'1,080,000');
+  for(const result of [run({loss:null}),run({edit:s=>{s.confirmedLoss.months[end].unknownCount=1;}})]) {
+    assert.equal(values(result).loss,'Unavailable');assert.equal(values(result).afterLoss,'Unavailable');assert.equal(values(result).variance,'Unavailable');assert.equal(values(result).actual,'918,000');
+    assert.equal(result.stages.find(s=>s.id==='loss').end,null);
+  }
+  for(const result of [run({quality:'partial'}),run({read:{refreshing:true,error:''}}),run({read:{refreshing:false,error:'Read failed'}}),run({edit:s=>{s.telemetry.state='stale';}})]) {
+    assert.equal(values(result).expected,'Unavailable');assert.equal(values(result).adjustment,'Unavailable');assert.equal(values(result).variance,'Unavailable');assert.equal(values(result).actual,'918,000');assert.equal(values(result).projected,'1,240,000');
+  }
+  const noProjection=run({edit:s=>{s.projections.pop();}});
+  assert.equal(values(noProjection).expected,'1,080,000');assert.equal(values(noProjection).variance,'−42,000');assert.equal(noProjection.vsProjected,null);
+  const noActual=run({edit:s=>{delete s.utility[end];}});
+  assert.equal(values(noActual).actual,'Unavailable');assert.equal(values(noActual).variance,'Unavailable');assert.equal(values(noActual).afterLoss,'960,000');
+  const zeroProjection=run({edit:s=>{for (const row of s.projections) row.production=fraction('0');}});
+  assert.equal(zeroProjection.vsProjected.percent,null);assert.equal(zeroProjection.vsProjected.display,'+918,000');
+  assert.throws(()=>model.validateChartSettings({...inputs,comparisonYears:1}),/comparison|prior year/i);
+  assert.throws(()=>model.validateChartSettings({...inputs,metrics:['utilityTotal']}),/fixed/i);
+});
 
 const first = (model, s, id, read) => model.buildChartSeries(s, settings({metrics: [id]}), read)[0].points[0];
 
