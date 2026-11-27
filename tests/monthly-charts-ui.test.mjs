@@ -38,9 +38,11 @@ test('Waterfall uses Option B reconciliation, retains explorer controls and save
  click(h,'Bar');assert.deepEqual(selected(h),['revenue','budgetRevenue']);assert.equal(button(h.tree,'Second prior year').props['aria-pressed'],true);
  change(h,'To month','2026-03');nodes(h.tree).find(n=>n.props['data-view-entry']==='waterfall-saved').props.onClick();h.render();
  assert.equal(field(h.tree,'To month').props.value,month);assert.equal(field(h.tree,'Chart site').props.value,'site');assert.equal(button(h.tree,'Waterfall').props['aria-pressed'],true);
- change(h,'To month','2026-03');assert.match(html(h.tree),/Confirmed estimated losses are unavailable/);assert.match(html(h.tree),/Production bridge \(modified\)/);
- assert.equal(stage('variance'),undefined);assert.match(visibleText(ledger('projected')),/27$/);
- assert.doesNotMatch(html(stage('loss')),/class="mc-wf-bar/);
+ change(h,'To month','2026-03');assert.match(html(h.tree),/Production bridge \(modified\)/);
+ assert.match(visibleText(ledger('projected')),/27$/);assert.match(visibleText(ledger('loss')),/−2$/);
+ assert.match(html(stage('loss')),/class="mc-wf-bar/);
+ assert.match(visibleText(ledger('expected')),/11$/);assert.match(visibleText(ledger('actual')),/10$/);
+ assert.doesNotMatch(html(h.tree),/mc-wf-notice/);
 });
 
 test('Waterfall skips the plot for wholly unavailable data but plots explicit zeros',async t=>{
